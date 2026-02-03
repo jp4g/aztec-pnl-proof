@@ -10,6 +10,7 @@ import { precision } from "../src/utils";
 import { AuditableTestWallet } from "@aztec/note-collector";
 import type { ContractInstanceWithAddress } from "@aztec/stdlib/contract";
 import { sleep } from "bun";
+import { retrieveEncryptedNotes } from "../src/auditor";
 
 const { AZTEC_NODE_URL = "http://localhost:8080" } = process.env;
 
@@ -69,8 +70,55 @@ describe("Private Transfer Demo Test", () => {
     });
 
     test("get notes to prove", async () => {
-        const taggingSecrets = await wallet.exportTaggingSecrets(addresses[1], [token.address]);
-        console.log("tagging secrets", taggingSecrets.secrets[0].secret);
+        // Small wait to ensure everything is synced
+        await sleep(3000);
+
+        // Step 1: Export tagging secrets from wallet (user side)
+        console.log("\n=== STEP 1: Exporting Tagging Secrets ===");
+        const taggingSecrets = await wallet.exportTaggingSecrets(addresses[1], [token.address], [addresses[2]]);
+        console.log("Exported tagging secrets:", taggingSecrets.secrets.length, "secrets");
+
+        // Debug: print the actual secrets
+        for (const secret of taggingSecrets.secrets) {
+            console.log(`  Secret: ${secret.direction} - counterparty: ${secret.counterparty.toString().slice(0, 16)}... app: ${secret.app.toString().slice(0, 16)}...`);
+            console.log(`    Secret value: ${secret.secret.toString()}`);
+        }
+
+        // Step 2: Auditor retrieves encrypted notes using the secrets
+        console.log("\n=== STEP 2: Retrieving Encrypted Notes ===");
+        const results = await retrieveEncryptedNotes(node, taggingSecrets);
+
+        // Step 3: Display results organized by secret
+        console.log("\n=== RETRIEVAL RESULTS ===");
+        console.log(`Account: ${results.account}`);
+        console.log(`Total Notes: ${results.totalNotes}`);
+        console.log(`Total Transactions: ${results.totalTransactions}`);
+        console.log(`Secrets Processed: ${results.secrets.length}`);
+
+        for (const secretResult of results.secrets) {
+            console.log(`\n--- Secret: ${secretResult.secret.counterparty.slice(0, 16)}... (${secretResult.secret.direction}) ---`);
+            console.log(`  App: ${secretResult.secret.app.slice(0, 16)}...`);
+            console.log(`  Notes Found: ${secretResult.noteCount}`);
+
+            // Show first 2 notes for this secret
+            secretResult.notes.slice(0, 2).forEach((note, i) => {
+                console.log(`\n  [${i + 1}] Note Hash: ${note.noteHash}`);
+                console.log(`      Tx: ${note.txHash.slice(0, 16)}...`);
+                console.log(`      Block: ${note.blockNumber}`);
+                console.log(`      Ciphertext: ${note.ciphertextBytes} bytes`);
+                console.log(`      Hex (first 64): ${note.ciphertext.slice(0, 64)}...`);
+                console.log(`      Tag Index: ${note.tagIndex}`);
+            });
+
+            if (secretResult.noteCount > 2) {
+                console.log(`  ... and ${secretResult.noteCount - 2} more notes`);
+            }
+        }
+
+        // Verify we found notes
+        expect(results.totalNotes).toBeGreaterThan(0);
+
+        console.log("\n✓ Test complete - encrypted logs retrieved successfully!");
     });
 
     
