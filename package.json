@@ -20,6 +20,9 @@
     "@aztec/stdlib": "file:../aztec-packages/yarn-project/stdlib",
     "@aztec/test-wallet": "file:../aztec-packages/yarn-project/test-wallet",
     "@aztec/note-collector": "file:../aztec-packages/yarn-project/note-collector",
+    "@aztec/bb.js": "file:../aztec-packages/barretenberg/ts",
+    "@aztec/noir-noir_js": "file:../aztec-packages/noir/packages/noir_js",
+    "@aztec/noir-types": "file:../aztec-packages/noir/packages/types",
     "dotenv": "^17.2.2"
   },
   "devDependencies": {

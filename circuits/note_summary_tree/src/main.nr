@@ -19,6 +19,7 @@ fn main(
     // 3. sum
     let sum = sum_left + sum_right;
     // 3. output sum, vkey hash
+    z
 }
 
 
