@@ -9,11 +9,10 @@ import { precision } from "../src/utils";
 import { AuditableTestWallet } from "@aztec/note-collector";
 import type { ContractInstanceWithAddress } from "@aztec/stdlib/contract";
 import { sleep } from "bun";
-import { retrieveEncryptedNotes } from "../src/auditor";
+import { retrieveEncryptedNotes, retrieveCiphertexts, type AuditorSecretInput } from "../src/auditor";
+import { buildIMTFromCiphertexts } from "../src/imt";
 import { decryptNote, parseNotePlaintext } from "../src/decrypt";
 import { computeAddressSecret } from '@aztec/stdlib/keys';
-import { poseidon2HashWithSeparator } from '@aztec/foundation/crypto/poseidon';
-import { GeneratorIndex } from '@aztec/constants';
 
 // Noir circuit imports
 import { Noir } from '@aztec/noir-noir_js';
@@ -302,9 +301,6 @@ describe("Private Transfer Demo Test", () => {
         console.log(`Ciphertext buffer size: ${ciphertextWithoutTag.length} bytes`);
         console.log(`Expected size: ${MESSAGE_CIPHERTEXT_LEN * 32} bytes`);
 
-        // Get note hash from the retrieved note
-        const noteHash = firstNote.noteHash;
-
         // Compute the address secret (what's actually used for ECDH)
         // addressSecret = computeAddressSecret(preaddress, ivskM)
         const preaddress = await recipientCompleteAddress.getPreaddress();
@@ -326,30 +322,15 @@ describe("Private Transfer Demo Test", () => {
         const signByte = fieldBytes[1]; // First byte of the 31-byte content
         console.log(`eph_pk sign byte: ${signByte} (sign: ${signByte !== 0})`);
 
-        // Get recipient address - AztecAddress is a struct with 'inner' field
-        const recipientAddress = {
-            inner: addresses[1].toString(),
-        };
-
-        // Get token contract address for siloed note hash
-        const contractAddress = {
-            inner: token.address.toString(),
-        };
-
         const circuitInputs = {
-            note_plaintext: notePlaintext,
+            plaintext: notePlaintext,
             ciphertext: ciphertextFields,
-            note_hash: noteHash,
-            recipient_ivsk_app: recipientIvskApp,
-            recipient_address: recipientAddress,
-            contract_address: contractAddress,
+            ivsk_app: recipientIvskApp,
         };
 
         console.log("Circuit inputs prepared:");
         console.log(`  - Plaintext fields: ${plaintextLen} (storage: ${plaintextStorage.length})`);
         console.log(`  - Ciphertext fields: ${ciphertextFields.length}`);
-        console.log(`  - Note hash from auditor: ${noteHash}`);
-        console.log(`  - Contract address: ${token.address.toString()}`);
 
         // Debug: print plaintext fields
         console.log("\n=== Plaintext Fields ===");
@@ -357,40 +338,23 @@ describe("Private Transfer Demo Test", () => {
             console.log(`  plaintext[${i}]: ${plaintext[i].toString()}`);
         }
 
-        // Compute expected note hash in JS to compare
-        const owner = plaintext[1];
-        const storageSlot = plaintext[2];
-        const randomness = plaintext[3];
-        const value = plaintext[4];
-
-        // Step 1: partial_commitment = poseidon2([owner, storage_slot, randomness], GENERATOR_INDEX__NOTE_HASH)
-        const partialCommitment = await poseidon2HashWithSeparator(
-            [owner, storageSlot, randomness],
-            GeneratorIndex.NOTE_HASH
-        );
-        console.log(`\n=== JS Hash Computation ===`);
-        console.log(`  partial_commitment: ${partialCommitment.toString()}`);
-
-        // Step 2: inner_note_hash = poseidon2([partial_commitment, value], GENERATOR_INDEX__NOTE_HASH)
-        const innerNoteHash = await poseidon2HashWithSeparator(
-            [partialCommitment, value],
-            GeneratorIndex.NOTE_HASH
-        );
-        console.log(`  inner_note_hash: ${innerNoteHash.toString()}`);
-
-        // Step 3: siloed_note_hash = poseidon2([contract_address, inner_note_hash], GENERATOR_INDEX__SILOED_NOTE_HASH)
-        const siloedNoteHash = await poseidon2HashWithSeparator(
-            [token.address.toField(), innerNoteHash],
-            GeneratorIndex.SILOED_NOTE_HASH
-        );
-        console.log(`  siloed_note_hash (computed): ${siloedNoteHash.toString()}`);
-        console.log(`  note_hash (from auditor):   ${noteHash}`);
+        // Expected values from plaintext
+        const expectedValue = plaintext[4].toString();
 
         // Step 3: Generate witness
         console.log("\n=== STEP 3: Generating Witness ===");
         const { witness, returnValue } = await noir.execute(circuitInputs);
         console.log(`Witness generated ✅`);
         console.log(`Return value: ${JSON.stringify(returnValue)}`);
+
+        // Verify returned values
+        const [circuitValue, circuitTreeLeaf] = returnValue as [string, string];
+        console.log(`\n=== Verifying Circuit Output ===`);
+        console.log(`  Expected value: ${expectedValue}`);
+        console.log(`  Circuit value:  ${circuitValue}`);
+        // Compare as BigInt since formatting may differ (leading zeros)
+        expect(BigInt(circuitValue)).toBe(BigInt(expectedValue));
+        console.log(`  ✅ Value matches! (${BigInt(circuitValue) / precision(1n)} tokens)`);
 
         // Step 4: Generate proof
         console.log("\n=== STEP 4: Generating Proof ===");
@@ -405,6 +369,57 @@ describe("Private Transfer Demo Test", () => {
 
         expect(isValid).toBe(true);
         console.log("\n✓ Test complete - note proven successfully!");
+    });
+
+    test("retrieve ciphertexts with minimal API", async () => {
+        await sleep(3000);
+
+        // Step 1: Export tagging secrets (client side - knows full metadata)
+        console.log("\n=== STEP 1: Client Exports Tagging Secrets ===");
+        const taggingSecrets = await wallet.exportTaggingSecrets(addresses[1], [token.address], [addresses[2]]);
+        console.log(`Exported ${taggingSecrets.secrets.length} secrets`);
+
+        // Step 2: Client extracts minimal info to send to auditor
+        // Only secretValue and appAddress - NO direction, counterparty, label
+        console.log("\n=== STEP 2: Extract Minimal Info for Auditor ===");
+        const minimalSecrets: AuditorSecretInput[] = taggingSecrets.secrets.map(s => ({
+            secretValue: s.secret.value,
+            appAddress: s.app,
+        }));
+        console.log(`Prepared ${minimalSecrets.length} minimal secrets (no metadata)`);
+
+        // Step 3: Auditor retrieves ciphertexts + IMT root
+        console.log("\n=== STEP 3: Auditor Retrieves Ciphertexts ===");
+        const results = await retrieveCiphertexts(node, minimalSecrets);
+
+        for (let i = 0; i < results.length; i++) {
+            const result = results[i];
+            console.log(`\nSecret ${i + 1}:`);
+            console.log(`  Ciphertexts found: ${result.ciphertexts.length}`);
+            console.log(`  IMT Root: ${result.imtRoot.toString()}`);
+            if (result.ciphertexts.length > 0) {
+                console.log(`  First ciphertext size: ${result.ciphertexts[0].length} bytes`);
+            }
+        }
+
+        // Step 4: Client can rebuild IMT to verify
+        console.log("\n=== STEP 4: Client Rebuilds IMT to Verify ===");
+        for (let i = 0; i < results.length; i++) {
+            const result = results[i];
+            if (result.ciphertexts.length > 0) {
+                const clientRoot = await buildIMTFromCiphertexts(result.ciphertexts);
+                const matches = clientRoot.equals(result.imtRoot);
+                console.log(`Secret ${i + 1}: Client IMT root ${matches ? '✅ MATCHES' : '❌ MISMATCH'}`);
+                expect(matches).toBe(true);
+            }
+        }
+
+        // Verify we found ciphertexts
+        const totalCiphertexts = results.reduce((sum, r) => sum + r.ciphertexts.length, 0);
+        console.log(`\nTotal ciphertexts: ${totalCiphertexts}`);
+        expect(totalCiphertexts).toBeGreaterThan(0);
+
+        console.log("\n✓ Test complete - minimal API works!");
     });
 
 });

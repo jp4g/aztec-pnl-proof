@@ -1,7 +1,10 @@
 import type { AztecNode } from "@aztec/aztec.js/node";
+import type { AztecAddress } from "@aztec/aztec.js/addresses";
 import { TagGenerator, NoteMapper, type TaggingSecretExport, type TaggingSecretEntry } from "@aztec/note-collector";
 import { createLogger } from "@aztec/foundation/log";
 import { poseidon2Hash } from "@aztec/foundation/crypto/poseidon";
+import { Fr } from "@aztec/foundation/curves/bn254";
+import { buildIMTFromCiphertexts } from "./imt";
 
 /**
  * Retrieve encrypted note ciphertexts from the Aztec network using tagging secrets.
@@ -225,3 +228,120 @@ export interface RetrievedNote {
  * }
  * ```
  */
+
+// =============================================================================
+// NEW PRIVACY-PRESERVING API
+// =============================================================================
+
+/**
+ * Minimal input for auditor - no metadata leaked.
+ */
+export interface AuditorSecretInput {
+    /** Raw tagging secret value */
+    secretValue: Fr;
+    /** Contract address for tag siloing */
+    appAddress: AztecAddress;
+}
+
+/**
+ * Output from auditor - only ciphertexts and IMT root.
+ */
+export interface AuditorSecretOutput {
+    /** Ciphertexts ordered from oldest to newest (by tag index) */
+    ciphertexts: Buffer[];
+    /** Root of incremental merkle tree of hashed ciphertexts */
+    imtRoot: Fr;
+}
+
+/**
+ * Retrieve ciphertexts from the Aztec network using minimal tagging secret info.
+ *
+ * Privacy-preserving: auditor receives no metadata about direction, counterparty, etc.
+ *
+ * @param node - Aztec node client
+ * @param secrets - Array of (secretValue, appAddress) pairs
+ * @param options - Scan options
+ * @returns Array of outputs, one per input secret (preserves order)
+ */
+export async function retrieveCiphertexts(
+    node: AztecNode,
+    secrets: AuditorSecretInput[],
+    options?: {
+        maxIndices?: number;
+        batchSize?: number;
+    }
+): Promise<AuditorSecretOutput[]> {
+    const maxIndices = options?.maxIndices ?? 10000;
+    const batchSize = options?.batchSize ?? 100;
+
+    const results: AuditorSecretOutput[] = [];
+
+    for (const secret of secrets) {
+        const output = await processMinimalSecret(
+            node,
+            secret,
+            maxIndices,
+            batchSize
+        );
+        results.push(output);
+    }
+
+    return results;
+}
+
+/**
+ * Process a single minimal secret - retrieve ciphertexts and build IMT.
+ */
+async function processMinimalSecret(
+    node: AztecNode,
+    secret: AuditorSecretInput,
+    maxIndices: number,
+    batchSize: number
+): Promise<AuditorSecretOutput> {
+    const ciphertexts: Buffer[] = [];
+
+    // Scan from index 0 in batches
+    for (let index = 0; index < maxIndices; index += batchSize) {
+        const count = Math.min(batchSize, maxIndices - index);
+
+        // Generate base tags: poseidon2([secretValue, index])
+        const baseTags: Fr[] = [];
+        for (let i = 0; i < count; i++) {
+            const tag = await poseidon2Hash([secret.secretValue, new Fr(index + i)]);
+            baseTags.push(tag);
+        }
+
+        // Silo tags with app address: poseidon2([appAddress, baseTag])
+        const siloedTags = await Promise.all(
+            baseTags.map(async baseTag => {
+                return await poseidon2Hash([secret.appAddress.toField(), baseTag]);
+            })
+        );
+
+        // Query logs by siloed tags
+        const logsPerTag = await node.getLogsByTags(siloedTags);
+
+        // Extract ciphertexts in order (by tag index)
+        for (let i = 0; i < logsPerTag.length; i++) {
+            const logs = logsPerTag[i];
+            for (const log of logs) {
+                // Extract the encrypted log data as Buffer
+                const ciphertext = log.log.toBuffer();
+                ciphertexts.push(ciphertext);
+            }
+        }
+
+        // If we found no logs in this batch, we're done
+        if (logsPerTag.every(logs => logs.length === 0)) {
+            break;
+        }
+    }
+
+    // Build IMT from ciphertexts
+    const imtRoot = await buildIMTFromCiphertexts(ciphertexts);
+
+    return {
+        ciphertexts,
+        imtRoot,
+    };
+}

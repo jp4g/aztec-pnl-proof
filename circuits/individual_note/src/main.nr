@@ -3,13 +3,7 @@ use dep::aztec::{
         encoding::{MESSAGE_CIPHERTEXT_LEN, EPH_PK_X_SIZE_IN_FIELDS},
         encryption::aes128::derive_aes_symmetric_key_and_iv_from_ecdh_shared_secret_using_poseidon2_unsafe,
     },
-    protocol_types::{
-        address::AztecAddress,
-        constants::{GENERATOR_INDEX__SILOED_NOTE_HASH, GENERATOR_INDEX__NOTE_HASH},
-        hash::poseidon2_hash_with_separator,
-        point::Point,
-        traits::ToField,
-    },
+    protocol_types::hash::poseidon2_hash_with_separator,
     keys::ecdh_shared_secret::derive_ecdh_shared_secret,
     utils::point::{point_from_x_coord_and_sign, get_sign_of_point},
 };
@@ -17,41 +11,29 @@ pub global HEADER_CIPHERTEXT_SIZE_IN_BYTES: u32 = 16;
 use dep::std::{aes128::aes128_encrypt, embedded_curve_ops::EmbeddedCurveScalar};
 
 fn main(
-    note_plaintext: BoundedVec<Field, 14>,
+    plaintext: BoundedVec<Field, 14>,
     ciphertext: [Field; MESSAGE_CIPHERTEXT_LEN],
-    note_hash: Field,
-    recipient_ivsk_app: Field, // Recipient's app-siloed incoming viewing secret key
-    recipient_address: AztecAddress, // Not used currently but kept for future encryption verification
-    contract_address: AztecAddress, // Token contract address for siloed note hash
+    ivsk_app: Field, // Recipient's app-siloed incoming viewing secret key
 ) -> pub (Field, Field) {
-    // 1. Verify note encrypts to the ciphertext
-    verify_encryption(note_plaintext, ciphertext, recipient_ivsk_app);
+    // 1. Constrain the plaintext to encrypt to the asserted ciphertext
+    verify_encryption(plaintext, ciphertext, ivsk_app);
 
-    // 2. Compute the siloed note hash (skip comparison for now - auditor returns unique note hash)
-    // TODO: Need to either get the unique note hash computation or use a different approach
-    let computed_note_hash = compute_note_hash_from_plaintext(note_plaintext, contract_address);
-    // assert(computed_note_hash == note_hash, "Note hash mismatch");
-    let _ = note_hash; // silence unused warning
+    // 2. Hash the ciphertext with Poseidon2 into a leaf
+    let tree_leaf = poseidon2_hash_with_separator(ciphertext, 0);
 
-    // 3. Hash the ciphertext with Poseidon
-    let ciphertext_hash = poseidon2_hash_with_separator(ciphertext, 0);
-
-    // 4. Create tree leaf H(ciphertext_hash, note_hash)
-    let tree_leaf = poseidon2_hash_with_separator([ciphertext_hash, note_hash], 0);
-
-    // 5. Extract note value (for volume constraint)
-    // let note_value = get_note_value(note_plaintext);
-    let note_value = 0;
+    // 3. Extract note values
+    // note: owner check not constrained in this version)
+    let (_owner, value) = get_note_values(plaintext);
 
     // 6. Output: (note_value, tree_leaf)
-    (note_value, tree_leaf)
+    (value, tree_leaf)
 }
 
 /// Verify that the plaintext encrypts to the given ciphertext
 fn verify_encryption(
     plaintext: BoundedVec<Field, 14>,
     ciphertext: [Field; MESSAGE_CIPHERTEXT_LEN],
-    recipient_ivsk_app: Field,
+    ivsk_app: Field,
 ) {
     // Extract ephemeral public key x-coordinate from ciphertext
     let eph_pk_x = ciphertext[0];
@@ -66,10 +48,11 @@ fn verify_encryption(
 
     // Reconstruct ephemeral public key
     // Note: We use a helper since Point::from_x_and_sign might not be directly available
-    let eph_pk = reconstruct_public_key(eph_pk_x, eph_pk_sign);
+    let eph_pk = point_from_x_coord_and_sign(eph_pk_x, eph_pk_sign).expect(f"Invalid ephemeral public key x-coordinate");
+
 
     // Derive shared secret using recipient's secret key and ephemeral public key
-    let recipient_sk_scalar = EmbeddedCurveScalar::from_field(recipient_ivsk_app);
+    let recipient_sk_scalar = EmbeddedCurveScalar::from_field(ivsk_app);
     let shared_secret = derive_ecdh_shared_secret(recipient_sk_scalar, eph_pk);
 
     // Derive AES keys from shared secret
@@ -98,7 +81,7 @@ fn verify_encryption(
     // Compute header ciphertext (contains length)
     let mut header_plaintext = [0 as u8; 2];
     let ciphertext_length = computed_body_ciphertext.len();
-    header_plaintext[0] = (ciphertext_length >> 8) as u8;
+    header_plaintext[0] = (ciphertext_length / 256) as u8;
     header_plaintext[1] = ciphertext_length as u8;
     let computed_header_ciphertext = aes128_encrypt(header_plaintext, header_iv, header_sym_key);
 
@@ -126,48 +109,7 @@ fn verify_encryption(
     }
 
     // Verify ephemeral public key sign byte matches
-    assert(eph_pk_sign_byte == get_sign_of_point_as_byte(eph_pk), "Ephemeral PK sign mismatch");
-}
-
-/// Compute note hash from plaintext (for UintNote)
-/// This follows the exact UintNote hash computation from uint_note.nr
-///
-/// Plaintext structure (5 fields):
-/// [0] expanded_metadata (msgTypeId << 64 | noteTypeId)
-/// [1] owner
-/// [2] storage_slot
-/// [3] randomness
-/// [4] value (packed_note)
-fn compute_note_hash_from_plaintext(
-    plaintext: BoundedVec<Field, 14>,
-    contract_address: AztecAddress,
-) -> Field {
-    // Directly access the plaintext fields (no decode_message needed)
-    // plaintext[0] = expanded_metadata (unused for hash)
-    let owner = plaintext.get(1);
-    let storage_slot = plaintext.get(2);
-    let randomness = plaintext.get(3);
-    let value = plaintext.get(4);
-
-    // Step 1: Compute partial commitment (private content)
-    // This matches compute_partial_commitment from uint_note.nr
-    let partial_commitment = poseidon2_hash_with_separator(
-        [owner, storage_slot, randomness],
-        GENERATOR_INDEX__NOTE_HASH
-    );
-
-    // Step 2: Complete the note hash by adding the value
-    // This matches compute_complete_note_hash from uint_note.nr
-    let inner_note_hash = poseidon2_hash_with_separator(
-        [partial_commitment, value],
-        GENERATOR_INDEX__NOTE_HASH
-    );
-
-    // Step 3: Compute siloed note hash
-    poseidon2_hash_with_separator(
-        [contract_address.to_field(), inner_note_hash],
-        GENERATOR_INDEX__SILOED_NOTE_HASH
-    )
+    assert(eph_pk_sign_byte == get_sign_of_point(eph_pk) as u8, "Ephemeral PK sign mismatch");
 }
 
 /// Extract ciphertext fields (excluding ephemeral PK x-coordinate)
@@ -187,7 +129,7 @@ fn bytes_from_fields(fields: BoundedVec<Field, MESSAGE_CIPHERTEXT_LEN - 1>) -> [
     for i in 0..fields.len() {
         let field = fields.get(i);
         let field_bytes: [u8; 32] = field.to_be_bytes();
-        // Each field stores 31 bytes (skip the high byte)
+        // Each field stores 31 bytes (skip the high byte which is always 0)
         for j in 0..31 {
             bytes[i * 31 + j] = field_bytes[j + 1];
         }
@@ -195,18 +137,10 @@ fn bytes_from_fields(fields: BoundedVec<Field, MESSAGE_CIPHERTEXT_LEN - 1>) -> [
     bytes
 }
 
-/// Reconstruct a Grumpkin point from x-coordinate and sign
-fn reconstruct_public_key(x: Field, sign: bool) -> Point {
-    // Use Aztec's utility function
-    point_from_x_coord_and_sign(x, sign).expect(f"Invalid ephemeral public key x-coordinate")
+// extract the value and owner from a uint note
+// could be done with better serialization but this efficient
+fn get_note_values(plaintext: BoundedVec<Field, 14>) -> (Field, Field) {
+    let owner = plaintext.get(1);
+    let value = plaintext.get(4);
+    (owner, value)
 }
-
-/// Get the sign of a point as a byte
-fn get_sign_of_point_as_byte(point: Point) -> u8 {
-    if get_sign_of_point(point) {
-        1
-    } else {
-        0
-    }
-}
-
