@@ -14,7 +14,7 @@ fn main(
     plaintext: BoundedVec<Field, 14>,
     ciphertext: [Field; MESSAGE_CIPHERTEXT_LEN],
     ivsk_app: Field, // Recipient's app-siloed incoming viewing secret key
-) -> pub (Field, Field) {
+) -> pub (Field, Field, Field) {
     // 1. Constrain the plaintext to encrypt to the asserted ciphertext
     verify_encryption(plaintext, ciphertext, ivsk_app);
 
@@ -25,8 +25,9 @@ fn main(
     // note: owner check not constrained in this version)
     let (_owner, value) = get_note_values(plaintext);
 
-    // 6. Output: (note_value, tree_leaf)
-    (value, tree_leaf)
+    // 4. Output: (note_value, tree_leaf, 0)
+    // The 0 marks this as a leaf proof for vkey chain validation
+    (value, tree_leaf, 0)
 }
 
 /// Verify that the plaintext encrypts to the given ciphertext

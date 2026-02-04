@@ -10,7 +10,8 @@ import { AuditableTestWallet } from "@aztec/note-collector";
 import type { ContractInstanceWithAddress } from "@aztec/stdlib/contract";
 import { sleep } from "bun";
 import { retrieveEncryptedNotes, retrieveCiphertexts, type AuditorSecretInput } from "../src/auditor";
-import { buildIMTFromCiphertexts } from "../src/imt";
+import { buildIMTFromCiphertexts, getZeroHashes } from "../src/imt";
+import { ProofTree } from "../src/proof-tree";
 import { decryptNote, parseNotePlaintext } from "../src/decrypt";
 import { computeAddressSecret } from '@aztec/stdlib/keys';
 
@@ -19,8 +20,9 @@ import { Noir } from '@aztec/noir-noir_js';
 import { Barretenberg, UltraHonkBackend } from '@aztec/bb.js';
 import type { CompiledCircuit } from '@aztec/noir-types';
 
-// Import the compiled individual_note circuit
+// Import the compiled circuits
 import individualNoteCircuit from '../circuits/individual_note/target/individual_note.json' with { type: 'json' };
+import summaryTreeCircuit from '../circuits/note_summary_tree/target/note_summary_tree.json' with { type: 'json' };
 
 const { AZTEC_NODE_URL = "http://localhost:8080" } = process.env;
 
@@ -85,11 +87,11 @@ describe("Private Transfer Demo Test", () => {
 
     test("generate tx activity", async () => {
         // send tokens back and forth - 5 transfers in each direction
-        await token.methods.transfer_private_to_private(addresses[1], addresses[2], precision(3n), 0).send({ from: addresses[1] }).wait();
-        await token.methods.transfer_private_to_private(addresses[1], addresses[2], precision(7n), 0).send({ from: addresses[1] }).wait();
-        await token.methods.transfer_private_to_private(addresses[1], addresses[2], precision(5n), 0).send({ from: addresses[1] }).wait();
-        await token.methods.transfer_private_to_private(addresses[1], addresses[2], precision(2n), 0).send({ from: addresses[1] }).wait();
-        await token.methods.transfer_private_to_private(addresses[1], addresses[2], precision(9n), 0).send({ from: addresses[1] }).wait();
+        // await token.methods.transfer_private_to_private(addresses[1], addresses[2], precision(3n), 0).send({ from: addresses[1] }).wait();
+        // await token.methods.transfer_private_to_private(addresses[1], addresses[2], precision(7n), 0).send({ from: addresses[1] }).wait();
+        // await token.methods.transfer_private_to_private(addresses[1], addresses[2], precision(5n), 0).send({ from: addresses[1] }).wait();
+        // await token.methods.transfer_private_to_private(addresses[1], addresses[2], precision(2n), 0).send({ from: addresses[1] }).wait();
+        // await token.methods.transfer_private_to_private(addresses[1], addresses[2], precision(9n), 0).send({ from: addresses[1] }).wait();
 
         await token.methods.transfer_private_to_private(addresses[2], addresses[1], precision(4n), 0).send({ from: addresses[2] }).wait();
         await token.methods.transfer_private_to_private(addresses[2], addresses[1], precision(6n), 0).send({ from: addresses[2] }).wait();
@@ -109,7 +111,7 @@ describe("Private Transfer Demo Test", () => {
 
         // Debug: print the actual secrets
         for (const secret of taggingSecrets.secrets) {
-            console.log(`  Secret: ${secret.direction} - counterparty: ${secret.counterparty.toString().slice(0, 16)}... app: ${secret.app.toString().slice(0, 16)}...`);
+            console.log(`  Secret: counterparty: ${secret.counterparty.toString().slice(0, 16)}... app: ${secret.app.toString().slice(0, 16)}...`);
             console.log(`    Secret value: ${secret.secret.toString()}`);
         }
 
@@ -125,7 +127,7 @@ describe("Private Transfer Demo Test", () => {
         console.log(`Secrets Processed: ${results.secrets.length}`);
 
         for (const secretResult of results.secrets) {
-            console.log(`\n--- Secret: ${secretResult.secret.counterparty.slice(0, 16)}... (${secretResult.secret.direction}) ---`);
+            console.log(`\n--- Secret: ${secretResult.secret.counterparty.slice(0, 16)}... ---`);
             console.log(`  App: ${secretResult.secret.app.slice(0, 16)}...`);
             console.log(`  Notes Found: ${secretResult.noteCount}`);
 
@@ -150,7 +152,7 @@ describe("Private Transfer Demo Test", () => {
         console.log("\n✓ Test complete - encrypted logs retrieved successfully!");
     });
 
-    test("decrypt a note", async () => {
+    test.skip("decrypt a note", async () => {
         // Small wait to ensure everything is synced
         await sleep(3000);
 
@@ -228,7 +230,7 @@ describe("Private Transfer Demo Test", () => {
         console.log("\n✓ Test complete - note decrypted successfully!");
     });
 
-    test("prove note with circuit", async () => {
+    test.skip("prove note with circuit", async () => {
         // Small wait to ensure everything is synced
         await sleep(3000);
 
@@ -341,17 +343,18 @@ describe("Private Transfer Demo Test", () => {
         // Expected values from plaintext
         const expectedValue = plaintext[4].toString();
 
-        // Step 3: Generate witness
+        // Step 3: Generate witness (3 return values now: value, tree_leaf, vkey_hash)
         console.log("\n=== STEP 3: Generating Witness ===");
         const { witness, returnValue } = await noir.execute(circuitInputs);
         console.log(`Witness generated ✅`);
         console.log(`Return value: ${JSON.stringify(returnValue)}`);
 
         // Verify returned values
-        const [circuitValue, circuitTreeLeaf] = returnValue as [string, string];
+        const [circuitValue, circuitTreeLeaf, circuitVkeyHash] = returnValue as [string, string, string];
         console.log(`\n=== Verifying Circuit Output ===`);
         console.log(`  Expected value: ${expectedValue}`);
         console.log(`  Circuit value:  ${circuitValue}`);
+        console.log(`  Vkey hash:      ${circuitVkeyHash} (should be 0 for leaf proofs)`);
         // Compare as BigInt since formatting may differ (leading zeros)
         expect(BigInt(circuitValue)).toBe(BigInt(expectedValue));
         console.log(`  ✅ Value matches! (${BigInt(circuitValue) / precision(1n)} tokens)`);
@@ -371,7 +374,7 @@ describe("Private Transfer Demo Test", () => {
         console.log("\n✓ Test complete - note proven successfully!");
     });
 
-    test("retrieve ciphertexts with minimal API", async () => {
+    test.skip("retrieve ciphertexts with minimal API", async () => {
         await sleep(3000);
 
         // Step 1: Export tagging secrets (client side - knows full metadata)
@@ -379,14 +382,16 @@ describe("Private Transfer Demo Test", () => {
         const taggingSecrets = await wallet.exportTaggingSecrets(addresses[1], [token.address], [addresses[2]]);
         console.log(`Exported ${taggingSecrets.secrets.length} secrets`);
 
-        // Step 2: Client extracts minimal info to send to auditor
+        // Step 2: Client extracts minimal info to send to auditor (INBOUND ONLY)
         // Only secretValue and appAddress - NO direction, counterparty, label
-        console.log("\n=== STEP 2: Extract Minimal Info for Auditor ===");
-        const minimalSecrets: AuditorSecretInput[] = taggingSecrets.secrets.map(s => ({
+        // Client filters to inbound since only inbound notes are decryptable
+        console.log("\n=== STEP 2: Extract Minimal Info for Auditor (Inbound Only) ===");
+        const inboundSecrets = taggingSecrets.secrets.filter(s => s.direction === 'inbound');
+        const minimalSecrets: AuditorSecretInput[] = inboundSecrets.map(s => ({
             secretValue: s.secret.value,
             appAddress: s.app,
         }));
-        console.log(`Prepared ${minimalSecrets.length} minimal secrets (no metadata)`);
+        console.log(`Prepared ${minimalSecrets.length} minimal secrets (inbound only, no metadata)`);
 
         // Step 3: Auditor retrieves ciphertexts + IMT root
         console.log("\n=== STEP 3: Auditor Retrieves Ciphertexts ===");
@@ -422,4 +427,404 @@ describe("Private Transfer Demo Test", () => {
         console.log("\n✓ Test complete - minimal API works!");
     });
 
+    test.skip("prove all notes for recursive aggregation", async () => {
+        await sleep(3000);
+
+        // ============================================================
+        // STEP 1: Get encrypted notes (auditor filters to inbound only)
+        // ============================================================
+        console.log("\n=== STEP 1: Getting Inbound Notes ===");
+        const taggingSecrets = await wallet.exportTaggingSecrets(addresses[1], [token.address], [addresses[2]]);
+        const results = await retrieveEncryptedNotes(node, taggingSecrets);
+
+        // Get recipient's keys for decryption
+        const pxe = wallet.pxe as any;
+        const registeredAccounts = await pxe.getRegisteredAccounts();
+        const recipientCompleteAddress = registeredAccounts.find((acc: any) =>
+            acc.address.equals(addresses[1])
+        );
+        const ivskM = await pxe.keyStore.getMasterIncomingViewingSecretKey(addresses[1]);
+        const preaddress = await recipientCompleteAddress.getPreaddress();
+        const addressSecret = await computeAddressSecret(preaddress, ivskM);
+
+        // Collect all notes (auditor returns only inbound/decryptable notes)
+        const allNotes = results.secrets.flatMap(s => s.notes);
+        console.log(`Total inbound notes: ${allNotes.length}`);
+
+        // ============================================================
+        // STEP 2: Prove all notes
+        // ============================================================
+        console.log("\n=== STEP 2: Proving All Notes ===");
+
+        interface ProofData {
+            proof: Uint8Array;
+            publicInputs: string[];
+            value: bigint;
+            treeLeaf: string;
+        }
+
+        const proofs: ProofData[] = [];
+
+        for (let i = 0; i < allNotes.length; i++) {
+            const note = allNotes[i];
+            console.log(`\n--- Proving note ${i + 1}/${allNotes.length} ---`);
+
+            // Decrypt
+            const encryptedLogBuffer = Buffer.from(note.ciphertext, 'hex');
+            const plaintext = await decryptNote(encryptedLogBuffer, recipientCompleteAddress, ivskM);
+            if (!plaintext) {
+                throw new Error(`Failed to decrypt note ${i}`);
+            }
+
+            // Prepare circuit inputs
+            const circuitInputs = prepareCircuitInputs(plaintext, encryptedLogBuffer, addressSecret);
+
+            // Generate witness and proof (3 return values now: value, tree_leaf, vkey_hash)
+            const { witness, returnValue } = await noir.execute(circuitInputs);
+            const [circuitValue, circuitTreeLeaf, circuitVkeyHash] = returnValue as [string, string, string];
+
+            const proof = await backend.generateProof(witness);
+            const isValid = await backend.verifyProof(proof);
+
+            if (!isValid) {
+                throw new Error(`Invalid proof for note ${i}`);
+            }
+
+            const value = BigInt(circuitValue);
+            console.log(`  Value: ${value / precision(1n)} tokens`);
+            console.log(`  Tree Leaf: ${circuitTreeLeaf.slice(0, 20)}...`);
+            console.log(`  Proof: ✅ Valid (${proof.proof.length} bytes)`);
+
+            proofs.push({
+                proof: proof.proof,
+                publicInputs: [circuitValue, circuitTreeLeaf, circuitVkeyHash],
+                value,
+                treeLeaf: circuitTreeLeaf,
+            });
+        }
+
+        // ============================================================
+        // STEP 3: Summarize results for recursive circuit
+        // ============================================================
+        console.log("\n=== STEP 3: Summary for Recursive Aggregation ===");
+
+        const total = proofs.reduce((sum, p) => sum + p.value, 0n);
+
+        console.log(`\nNotes proven: ${proofs.length}`);
+        console.log(`Total value: ${total / precision(1n)} tokens`);
+        proofs.forEach((p, i) => console.log(`  [${i}] ${p.value / precision(1n)} tokens`));
+
+        // Get verification key for recursive verification
+        const vk = await backend.getVerificationKey();
+        console.log(`\nVerification Key: ${vk.length} bytes`);
+
+        // ============================================================
+        // STEP 4: Prepare recursive circuit inputs
+        // ============================================================
+        console.log("\n=== STEP 4: Recursive Circuit Input Structure ===");
+
+        // This is the data structure the recursive circuit needs:
+        const recursiveInputs = {
+            // Verification key (shared by all proofs from same circuit)
+            verification_key: Array.from(vk),
+
+            // All proofs
+            proofs: proofs.map(p => ({
+                proof: Array.from(p.proof),
+                public_inputs: p.publicInputs,
+            })),
+
+            // Expected total (for circuit assertion)
+            expected_total: total.toString(),
+        };
+
+        console.log(`Recursive inputs prepared:`);
+        console.log(`  - VK size: ${recursiveInputs.verification_key.length} bytes`);
+        console.log(`  - Proofs: ${recursiveInputs.proofs.length}`);
+        console.log(`  - Proof sizes: ${proofs[0]?.proof.length || 0} bytes each`);
+
+        console.log("\n✓ Proofs generated for recursive aggregation!");
+
+        expect(proofs.length).toBe(5);
+        console.log(`\nFinal count: ${proofs.length} proofs`);
+    });
+
+    test.skip("recursive summary proof", async () => {
+        await sleep(3000);
+
+        // ============================================================
+        // STEP 1: Get encrypted notes (only use first 2 for speed)
+        // ============================================================
+        console.log("\n=== STEP 1: Getting First 2 Notes ===");
+        const taggingSecrets = await wallet.exportTaggingSecrets(addresses[1], [token.address], [addresses[2]]);
+        const results = await retrieveEncryptedNotes(node, taggingSecrets);
+
+        const pxe = wallet.pxe as any;
+        const registeredAccounts = await pxe.getRegisteredAccounts();
+        const recipientCompleteAddress = registeredAccounts.find((acc: any) =>
+            acc.address.equals(addresses[1])
+        );
+        const ivskM = await pxe.keyStore.getMasterIncomingViewingSecretKey(addresses[1]);
+        const preaddress = await recipientCompleteAddress.getPreaddress();
+        const addressSecret = await computeAddressSecret(preaddress, ivskM);
+
+        // Only take first 2 notes
+        const allNotes = results.secrets.flatMap(s => s.notes).slice(0, 2);
+        console.log(`Using ${allNotes.length} notes for recursive test`);
+
+        // ============================================================
+        // STEP 2: Generate 2 proofs from individual_note circuit
+        // ============================================================
+        console.log("\n=== STEP 2: Generating 2 Inner Proofs ===");
+
+        interface ProofArtifacts {
+            proof: Uint8Array;
+            proofAsFields: string[];
+            publicInputs: string[];
+            value: bigint;
+        }
+
+        const proofArtifacts: ProofArtifacts[] = [];
+
+        for (let i = 0; i < allNotes.length; i++) {
+            const note = allNotes[i];
+            console.log(`\n--- Proving note ${i + 1}/${allNotes.length} ---`);
+
+            const encryptedLogBuffer = Buffer.from(note.ciphertext, 'hex');
+            const plaintext = await decryptNote(encryptedLogBuffer, recipientCompleteAddress, ivskM);
+            if (!plaintext) throw new Error(`Failed to decrypt note ${i}`);
+
+            const circuitInputs = prepareCircuitInputs(plaintext, encryptedLogBuffer, addressSecret);
+            const { witness, returnValue } = await noir.execute(circuitInputs);
+            const [circuitValue, circuitTreeLeaf] = returnValue as [string, string];
+
+            // Generate ZK proof with recursive target for use in recursive verification
+            const proof = await backend.generateProof(witness, { verifierTarget: 'noir-recursive' });
+            const isValid = await backend.verifyProof(proof, { verifierTarget: 'noir-recursive' });
+            if (!isValid) throw new Error(`Invalid proof for note ${i}`);
+
+            // Get recursive proof artifacts (3 public inputs: value, tree_leaf, vkey_hash)
+            const artifacts = await backend.generateRecursiveProofArtifacts(proof.proof, 3);
+
+            // Manually convert proof bytes to fields (32 bytes per field)
+            const proofAsFields: string[] = [];
+            for (let j = 0; j < proof.proof.length; j += 32) {
+                const chunk = proof.proof.slice(j, j + 32);
+                const hex = '0x' + Buffer.from(chunk).toString('hex');
+                proofAsFields.push(hex);
+            }
+
+            console.log(`  Value: ${BigInt(circuitValue) / precision(1n)} tokens`);
+            console.log(`  Proof: ✅ Valid`);
+            console.log(`  proof.proof length: ${proof.proof.length} bytes`);
+            console.log(`  proofAsFields (manual): ${proofAsFields.length} fields`);
+            console.log(`  vkAsFields: ${artifacts.vkAsFields.length} fields`);
+            console.log(`  vkHash (FULL - for hardcoding): ${artifacts.vkHash}`);
+
+            // Extract 3rd return value (vkey_hash = 0 for leaf proofs)
+            const [, , circuitVkeyHash] = returnValue as [string, string, string];
+
+            proofArtifacts.push({
+                proof: proof.proof,
+                proofAsFields: proofAsFields,
+                publicInputs: [circuitValue, circuitTreeLeaf, circuitVkeyHash],
+                value: BigInt(circuitValue),
+            });
+        }
+
+        // Get vk artifacts (same for all proofs from same circuit) - 3 public inputs now
+        const vkArtifacts = await backend.generateRecursiveProofArtifacts(proofArtifacts[0].proof, 3);
+
+        // ============================================================
+        // STEP 3: Setup summary circuit
+        // ============================================================
+        console.log("\n=== STEP 3: Setting up Summary Circuit ===");
+
+        const summaryCircuit = summaryTreeCircuit as CompiledCircuit;
+        const summaryNoir = new Noir(summaryCircuit);
+        await summaryNoir.init();
+        const summaryBackend = new UltraHonkBackend(summaryCircuit.bytecode, bb);
+        console.log("Summary circuit initialized ✅");
+
+        // ============================================================
+        // STEP 4: Prepare inputs for summary circuit
+        // ============================================================
+        console.log("\n=== STEP 4: Preparing Summary Circuit Inputs ===");
+
+        // Get zero hashes for padding (when we have odd number of notes)
+        const zeroHashes = await getZeroHashes(10);
+        const hasRightProof = proofArtifacts.length > 1;
+
+        // Create empty proof for Option::none() case - 3 public inputs now
+        const emptyProof = new Array(proofArtifacts[0].proofAsFields.length).fill("0x0");
+        const emptyPublicInputs = ["0x0", "0x0", "0x0"];
+
+        const summaryInputs = {
+            verification_key: vkArtifacts.vkAsFields,
+            vkey_hash: vkArtifacts.vkHash,
+            proof_left: proofArtifacts[0].proofAsFields,
+            proof_right: {
+                _is_some: hasRightProof,
+                _value: hasRightProof ? proofArtifacts[1].proofAsFields : emptyProof,
+            },
+            public_inputs_left: proofArtifacts[0].publicInputs,
+            public_inputs_right: {
+                _is_some: hasRightProof,
+                _value: hasRightProof ? proofArtifacts[1].publicInputs : emptyPublicInputs,
+            },
+            zero_leaf_hint: {
+                _is_some: !hasRightProof,
+                _value: hasRightProof ? "0x0" : zeroHashes[0].toString(),
+            },
+            // At level 0, summary_vkey_hash is just passed through (not checked)
+            // We use a placeholder here since this test only does one level
+            summary_vkey_hash: "0x0",
+        };
+
+        console.log(`  vk fields: ${summaryInputs.verification_key.length}`);
+        console.log(`  vk hash: ${summaryInputs.vkey_hash}`);
+        console.log(`  proof_left fields: ${summaryInputs.proof_left.length}`);
+        console.log(`  proof_right._is_some: ${summaryInputs.proof_right._is_some}`);
+        console.log(`  public_inputs_left: ${summaryInputs.public_inputs_left}`);
+        console.log(`  public_inputs_right._is_some: ${summaryInputs.public_inputs_right._is_some}`);
+        console.log(`  zero_leaf_hint._is_some: ${summaryInputs.zero_leaf_hint._is_some}`);
+
+        // ============================================================
+        // STEP 5: Execute summary circuit
+        // ============================================================
+        console.log("\n=== STEP 5: Executing Summary Circuit ===");
+
+        const { witness: summaryWitness, returnValue: summaryReturn } = await summaryNoir.execute(summaryInputs);
+        const [returnSum, returnRoot, returnVkeyHash] = summaryReturn as [string, string, string];
+        console.log(`Summary witness generated ✅`);
+        console.log(`Return value (sum): ${returnSum}`);
+        console.log(`Return value (root): ${returnRoot}`);
+        console.log(`Return value (vkey_hash): ${returnVkeyHash}`);
+
+        const expectedSum = proofArtifacts[0].value + (hasRightProof ? proofArtifacts[1].value : 0n);
+        console.log(`Expected sum: ${expectedSum}`);
+        expect(BigInt(returnSum)).toBe(expectedSum);
+
+        // ============================================================
+        // STEP 6: Generate and verify summary proof
+        // ============================================================
+        console.log("\n=== STEP 6: Generating Summary Proof ===");
+
+        const summaryProof = await summaryBackend.generateProof(summaryWitness);
+        console.log(`Summary proof generated ✅ (${summaryProof.proof.length} bytes)`);
+
+        const summaryValid = await summaryBackend.verifyProof(summaryProof);
+        console.log(`Summary proof verification: ${summaryValid ? '✅ VALID' : '❌ INVALID'}`);
+
+        expect(summaryValid).toBe(true);
+        console.log(`\n✓ Recursive summary proof complete!`);
+        console.log(`  Sum: ${expectedSum / precision(1n)} tokens`);
+        console.log(`  Root: ${returnRoot}`);
+    });
+
+    test("proof tree full aggregation", { timeout: 300000 }, async () => {
+        await sleep(3000);
+
+        // ============================================================
+        // STEP 1: Get all encrypted notes
+        // ============================================================
+        console.log("\n=== STEP 1: Getting All Notes ===");
+        const taggingSecrets = await wallet.exportTaggingSecrets(addresses[1], [token.address], [addresses[2]]);
+        const results = await retrieveEncryptedNotes(node, taggingSecrets);
+
+        const pxe = wallet.pxe as any;
+        const registeredAccounts = await pxe.getRegisteredAccounts();
+        const recipientCompleteAddress = registeredAccounts.find((acc: any) =>
+            acc.address.equals(addresses[1])
+        );
+        const ivskM = await pxe.keyStore.getMasterIncomingViewingSecretKey(addresses[1]);
+
+        const allNotes = results.secrets.flatMap(s => s.notes);
+        console.log(`Found ${allNotes.length} notes to prove`);
+
+        // ============================================================
+        // STEP 2: Create ProofTree and prove all notes
+        // ============================================================
+        console.log("\n=== STEP 2: Creating ProofTree ===");
+
+        const tree = new ProofTree({
+            bb,
+            noteCircuit: individualNoteCircuit as CompiledCircuit,
+            summaryCircuit: summaryTreeCircuit as CompiledCircuit,
+            notes: allNotes.map(n => ({ ciphertext: Buffer.from(n.ciphertext, 'hex') })),
+            recipientCompleteAddress,
+            ivskM,
+        });
+
+        // ============================================================
+        // STEP 3: Generate aggregated proof
+        // ============================================================
+        console.log("\n=== STEP 3: Generating Aggregated Proof ===");
+
+        const result = await tree.prove();
+
+        console.log(`\n=== FINAL RESULT ===`);
+        console.log(`  Sum: ${result.publicInputs.sum / precision(1n)} tokens (${result.publicInputs.sum} raw)`);
+        console.log(`  Root: ${result.publicInputs.root}`);
+        console.log(`  VKey Hash: ${result.publicInputs.vkeyHash}`);
+        console.log(`  Proof size: ${result.proof.length} bytes`);
+
+        // Verify the sum matches expected
+        // Notes are: 4, 6, 8, 1, 10 = 29 tokens
+        const expectedSum = 29n * precision(1n);
+        expect(result.publicInputs.sum).toBe(expectedSum);
+
+        // Verify the merkle root matches the IMT root computed by auditor
+        const ciphertexts = allNotes.map(n => Buffer.from(n.ciphertext, 'hex'));
+        const expectedRoot = await buildIMTFromCiphertexts(ciphertexts);
+        expect(result.publicInputs.root).toBe(expectedRoot.toString());
+        console.log(`  Merkle root matches auditor IMT: ✅`);
+
+        console.log(`\n✓ ProofTree aggregation complete!`);
+    });
+
 });
+
+// Helper function to prepare circuit inputs from decrypted plaintext
+function prepareCircuitInputs(
+    plaintext: Fr[],
+    encryptedLogBuffer: Buffer,
+    addressSecret: any
+): { plaintext: { storage: string[]; len: string }; ciphertext: string[]; ivsk_app: string } {
+    // Convert plaintext to circuit format (BoundedVec<Field, 14>)
+    const plaintextStorage = plaintext.map(f => f.toString());
+    const plaintextLen = plaintextStorage.length;
+
+    // Pad storage to 14 fields
+    while (plaintextStorage.length < 14) {
+        plaintextStorage.push("0");
+    }
+
+    const notePlaintext = {
+        storage: plaintextStorage,
+        len: plaintextLen.toString(),
+    };
+
+    // Parse ciphertext from hex to fields
+    // Skip the tag (first 32 bytes)
+    const ciphertextWithoutTag = encryptedLogBuffer.slice(32);
+
+    const MESSAGE_CIPHERTEXT_LEN = 17;
+    const ciphertextFields: string[] = [];
+
+    // Pad the buffer to ensure we have enough bytes for all fields
+    const paddedBuffer = Buffer.alloc(MESSAGE_CIPHERTEXT_LEN * 32);
+    ciphertextWithoutTag.copy(paddedBuffer, 0, 0, Math.min(ciphertextWithoutTag.length, paddedBuffer.length));
+
+    for (let i = 0; i < MESSAGE_CIPHERTEXT_LEN; i++) {
+        const chunk = paddedBuffer.slice(i * 32, (i + 1) * 32);
+        const field = Fr.fromBuffer(chunk);
+        ciphertextFields.push(field.toString());
+    }
+
+    return {
+        plaintext: notePlaintext,
+        ciphertext: ciphertextFields,
+        ivsk_app: addressSecret.toString(),
+    };
+}

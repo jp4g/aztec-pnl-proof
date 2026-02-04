@@ -9,13 +9,14 @@ import { buildIMTFromCiphertexts } from "./imt";
 /**
  * Retrieve encrypted note ciphertexts from the Aztec network using tagging secrets.
  *
- * Takes a tagging secret export and returns all discovered notes organized by
- * which specific secret found them.
+ * Only processes INBOUND secrets - notes encrypted for the account holder.
+ * Outbound notes (sent by the account) are encrypted for recipients and cannot
+ * be decrypted by the sender.
  *
  * @param node - Aztec node client
  * @param secretsExport - Exported tagging secrets from a user
  * @param options - Scan options
- * @returns Results organized by tagging secret
+ * @returns Results organized by tagging secret (inbound only)
  */
 export async function retrieveEncryptedNotes(
     node: AztecNode,
@@ -36,8 +37,11 @@ export async function retrieveEncryptedNotes(
     const results: SecretResult[] = [];
     const allTransactions = new Set<string>();
 
-    // Process each secret independently
-    for (const secretEntry of secretsExport.secrets) {
+    // Filter to only inbound secrets - we can only decrypt notes encrypted for us
+    const inboundSecrets = secretsExport.secrets.filter(s => s.direction === 'inbound');
+
+    // Process each inbound secret
+    for (const secretEntry of inboundSecrets) {
         const secretResult = await processSecret(
             node,
             secretEntry,
@@ -75,7 +79,7 @@ async function processSecret(
 ): Promise<SecretResult> {
     const notes: RetrievedNote[] = [];
 
-    console.log(`[DEBUG] Processing secret: ${secretEntry.direction} - counterparty: ${secretEntry.counterparty.toString().slice(0, 16)}...`);
+    console.log(`[DEBUG] Processing secret: counterparty: ${secretEntry.counterparty.toString().slice(0, 16)}...`);
 
     // Scan in batches
     for (let index = startIndex; index < startIndex + maxIndices; index += batchSize) {
@@ -141,7 +145,6 @@ async function processSecret(
         secret: {
             counterparty: secretEntry.counterparty.toString(),
             app: secretEntry.app.toString(),
-            direction: secretEntry.direction,
             label: secretEntry.label,
         },
         notes,
@@ -173,7 +176,6 @@ export interface SecretResult {
     secret: {
         counterparty: string;
         app: string;
-        direction: 'inbound' | 'outbound';
         label?: string;
     };
     /** All notes found with this secret */
@@ -258,8 +260,11 @@ export interface AuditorSecretOutput {
  *
  * Privacy-preserving: auditor receives no metadata about direction, counterparty, etc.
  *
+ * IMPORTANT: Caller should only pass INBOUND secrets. Outbound notes are encrypted
+ * for recipients and cannot be decrypted by the sender.
+ *
  * @param node - Aztec node client
- * @param secrets - Array of (secretValue, appAddress) pairs
+ * @param secrets - Array of (secretValue, appAddress) pairs (inbound secrets only)
  * @param options - Scan options
  * @returns Array of outputs, one per input secret (preserves order)
  */
