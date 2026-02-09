@@ -1,1 +1,0 @@
-export { TokenContract, TokenContractArtifact } from "./Token.js"

@@ -1,12 +1,12 @@
 {
-  "name": "volume-proof",
+  "name": "pnl-proof",
   "version": "1.0.0",
   "license": "MIT",
   "private": true,
   "type": "module",
   "scripts": {
     "postinstall": "bun scripts/postinstall.ts",
-    "test": "bun test test/e2e.test.ts"
+    "test": "bun test"
   },
   "dependencies": {
     "@aztec/accounts": "file:../aztec-packages/yarn-project/accounts",
