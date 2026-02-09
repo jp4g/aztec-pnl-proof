@@ -51,14 +51,27 @@ async function postinstall() {
     // Change back to project root for circuit compilation
     process.chdir(join(process.cwd(), '..', '..'));
 
-    // Compile Noir circuits
-    console.log('Compiling individual_note circuit...');
-    await $`cd circuits/individual_note && nargo compile`;
-    console.log('✓ individual_note compiled');
+    // Compile AMM contract and generate TS artifact
+    console.log('Compiling AMM contract...');
+    await $`cd contracts/amm_contract && aztec compile`;
+    console.log('✓ AMM contract compiled');
 
-    console.log('Compiling note_summary_tree circuit...');
-    await $`cd circuits/note_summary_tree && nargo compile`;
-    console.log('✓ note_summary_tree compiled');
+    console.log('Generating AMM TS artifact...');
+    await $`aztec codegen contracts/amm_contract/target/amm_contract-AMM.json -o src/artifacts/`;
+    console.log('✓ AMM artifact generated');
+
+    // Compile Noir circuits
+    console.log('Compiling spot_price circuit...');
+    await $`cd circuits/spot_price && nargo compile`;
+    console.log('✓ spot_price compiled');
+
+    console.log('Compiling note_creation circuit...');
+    await $`cd circuits/note_creation && nargo compile`;
+    console.log('✓ note_creation compiled');
+
+    console.log('Compiling individual_swap circuit...');
+    await $`cd circuits/individual_swap && nargo compile`;
+    console.log('✓ individual_swap compiled');
 
   } catch (error) {
     console.error('Failed to initialize git submodules:', error);

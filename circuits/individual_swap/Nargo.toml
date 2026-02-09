@@ -1,0 +1,7 @@
+[package]
+name = "individual_swap"
+type = "bin"
+authors = [""]
+
+[dependencies]
+aztec = { path = "../../../aztec-packages/noir-projects/aztec-nr/aztec" }
