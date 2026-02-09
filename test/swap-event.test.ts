@@ -225,8 +225,8 @@ describe("Swap Event Proof Test", () => {
         console.log(`    amount_out: ${result2.swapData.amountOut}`);
 
         // Verify individual proof results
-        expect(result1.publicInputs.vkeyMarker).toBe('0x0000000000000000000000000000000000000000000000000000000000000000');
-        expect(result2.publicInputs.vkeyMarker).toBe('0x0000000000000000000000000000000000000000000000000000000000000000');
+        expect(BigInt(result1.publicInputs.vkeyMarker)).toBe(0n);
+        expect(BigInt(result2.publicInputs.vkeyMarker)).toBe(0n);
 
         expect(result1.swapData.tokenIn).toBe(token0.address.toField().toString());
         expect(result1.swapData.tokenOut).toBe(token1.address.toField().toString());
