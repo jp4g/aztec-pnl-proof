@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "postinstall": "bun scripts/postinstall.ts",
-    "test": "bun test"
+    "test": "bun test test/"
   },
   "dependencies": {
     "@aztec/accounts": "file:../aztec-packages/yarn-project/accounts",
