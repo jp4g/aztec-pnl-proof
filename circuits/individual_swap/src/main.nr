@@ -8,6 +8,7 @@ use dep::aztec::{
 };
 pub global HEADER_CIPHERTEXT_SIZE_IN_BYTES: u32 = 16;
 use dep::std::{aes128::aes128_encrypt, embedded_curve_ops::EmbeddedCurveScalar};
+use dep::protocol_types::hash::poseidon2_hash;
 
 /// Number of plaintext fields for a Swap event:
 ///   1 (expanded_metadata) + 1 (randomness) + 5 (token_in, token_out, amount_in, amount_out, is_exact_input)
@@ -17,15 +18,22 @@ fn main(
     plaintext: BoundedVec<Field, 14>,
     ciphertext: [Field; MESSAGE_CIPHERTEXT_LEN],
     ivsk_app: Field,
-) -> pub (Field, Field, Field, Field, Field) {
+    block_number: Field,
+) -> pub (Field, Field) {
     // 1. Constrain the plaintext to encrypt to the asserted ciphertext
     verify_encryption(plaintext, ciphertext, ivsk_app);
 
     // 2. Extract swap event values from the plaintext
     let (token_in, token_out, amount_in, amount_out, is_exact_input) = get_swap_values(plaintext);
 
-    // 3. Output: (token_in, token_out, amount_in, amount_out, is_exact_input)
-    (token_in, token_out, amount_in, amount_out, is_exact_input)
+    // 3. Compute leaf hash binding swap data to the block number
+    // This hash will be used as a leaf in the aggregation merkle tree
+    let leaf = poseidon2_hash(
+        [block_number, token_in, token_out, amount_in, amount_out, is_exact_input],
+    );
+
+    // Return (leaf_hash, 0) - the sentinel 0 marks this as a leaf-level proof
+    (leaf, 0)
 }
 
 /// Verify that the plaintext encrypts to the given ciphertext

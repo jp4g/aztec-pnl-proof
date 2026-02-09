@@ -1,8 +1,8 @@
 [package]
-name = "individual_swap"
+name = "swap_summary_tree"
 type = "bin"
 authors = [""]
 
 [dependencies]
-aztec = { path = "../../../aztec-packages/noir-projects/aztec-nr/aztec" }
+bb_proof_verification = { path = "../../../aztec-packages/barretenberg/noir/bb_proof_verification" }
 protocol_types = { path = "../../../aztec-packages/noir-projects/noir-protocol-circuits/crates/types" }

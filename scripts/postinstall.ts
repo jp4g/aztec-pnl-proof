@@ -73,6 +73,10 @@ async function postinstall() {
     await $`cd circuits/individual_swap && nargo compile`;
     console.log('✓ individual_swap compiled');
 
+    console.log('Compiling swap_summary_tree circuit...');
+    await $`cd circuits/swap_summary_tree && nargo compile`;
+    console.log('✓ swap_summary_tree compiled');
+
   } catch (error) {
     console.error('Failed to initialize git submodules:', error);
     process.exit(1);

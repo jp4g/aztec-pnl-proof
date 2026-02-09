@@ -29,13 +29,21 @@ export interface SwapProverConfig {
 export interface SwapProofResult {
     /** Final proof bytes */
     proof: Uint8Array;
-    /** Public outputs */
+    /** Public outputs: (leaf_hash, vkey_marker) */
     publicInputs: {
+        /** Leaf hash: poseidon2([block_number, token_in, token_out, amount_in, amount_out, is_exact_input]) */
+        leaf: string;
+        /** Vkey marker: 0 for leaf-level proofs */
+        vkeyMarker: string;
+    };
+    /** Decoded swap parameters (from decryption, not in proof) */
+    swapData: {
         tokenIn: string;
         tokenOut: string;
         amountIn: bigint;
         amountOut: bigint;
         isExactInput: bigint;
+        blockNumber: bigint;
     };
 }
 
@@ -61,13 +69,15 @@ export class SwapProver {
      * Prove a single swap event from its encrypted ciphertext.
      *
      * @param encryptedLog - Raw encrypted log buffer (includes 32-byte tag prefix)
+     * @param blockNumber - L2 block number where this event was included
      * @returns Proof and proven swap parameters
      */
-    async prove(encryptedLog: Buffer): Promise<SwapProofResult> {
+    async prove(encryptedLog: Buffer, blockNumber: bigint): Promise<SwapProofResult> {
         await this.initialize();
 
         console.log(`\n=== SwapProver: Proving swap event ===`);
         console.log(`  Ciphertext size: ${encryptedLog.length} bytes`);
+        console.log(`  Block number: ${blockNumber}`);
 
         // 1. Decrypt the event to get plaintext fields
         const plaintext = await decryptLog(
@@ -85,19 +95,28 @@ export class SwapProver {
         }
 
         // 2. Prepare circuit inputs
-        const circuitInputs = this.prepareCircuitInputs(plaintext, encryptedLog);
+        const circuitInputs = this.prepareCircuitInputs(plaintext, encryptedLog, blockNumber);
+
+        // Decode swap values from plaintext (for caller convenience)
+        const tokenIn = plaintext[2].toString();
+        const tokenOut = plaintext[3].toString();
+        const amountIn = BigInt(plaintext[4].toBigInt());
+        const amountOut = BigInt(plaintext[5].toBigInt());
+        const isExactInput = BigInt(plaintext[6].toBigInt());
+
+        console.log(`  Decoded token_in: ${tokenIn}`);
+        console.log(`  Decoded token_out: ${tokenOut}`);
+        console.log(`  Decoded amount_in: ${amountIn}`);
+        console.log(`  Decoded amount_out: ${amountOut}`);
+        console.log(`  Decoded is_exact_input: ${isExactInput}`);
 
         // 3. Generate witness
         console.log('  Generating witness...');
         const { witness, returnValue } = await this.noir!.execute(circuitInputs);
-        const [tokenIn, tokenOut, amountIn, amountOut, isExactInput] =
-            returnValue as [string, string, string, string, string];
+        const [leaf, vkeyMarker] = returnValue as [string, string];
 
-        console.log(`  Proven token_in: ${tokenIn}`);
-        console.log(`  Proven token_out: ${tokenOut}`);
-        console.log(`  Proven amount_in: ${BigInt(amountIn)}`);
-        console.log(`  Proven amount_out: ${BigInt(amountOut)}`);
-        console.log(`  Proven is_exact_input: ${BigInt(isExactInput)}`);
+        console.log(`  Proven leaf: ${leaf}`);
+        console.log(`  Proven block_number: ${blockNumber}`);
 
         // 4. Generate proof
         console.log('  Generating proof...');
@@ -111,11 +130,16 @@ export class SwapProver {
         return {
             proof: proof.proof,
             publicInputs: {
+                leaf,
+                vkeyMarker,
+            },
+            swapData: {
                 tokenIn,
                 tokenOut,
-                amountIn: BigInt(amountIn),
-                amountOut: BigInt(amountOut),
-                isExactInput: BigInt(isExactInput),
+                amountIn,
+                amountOut,
+                isExactInput,
+                blockNumber,
             },
         };
     }
@@ -126,7 +150,8 @@ export class SwapProver {
     private prepareCircuitInputs(
         plaintext: Fr[],
         encryptedLogBuffer: Buffer,
-    ): { plaintext: { storage: string[]; len: string }; ciphertext: string[]; ivsk_app: string } {
+        blockNumber: bigint,
+    ): { plaintext: { storage: string[]; len: string }; ciphertext: string[]; ivsk_app: string; block_number: string } {
         // Convert plaintext to BoundedVec format (max capacity 14)
         const plaintextStorage = plaintext.map(f => f.toString());
         const plaintextLen = plaintextStorage.length;
@@ -154,6 +179,7 @@ export class SwapProver {
             },
             ciphertext: ciphertextFields,
             ivsk_app: this.addressSecret!.toString(),
+            block_number: new Fr(blockNumber).toString(),
         };
     }
 
