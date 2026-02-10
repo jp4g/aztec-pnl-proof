@@ -83,7 +83,6 @@ pub global PLAINTEXT_BYTES_LEN: u32 = 224; // 7 fields * 32 bytes
 pub global CIPHERTEXT_BYTES_LEN: u32 = 496; // 16 ciphertext fields * 31 bytes each
 global HEADER_CIPHERTEXT_SIZE_IN_BYTES: u32 = 16;
 
-/// Reconstruct a Field from 32 big-endian bytes.
 fn bytes_to_field(bytes: [u8; 32]) -> Field {
     let mut result: Field = 0;
     for i in 0..32 {
@@ -92,7 +91,6 @@ fn bytes_to_field(bytes: [u8; 32]) -> Field {
     result
 }
 
-/// Extract the i-th plaintext field (32 bytes big-endian) from the byte array.
 pub fn extract_plaintext_field(plaintext_bytes: [u8; PLAINTEXT_BYTES_LEN], index: u32) -> Field {
     let mut field_bytes = [0 as u8; 32];
     let offset = index * 32;
@@ -106,34 +104,23 @@ pub fn extract_plaintext_field(plaintext_bytes: [u8; PLAINTEXT_BYTES_LEN], index
 // Encryption Verification
 // ============================================================
 
-/// Verify that the plaintext bytes encrypt to the given ciphertext bytes.
-///
-/// Takes raw bytes directly as circuit inputs, avoiding expensive in-circuit
-/// field-to-byte serialization (~400 gates/field via to_be_bytes range checks).
-/// Byte-to-field reconstruction for swap values costs only ~32 gates/field.
 pub fn verify_encryption(
     plaintext_bytes: [u8; PLAINTEXT_BYTES_LEN],
     eph_pk_x: Field,
     ciphertext_bytes: [u8; CIPHERTEXT_BYTES_LEN],
     ivsk_app: Field,
 ) {
-    // First byte is the ephemeral public key sign
     let eph_pk_sign_byte = ciphertext_bytes[0];
     let eph_pk_sign = eph_pk_sign_byte != 0;
 
-    // Reconstruct ephemeral public key and derive shared secret
     let eph_pk = point_from_x_coord_and_sign(eph_pk_x, eph_pk_sign)
         .expect(f"Invalid ephemeral public key x-coordinate");
     let recipient_sk_scalar = EmbeddedCurveScalar::from_field(ivsk_app);
     let shared_secret = derive_ecdh_shared_secret(recipient_sk_scalar, eph_pk);
 
-    // Derive AES body key
     let pairs = derive_aes_symmetric_key_and_iv_from_ecdh_shared_secret_using_poseidon2_unsafe::<2>(shared_secret);
     let (body_sym_key, body_iv) = pairs[0];
 
-    // Encrypt plaintext and compare body ciphertext.
-    // Header ciphertext (bytes 1..17) is skipped -- body length is known at compile time
-    // (7 * 32 = 224 bytes) and the body check proves correct shared secret.
     let computed_body = aes128_encrypt(plaintext_bytes, body_iv, body_sym_key);
     let body_start = 1 + HEADER_CIPHERTEXT_SIZE_IN_BYTES;
     for i in 0..computed_body.len() {
@@ -145,6 +132,27 @@ pub fn verify_encryption(
         }
     }
 
-    // Verify ephemeral public key sign byte matches
     assert(eph_pk_sign_byte == get_sign_of_point(eph_pk) as u8, "Ephemeral PK sign mismatch");
+}
+
+// ============================================================
+// FIFO Lot Tracking
+// ============================================================
+
+pub global MAX_LOTS: u32 = 8;
+pub global LOTS_HASH_PREIMAGE_LEN: u32 = 17; // MAX_LOTS * 2 + 1
+
+pub struct Lot {
+    pub amount: Field,
+    pub cost_per_unit: Field,
+}
+
+pub fn hash_lots(lots: [Lot; MAX_LOTS], num_lots: u32) -> Field {
+    let mut preimage: [Field; LOTS_HASH_PREIMAGE_LEN] = [0; LOTS_HASH_PREIMAGE_LEN];
+    preimage[0] = num_lots as Field;
+    for i in 0..MAX_LOTS {
+        preimage[1 + i * 2] = lots[i].amount;
+        preimage[1 + i * 2 + 1] = lots[i].cost_per_unit;
+    }
+    poseidon2_hash(preimage)
 }

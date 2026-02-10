@@ -3,7 +3,7 @@ import { expect } from '@jest/globals';
 import { getInitialTestAccountsData } from '@aztec/accounts/testing';
 import { AztecAddress } from '@aztec/aztec.js/addresses';
 import { createAztecNodeClient, type AztecNode } from "@aztec/aztec.js/node";
-import { TokenContract } from '@aztec/noir-contracts.js/Token';
+import { TokenContract } from '../src/artifacts/Token';
 import { PriceFeedContract } from '@aztec/noir-contracts.js/PriceFeed';
 import { AMMContract } from '../src/artifacts/AMM';
 import { precision } from "../src/utils";
@@ -21,7 +21,7 @@ import swapSummaryTreeCircuit from '../circuits/swap_summary_tree/target/swap_su
 
 const { AZTEC_NODE_URL = "http://localhost:8080" } = process.env;
 
-describe("Swap Event Proof Test", () => {
+describe("Swap Event Proof Test (Buy + Sell with FIFO PnL)", () => {
 
     let node: AztecNode;
     let wallet: AuditableTestWallet;
@@ -38,13 +38,13 @@ describe("Swap Event Proof Test", () => {
     const TOKEN0_LIQUIDITY = precision(1000n, DECIMALS);
     const TOKEN1_LIQUIDITY = precision(2000n, DECIMALS);
 
-    // Swap amounts
-    const SWAP1_AMOUNT_IN = precision(10n, DECIMALS);
-    const SWAP2_AMOUNT_IN = precision(5n, DECIMALS);
+    // Buy amount (token0 spent to acquire token1)
+    const BUY_AMOUNT_IN = precision(10n, DECIMALS);
 
-    // Prices for PriceFeed
+    // Oracle prices
     const TOKEN0_PRICE = 100n;
-    const TOKEN1_PRICE = 200n;
+    const TOKEN1_BUY_PRICE = 200n;   // token1 price at buy time
+    const TOKEN1_SELL_PRICE = 300n;   // token1 price at sell time (price went up)
 
     before(async () => {
         console.log("Initializing Barretenberg...");
@@ -83,10 +83,10 @@ describe("Swap Event Proof Test", () => {
         ).send({ from: addresses[0] }).deployed();
         console.log(`  token1: ${token1.address}`);
 
-        // Set prices
-        console.log("Setting prices...");
+        // Set initial prices
+        console.log("Setting initial prices...");
         await priceFeed.methods.set_price(token0.address.toField(), TOKEN0_PRICE).send({ from: addresses[0] }).wait();
-        await priceFeed.methods.set_price(token1.address.toField(), TOKEN1_PRICE).send({ from: addresses[0] }).wait();
+        await priceFeed.methods.set_price(token1.address.toField(), TOKEN1_BUY_PRICE).send({ from: addresses[0] }).wait();
 
         // Deploy liquidity token
         console.log("Deploying liquidity token...");
@@ -102,92 +102,104 @@ describe("Swap Event Proof Test", () => {
         ).send({ from: addresses[0] }).deployed();
         console.log(`  AMM: ${amm.address}`);
 
-        // Seed AMM with liquidity by minting public balances directly
+        // Seed AMM with liquidity
         console.log("Seeding AMM with liquidity...");
         await token0.methods.mint_to_public(amm.address, TOKEN0_LIQUIDITY).send({ from: addresses[0] }).wait();
         await token1.methods.mint_to_public(amm.address, TOKEN1_LIQUIDITY).send({ from: addresses[0] }).wait();
 
-        // Give the swapper (addresses[1]) some token0 to swap (enough for both swaps)
+        // Mint token0 for the buy swap
         console.log("Minting tokens to swapper...");
-        await token0.methods.mint_to_private(addresses[1], SWAP1_AMOUNT_IN + SWAP2_AMOUNT_IN).send({ from: addresses[0] }).wait();
+        await token0.methods.mint_to_private(addresses[1], BUY_AMOUNT_IN).send({ from: addresses[0] }).wait();
 
         console.log("Setup complete!");
     });
 
-    test("prove and aggregate swap events", { timeout: 600000 }, async () => {
+    test("buy then sell with FIFO PnL", { timeout: 600000 }, async () => {
         const swapper = addresses[1];
         const priceFeedAssetsSlot = PriceFeedContract.storage.assets.slot;
+        const trackedToken = token1.address.toField();
 
         // ========================================
-        // STEP 1: Execute first swap (exact tokens in)
+        // STEP 1: Buy token1 (token0 -> token1) at price 200
         // ========================================
-        console.log("\n=== STEP 1: Execute first swap ===");
+        console.log("\n=== STEP 1: Buy token1 ===");
 
         const nonce1 = Fr.random();
         const authwit1 = await wallet.createAuthWit(swapper, {
             caller: amm.address,
-            action: token0.methods.transfer_to_public(swapper, amm.address, SWAP1_AMOUNT_IN, nonce1),
+            action: token0.methods.transfer_to_public(swapper, amm.address, BUY_AMOUNT_IN, nonce1),
         });
 
-        const amountOutMin1 = await amm.methods
-            .get_amount_out_for_exact_in(TOKEN0_LIQUIDITY, TOKEN1_LIQUIDITY, SWAP1_AMOUNT_IN)
+        const amountOut1 = await amm.methods
+            .get_amount_out_for_exact_in(TOKEN0_LIQUIDITY, TOKEN1_LIQUIDITY, BUY_AMOUNT_IN)
             .simulate({ from: swapper });
-        console.log(`  Swap 1 - Amount in: ${SWAP1_AMOUNT_IN}, Expected out: ${amountOutMin1}`);
+        console.log(`  Buy: spending ${BUY_AMOUNT_IN} token0, receiving ${amountOut1} token1`);
 
         await amm.methods
-            .swap_exact_tokens_for_tokens(token0.address, token1.address, SWAP1_AMOUNT_IN, amountOutMin1, nonce1)
+            .swap_exact_tokens_for_tokens(token0.address, token1.address, BUY_AMOUNT_IN, amountOut1, nonce1)
             .with({ authWitnesses: [authwit1] })
             .send({ from: swapper })
             .wait();
-        console.log("  Swap 1 executed!");
+        console.log("  Buy executed!");
+
+        // Reserves after buy
+        const reserve0AfterBuy = TOKEN0_LIQUIDITY + BUY_AMOUNT_IN;
+        const reserve1AfterBuy = TOKEN1_LIQUIDITY - BigInt(amountOut1);
 
         // ========================================
-        // STEP 2: Execute second swap (exact tokens in, smaller amount)
+        // STEP 2: Update token1 price (200 -> 300)
         // ========================================
-        console.log("\n=== STEP 2: Execute second swap ===");
+        console.log("\n=== STEP 2: Update oracle price ===");
+        console.log(`  token1 price: ${TOKEN1_BUY_PRICE} -> ${TOKEN1_SELL_PRICE}`);
+        await priceFeed.methods.set_price(token1.address.toField(), TOKEN1_SELL_PRICE).send({ from: addresses[0] }).wait();
 
-        const newToken0Reserve = TOKEN0_LIQUIDITY + SWAP1_AMOUNT_IN;
-        const newToken1Reserve = TOKEN1_LIQUIDITY - BigInt(amountOutMin1);
+        // ========================================
+        // STEP 3: Sell ALL token1 back (token1 -> token0) at price 300
+        // ========================================
+        console.log("\n=== STEP 3: Sell token1 ===");
+
+        const sellAmount = BigInt(amountOut1); // sell everything we bought
 
         const nonce2 = Fr.random();
         const authwit2 = await wallet.createAuthWit(swapper, {
             caller: amm.address,
-            action: token0.methods.transfer_to_public(swapper, amm.address, SWAP2_AMOUNT_IN, nonce2),
+            action: token1.methods.transfer_to_public(swapper, amm.address, sellAmount, nonce2),
         });
 
-        const amountOutMin2 = await amm.methods
-            .get_amount_out_for_exact_in(newToken0Reserve, newToken1Reserve, SWAP2_AMOUNT_IN)
+        // For sell: token_in=token1, token_out=token0
+        // reserve_in = token1 reserve, reserve_out = token0 reserve
+        const amountOut2 = await amm.methods
+            .get_amount_out_for_exact_in(reserve1AfterBuy, reserve0AfterBuy, sellAmount)
             .simulate({ from: swapper });
-        console.log(`  Swap 2 - Amount in: ${SWAP2_AMOUNT_IN}, Expected out: ${amountOutMin2}`);
+        console.log(`  Sell: spending ${sellAmount} token1, receiving ${amountOut2} token0`);
 
         await amm.methods
-            .swap_exact_tokens_for_tokens(token0.address, token1.address, SWAP2_AMOUNT_IN, amountOutMin2, nonce2)
+            .swap_exact_tokens_for_tokens(token1.address, token0.address, sellAmount, amountOut2, nonce2)
             .with({ authWitnesses: [authwit2] })
             .send({ from: swapper })
             .wait();
-        console.log("  Swap 2 executed!");
+        console.log("  Sell executed!");
 
         // ========================================
-        // STEP 3: Discover swap events via tag scanning
+        // STEP 4: Discover swap events
         // ========================================
-        console.log("\n=== STEP 3: Discover swap events ===");
+        console.log("\n=== STEP 4: Discover swap events ===");
 
         const taggingSecrets = await wallet.exportTaggingSecrets(swapper, [amm.address], [swapper]);
         console.log(`  Exported ${taggingSecrets.secrets.length} tagging secrets`);
 
         const events = await retrieveEncryptedEvents(node, taggingSecrets);
         console.log(`  Found ${events.totalEvents} events`);
-
         expect(events.totalEvents).toBeGreaterThanOrEqual(2);
 
         const allEvents = events.secrets.flatMap(s => s.events);
-        console.log(`  Event 1: ${allEvents[0].ciphertextBytes} bytes, block ${allEvents[0].blockNumber}`);
-        console.log(`  Event 2: ${allEvents[1].ciphertextBytes} bytes, block ${allEvents[1].blockNumber}`);
+        console.log(`  Event 1 (buy):  ${allEvents[0].ciphertextBytes} bytes, block ${allEvents[0].blockNumber}`);
+        console.log(`  Event 2 (sell): ${allEvents[1].ciphertextBytes} bytes, block ${allEvents[1].blockNumber}`);
 
         // ========================================
-        // STEP 4: Generate individual swap proofs
+        // STEP 5: Generate individual swap proofs with lot chaining
         // ========================================
-        console.log("\n=== STEP 4: Generate individual swap proofs ===");
+        console.log("\n=== STEP 5: Generate individual swap proofs ===");
 
         const pxe = wallet.pxe as any;
         const registeredAccounts = await pxe.getRegisteredAccounts();
@@ -204,79 +216,95 @@ describe("Swap Event Proof Test", () => {
             node,
         });
 
-        // Prove first swap
-        const event1BlockNumber = BigInt(allEvents[0].blockNumber);
-        const result1 = await prover.prove(
-            allEvents[0].ciphertextBuffer,
-            event1BlockNumber,
+        const buyBlockNumber = BigInt(allEvents[0].blockNumber);
+        const sellBlockNumber = BigInt(allEvents[1].blockNumber);
+
+        // Prove buy (no initial lots)
+        const buyResult = await prover.prove(
+            { encryptedLog: allEvents[0].ciphertextBuffer, blockNumber: buyBlockNumber },
+            trackedToken,
             priceFeed.address.toField(),
             priceFeedAssetsSlot,
         );
 
-        console.log(`\n  Swap 1 proof:`);
-        console.log(`    leaf: ${result1.publicInputs.leaf}`);
-        console.log(`    vkeyMarker: ${result1.publicInputs.vkeyMarker}`);
-        console.log(`    valueIn: ${result1.publicInputs.valueIn}`);
-        console.log(`    valueOut: ${result1.publicInputs.valueOut}`);
+        console.log(`\n  Buy proof:`);
+        console.log(`    leaf: ${buyResult.publicInputs.leaf}`);
+        console.log(`    pnl: ${buyResult.publicInputs.pnl} (negative: ${buyResult.publicInputs.pnlIsNegative})`);
+        console.log(`    lots after: ${buyResult.remainingNumLots}`);
 
-        // Prove second swap
-        const event2BlockNumber = BigInt(allEvents[1].blockNumber);
-        const result2 = await prover.prove(
-            allEvents[1].ciphertextBuffer,
-            event2BlockNumber,
+        // Buy should create 1 lot, PnL = 0
+        expect(buyResult.publicInputs.pnl).toBe(0n);
+        expect(buyResult.publicInputs.pnlIsNegative).toBe(false);
+        expect(buyResult.remainingNumLots).toBe(1);
+        expect(buyResult.remainingLots[0].amount).toBe(BigInt(amountOut1));
+        expect(buyResult.remainingLots[0].costPerUnit).toBe(TOKEN1_BUY_PRICE);
+
+        // Prove sell (chain lots from buy)
+        const sellResult = await prover.prove(
+            { encryptedLog: allEvents[1].ciphertextBuffer, blockNumber: sellBlockNumber },
+            trackedToken,
             priceFeed.address.toField(),
             priceFeedAssetsSlot,
+            buyResult.remainingLots,
+            buyResult.remainingNumLots,
         );
 
-        console.log(`\n  Swap 2 proof:`);
-        console.log(`    leaf: ${result2.publicInputs.leaf}`);
-        console.log(`    vkeyMarker: ${result2.publicInputs.vkeyMarker}`);
-        console.log(`    valueIn: ${result2.publicInputs.valueIn}`);
-        console.log(`    valueOut: ${result2.publicInputs.valueOut}`);
+        console.log(`\n  Sell proof:`);
+        console.log(`    leaf: ${sellResult.publicInputs.leaf}`);
+        console.log(`    pnl: ${sellResult.publicInputs.pnl} (negative: ${sellResult.publicInputs.pnlIsNegative})`);
+        console.log(`    lots after: ${sellResult.remainingNumLots}`);
 
-        // Verify individual proof results
-        expect(BigInt(result1.publicInputs.vkeyMarker)).toBe(0n);
-        expect(BigInt(result2.publicInputs.vkeyMarker)).toBe(0n);
+        // Sell should consume the lot, realize PnL
+        // PnL = sellAmount * (SELL_PRICE - BUY_PRICE) = amountOut1 * (300 - 200) = amountOut1 * 100
+        const expectedPnl = BigInt(amountOut1) * (TOKEN1_SELL_PRICE - TOKEN1_BUY_PRICE);
+        console.log(`\n  Expected PnL: ${expectedPnl}`);
+        console.log(`  Actual PnL:   ${sellResult.publicInputs.pnl}`);
 
-        expect(result1.swapData.tokenIn).toBe(token0.address.toField().toString());
-        expect(result1.swapData.tokenOut).toBe(token1.address.toField().toString());
-        expect(result1.swapData.amountIn).toBe(BigInt(SWAP1_AMOUNT_IN));
-        expect(result1.swapData.amountOut).toBe(BigInt(amountOutMin1));
-        expect(result1.swapData.isExactInput).toBe(1n);
+        expect(sellResult.publicInputs.pnl).toBe(expectedPnl);
+        expect(sellResult.publicInputs.pnlIsNegative).toBe(false); // gain, not loss
+        expect(sellResult.remainingNumLots).toBe(0); // all lots consumed
 
-        expect(result2.swapData.tokenIn).toBe(token0.address.toField().toString());
-        expect(result2.swapData.tokenOut).toBe(token1.address.toField().toString());
-        expect(result2.swapData.amountIn).toBe(BigInt(SWAP2_AMOUNT_IN));
-        expect(result2.swapData.amountOut).toBe(BigInt(amountOutMin2));
-        expect(result2.swapData.isExactInput).toBe(1n);
+        // Lot hash chain: buy's remaining = sell's initial
+        expect(buyResult.publicInputs.remainingLotsHash).toBe(sellResult.publicInputs.initialLotsHash);
+
+        // Verify swap data
+        expect(buyResult.swapData.tokenIn).toBe(token0.address.toField().toString());
+        expect(buyResult.swapData.tokenOut).toBe(token1.address.toField().toString());
+        expect(buyResult.swapData.amountIn).toBe(BigInt(BUY_AMOUNT_IN));
+        expect(buyResult.swapData.amountOut).toBe(BigInt(amountOut1));
+
+        expect(sellResult.swapData.tokenIn).toBe(token1.address.toField().toString());
+        expect(sellResult.swapData.tokenOut).toBe(token0.address.toField().toString());
+        expect(sellResult.swapData.amountIn).toBe(sellAmount);
+        expect(sellResult.swapData.amountOut).toBe(BigInt(amountOut2));
 
         // Verify leaf hashes
-        const expectedLeaf1 = await poseidon2Hash([
-            new Fr(event1BlockNumber),
+        const expectedBuyLeaf = await poseidon2Hash([
+            new Fr(buyBlockNumber),
             token0.address.toField(),
             token1.address.toField(),
-            new Fr(SWAP1_AMOUNT_IN),
-            new Fr(amountOutMin1),
+            new Fr(BUY_AMOUNT_IN),
+            new Fr(amountOut1),
             new Fr(1n),
         ]);
-        expect(result1.publicInputs.leaf).toBe(expectedLeaf1.toString());
+        expect(buyResult.publicInputs.leaf).toBe(expectedBuyLeaf.toString());
 
-        const expectedLeaf2 = await poseidon2Hash([
-            new Fr(event2BlockNumber),
-            token0.address.toField(),
+        const expectedSellLeaf = await poseidon2Hash([
+            new Fr(sellBlockNumber),
             token1.address.toField(),
-            new Fr(SWAP2_AMOUNT_IN),
-            new Fr(amountOutMin2),
+            token0.address.toField(),
+            new Fr(sellAmount),
+            new Fr(amountOut2),
             new Fr(1n),
         ]);
-        expect(result2.publicInputs.leaf).toBe(expectedLeaf2.toString());
+        expect(sellResult.publicInputs.leaf).toBe(expectedSellLeaf.toString());
 
         console.log("\n  Individual proof assertions passed!");
 
         // ========================================
-        // STEP 5: Aggregate proofs with SwapProofTree
+        // STEP 6: Aggregate proofs with SwapProofTree
         // ========================================
-        console.log("\n=== STEP 5: Aggregate swap proofs ===");
+        console.log("\n=== STEP 6: Aggregate swap proofs ===");
 
         const proofTree = new SwapProofTree({
             bb,
@@ -287,28 +315,37 @@ describe("Swap Event Proof Test", () => {
 
         const aggregateResult = await proofTree.prove(
             [
-                { encryptedLog: allEvents[0].ciphertextBuffer, blockNumber: event1BlockNumber },
-                { encryptedLog: allEvents[1].ciphertextBuffer, blockNumber: event2BlockNumber },
+                { encryptedLog: allEvents[0].ciphertextBuffer, blockNumber: buyBlockNumber },
+                { encryptedLog: allEvents[1].ciphertextBuffer, blockNumber: sellBlockNumber },
             ],
+            trackedToken,
             priceFeed.address.toField(),
             priceFeedAssetsSlot,
         );
 
         console.log(`\n=== AGGREGATE PROOF RESULT ===`);
         console.log(`  root: ${aggregateResult.publicInputs.root}`);
-        console.log(`  vkeyHash: ${aggregateResult.publicInputs.vkeyHash}`);
-        console.log(`  totalValueIn: ${aggregateResult.publicInputs.totalValueIn}`);
-        console.log(`  totalValueOut: ${aggregateResult.publicInputs.totalValueOut}`);
-        console.log(`  PnL: ${aggregateResult.pnl}`);
+        console.log(`  pnl: ${aggregateResult.publicInputs.pnl} (negative: ${aggregateResult.publicInputs.pnlIsNegative})`);
+        console.log(`  signedPnl: ${aggregateResult.signedPnl}`);
         console.log(`  Proof size: ${aggregateResult.proof.length} bytes`);
 
-        // Verify merkle root matches TS-computed poseidon2Hash([leaf1, leaf2])
-        const expectedRoot = await poseidon2Hash([expectedLeaf1, expectedLeaf2]);
+        // Total PnL should match: buy PnL (0) + sell PnL (amountOut1 * 100)
+        expect(aggregateResult.signedPnl).toBe(BigInt(expectedPnl));
+        expect(aggregateResult.publicInputs.pnl).toBe(expectedPnl);
+        expect(aggregateResult.publicInputs.pnlIsNegative).toBe(false);
+
+        // All lots consumed
+        expect(aggregateResult.remainingNumLots).toBe(0);
+
+        // Verify merkle root = poseidon2Hash([buyLeaf, sellLeaf])
+        const expectedRoot = await poseidon2Hash([expectedBuyLeaf, expectedSellLeaf]);
         expect(aggregateResult.publicInputs.root).toBe(expectedRoot.toString());
 
         console.log(`\n  Expected root: ${expectedRoot.toString()}`);
         console.log(`  Actual root:   ${aggregateResult.publicInputs.root}`);
-        console.log("\n  All aggregation assertions passed!");
+        console.log(`  Expected PnL:  ${expectedPnl}`);
+        console.log(`  Actual PnL:    ${aggregateResult.signedPnl}`);
+        console.log("\n  All assertions passed!");
     });
 
 });

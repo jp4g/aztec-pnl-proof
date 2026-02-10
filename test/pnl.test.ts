@@ -37,7 +37,7 @@ describe("PnL Proof Test (5 swaps, varying prices)", () => {
     const TOKEN0_LIQUIDITY = precision(10000n, DECIMALS);
     const TOKEN1_LIQUIDITY = precision(20000n, DECIMALS);
 
-    // 5 swap amounts (all token0 -> token1)
+    // 5 swap amounts (all token0 -> token1, i.e. all buys of token1)
     const SWAP_AMOUNTS = [
         precision(10n, DECIMALS),
         precision(8n, DECIMALS),
@@ -48,6 +48,7 @@ describe("PnL Proof Test (5 swaps, varying prices)", () => {
     const TOTAL_SWAP_IN = SWAP_AMOUNTS.reduce((a, b) => a + b, 0n);
 
     // Prices change before each swap (token0_price, token1_price)
+    // With 4-decimal precision convention: 100 = $0.01, 10000 = $1.00
     const PRICE_SCHEDULE: [bigint, bigint][] = [
         [100n, 200n],  // Swap 1: token0=$1.00, token1=$2.00
         [120n, 180n],  // Swap 2: token0 up, token1 down
@@ -127,6 +128,11 @@ describe("PnL Proof Test (5 swaps, varying prices)", () => {
     test("prove PnL from 5 swaps with varying prices", { timeout: 900000 }, async () => {
         const swapper = addresses[1];
 
+        // We track token1 — all 5 swaps are token0→token1, so all are "buys" of token1.
+        // PnL will be 0 (no sells to realize gains). This test validates lot accumulation
+        // across 5 swaps with varying oracle prices, and the full aggregation pipeline.
+        const trackedToken = token1.address.toField();
+
         // Track reserves for computing expected outputs
         let reserve0 = TOKEN0_LIQUIDITY;
         let reserve1 = TOKEN1_LIQUIDITY;
@@ -185,7 +191,7 @@ describe("PnL Proof Test (5 swaps, varying prices)", () => {
         console.log(`  Block numbers: ${blockNumbers.join(', ')}`);
 
         // ========================================
-        // Aggregate swap proofs with PnL
+        // Aggregate swap proofs with FIFO PnL
         // ========================================
         console.log("\n=== Generate and aggregate swap proofs ===");
 
@@ -217,15 +223,17 @@ describe("PnL Proof Test (5 swaps, varying prices)", () => {
                 encryptedLog: e.ciphertextBuffer,
                 blockNumber: blockNumbers[i],
             })),
+            trackedToken,
             priceFeed.address.toField(),
             priceFeedAssetsSlot,
         );
 
         console.log(`\n=== FINAL PROOF RESULT ===`);
         console.log(`  root: ${result.publicInputs.root}`);
-        console.log(`  total_value_in: ${result.publicInputs.totalValueIn}`);
-        console.log(`  total_value_out: ${result.publicInputs.totalValueOut}`);
-        console.log(`  PnL: ${result.pnl}`);
+        console.log(`  pnl: ${result.publicInputs.pnl} (negative: ${result.publicInputs.pnlIsNegative})`);
+        console.log(`  signedPnl: ${result.signedPnl}`);
+        console.log(`  remainingLotsHash: ${result.publicInputs.remainingLotsHash}`);
+        console.log(`  initialLotsHash: ${result.publicInputs.initialLotsHash}`);
         console.log(`  price_feed_address: ${result.publicInputs.priceFeedAddress}`);
 
         // ========================================
@@ -233,25 +241,20 @@ describe("PnL Proof Test (5 swaps, varying prices)", () => {
         // ========================================
         console.log("\n=== Verify results ===");
 
-        // Verify PnL values against TS-computed expectation
-        let expectedValueIn = 0n;
-        let expectedValueOut = 0n;
+        // All swaps are buys of token1, so PnL = 0 (no sells to realize gains)
+        expect(result.signedPnl).toBe(0n);
+        expect(result.publicInputs.pnl).toBe(0n);
+        expect(result.publicInputs.pnlIsNegative).toBe(false);
+
+        // 5 buys -> 5 lots
+        expect(result.remainingNumLots).toBe(5);
+
+        // Each lot should have the amount out from the swap and the oracle price at that block
         for (let i = 0; i < 5; i++) {
-            const [priceIn, priceOut] = PRICE_SCHEDULE[i];
-            const valIn = BigInt(SWAP_AMOUNTS[i]) * priceIn;
-            const valOut = amountsOut[i] * priceOut;
-            expectedValueIn += valIn;
-            expectedValueOut += valOut;
-            console.log(`  Swap ${i + 1}: value_in=${valIn}, value_out=${valOut} (prices: ${priceIn}/${priceOut})`);
+            expect(result.remainingLots[i].amount).toBe(amountsOut[i]);
+            expect(result.remainingLots[i].costPerUnit).toBe(PRICE_SCHEDULE[i][1]);
+            console.log(`  Lot ${i}: amount=${result.remainingLots[i].amount}, costPerUnit=${result.remainingLots[i].costPerUnit}`);
         }
-        const expectedPnl = expectedValueOut - expectedValueIn;
-
-        expect(result.publicInputs.totalValueIn).toBe(expectedValueIn);
-        expect(result.publicInputs.totalValueOut).toBe(expectedValueOut);
-        expect(result.pnl).toBe(expectedPnl);
-
-        console.log(`\n  Expected PnL: ${expectedPnl}`);
-        console.log(`  Actual PnL:   ${result.pnl}`);
 
         // Verify price feed address
         expect(result.publicInputs.priceFeedAddress).toBe(priceFeed.address.toField().toString());

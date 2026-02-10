@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "postinstall": "bun scripts/postinstall.ts",
+    "setup": "bun scripts/setup.ts",
     "test": "bun test test/"
   },
   "dependencies": {
