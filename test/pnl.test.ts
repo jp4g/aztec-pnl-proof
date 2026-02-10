@@ -11,7 +11,7 @@ import { AuditableTestWallet } from "@aztec/note-collector";
 import { Barretenberg } from '@aztec/bb.js';
 import type { CompiledCircuit } from '@aztec/noir-types';
 import { Fr } from '@aztec/foundation/curves/bn254';
-import { poseidon2Hash } from '@aztec/foundation/crypto/poseidon';
+import { poseidon2Hash, poseidon2HashWithSeparator } from '@aztec/foundation/crypto/poseidon';
 import { retrieveEncryptedEvents } from '../src/event-reader';
 import { SwapProver } from '../src/swap-prover';
 import { SwapProofTree } from '../src/swap-proof-tree';
@@ -359,7 +359,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", () => {
 
         console.log(`\n=== FINAL PROOF RESULT ===`);
         console.log(`  root: ${result.publicInputs.root}`);
-        console.log(`  pnl: ${result.publicInputs.pnl} (negative: ${result.publicInputs.pnlIsNegative})`);
+        console.log(`  pnl: ${result.publicInputs.pnl}`);
         console.log(`  signedPnl: ${result.signedPnl}`);
         console.log(`  remainingLotStateRoot: ${result.publicInputs.remainingLotStateRoot}`);
         console.log(`  initialLotStateRoot: ${result.publicInputs.initialLotStateRoot}`);
@@ -397,18 +397,19 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", () => {
         // Verify block number is the last swap's block
         expect(result.publicInputs.blockNumber).toBe(blockNumbers[5]);
 
-        // Verify merkle root
+        // Verify merkle root (leaves are hashes of ciphertext fields)
+        const MESSAGE_CIPHERTEXT_LEN = 17;
         const expectedLeaves: Fr[] = [];
         for (let i = 0; i < 6; i++) {
-            const dir = SWAP_DIRS[i];
-            expectedLeaves.push(await poseidon2Hash([
-                new Fr(blockNumbers[i]),
-                tokenMap[dir.inKey].address.toField(),
-                tokenMap[dir.outKey].address.toField(),
-                new Fr(SWAP_AMOUNTS[i]),
-                new Fr(amountsOut[i]),
-                new Fr(1n),
-            ]));
+            // Parse ciphertext into fields (skip 32-byte tag, then 17 x 32-byte chunks)
+            const buf = swapEvents[i].ciphertextBuffer.slice(32);
+            const padded = Buffer.alloc(MESSAGE_CIPHERTEXT_LEN * 32);
+            buf.copy(padded, 0, 0, Math.min(buf.length, padded.length));
+            const ctFields: Fr[] = [];
+            for (let f = 0; f < MESSAGE_CIPHERTEXT_LEN; f++) {
+                ctFields.push(Fr.fromBuffer(padded.slice(f * 32, (f + 1) * 32)));
+            }
+            expectedLeaves.push(await poseidon2HashWithSeparator(ctFields, 0));
         }
 
         // 6 leaves -> binary tree:

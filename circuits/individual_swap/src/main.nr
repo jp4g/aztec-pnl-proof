@@ -1,15 +1,15 @@
 mod utils;
 
+use dep::aztec::messages::encoding::MESSAGE_CIPHERTEXT_LEN;
 use dep::protocol_types::{
-    hash::poseidon2_hash,
+    hash::poseidon2_hash_with_separator,
     merkle_tree::root::root_from_sibling_path,
 };
 use utils::{
-    PLAINTEXT_BYTES_LEN, CIPHERTEXT_BYTES_LEN, MAX_LOTS, LOT_TREE_HEIGHT,
+    SWAP_PLAINTEXT_FIELDS, MAX_LOTS, LOT_TREE_HEIGHT,
     Lot, PriceWitness,
     compute_public_data_tree_index,
     derive_storage_slot_in_map,
-    extract_plaintext_field,
     hash_lots,
     verify_and_read_public_data,
     verify_encryption,
@@ -21,12 +21,11 @@ use utils::{
 /// Oracle prices must have at most 4 decimal precision (scaled by 10^4).
 /// Token amounts must fit in i64 (< 9.2 * 10^18).
 ///
-/// Returns: (leaf_hash, pnl_abs, pnl_is_negative, remaining_lot_state_root, initial_lot_state_root, price_feed_address, block_number)
+/// Returns: (leaf_hash, pnl, remaining_lot_state_root, initial_lot_state_root, price_feed_address, block_number)
 fn main(
-    // Swap event
-    plaintext_bytes: [u8; PLAINTEXT_BYTES_LEN],
-    eph_pk_x: Field,
-    ciphertext_bytes: [u8; CIPHERTEXT_BYTES_LEN],
+    // Swap event: plaintext fields and ciphertext fields (as they appear on-chain)
+    plaintext: [Field; SWAP_PLAINTEXT_FIELDS],
+    ciphertext: [Field; MESSAGE_CIPHERTEXT_LEN],
     ivsk_app: Field,
     block_number: Field,
 
@@ -54,27 +53,24 @@ fn main(
 
     // Chronological ordering
     previous_block_number: Field,
-) -> pub (Field, Field, Field, Field, Field, Field, Field) {
-    // 1. Verify encryption (proves swap event is authentic)
-    verify_encryption(plaintext_bytes, eph_pk_x, ciphertext_bytes, ivsk_app);
+) -> pub (Field, i64, Field, Field, Field, Field) {
+    // 1. Verify encryption (proves plaintext encrypts to on-chain ciphertext)
+    verify_encryption(plaintext, ciphertext, ivsk_app);
 
-    // 2. Extract swap values from plaintext
+    // 2. Compute leaf hash from ciphertext (auditor can verify against on-chain logs)
+    let leaf = poseidon2_hash_with_separator(ciphertext, 0);
+
+    // 3. Extract swap values from plaintext
     // Layout: [metadata, randomness, token_in, token_out, amount_in, amount_out, is_exact_input]
-    let token_in = extract_plaintext_field(plaintext_bytes, 2);
-    let token_out = extract_plaintext_field(plaintext_bytes, 3);
-    let amount_in = extract_plaintext_field(plaintext_bytes, 4);
-    let amount_out = extract_plaintext_field(plaintext_bytes, 5);
-    let is_exact_input = extract_plaintext_field(plaintext_bytes, 6);
+    let token_in = plaintext[2];
+    let token_out = plaintext[3];
+    let amount_in = plaintext[4];
+    let amount_out = plaintext[5];
 
-    // 3. Assert chronological ordering
+    // 4. Assert chronological ordering
     let bn: u64 = block_number as u64;
     let prev_bn: u64 = previous_block_number as u64;
     assert(bn >= prev_bn, "Block number must be >= previous block number");
-
-    // 4. Compute leaf hash (commits to the raw swap data)
-    let leaf = poseidon2_hash(
-        [block_number, token_in, token_out, amount_in, amount_out, is_exact_input],
-    );
 
     // 5. SELL SIDE: Verify sell lots in initial root, consume FIFO, compute PnL
     let old_sell_hash = hash_lots(token_in, sell_lots, sell_num_lots);
@@ -153,9 +149,5 @@ fn main(
     let new_buy_hash = hash_lots(token_out, buy_lots_mut, buy_num);
     let final_root = root_from_sibling_path(new_buy_hash, buy_leaf_index, buy_sibling_path);
 
-    // 9. Encode signed PnL as (magnitude, is_negative) for Field output
-    let pnl_is_negative: Field = if pnl < 0 { 1 } else { 0 };
-    let pnl_abs: Field = if pnl < 0 { (-pnl) as u64 as Field } else { pnl as u64 as Field };
-
-    (leaf, pnl_abs, pnl_is_negative, final_root, initial_lot_state_root, price_feed_address, block_number)
+    (leaf, pnl, final_root, initial_lot_state_root, price_feed_address, block_number)
 }

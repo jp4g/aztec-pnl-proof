@@ -1,5 +1,8 @@
 use dep::aztec::{
-    messages::encryption::aes128::derive_aes_symmetric_key_and_iv_from_ecdh_shared_secret_using_poseidon2_unsafe,
+    messages::{
+        encoding::{MESSAGE_CIPHERTEXT_LEN, EPH_PK_X_SIZE_IN_FIELDS},
+        encryption::aes128::derive_aes_symmetric_key_and_iv_from_ecdh_shared_secret_using_poseidon2_unsafe,
+    },
     keys::ecdh_shared_secret::derive_ecdh_shared_secret,
     utils::point::{point_from_x_coord_and_sign, get_sign_of_point},
 };
@@ -75,29 +78,48 @@ pub fn verify_and_read_public_data(
 }
 
 // ============================================================
-// Byte Helpers
+// Ciphertext Field Handling
 // ============================================================
 
 pub global SWAP_PLAINTEXT_FIELDS: u32 = 7;
 pub global PLAINTEXT_BYTES_LEN: u32 = 224; // 7 fields * 32 bytes
-pub global CIPHERTEXT_BYTES_LEN: u32 = 496; // 16 ciphertext fields * 31 bytes each
+global CIPHERTEXT_BYTES_LEN: u32 = (MESSAGE_CIPHERTEXT_LEN - EPH_PK_X_SIZE_IN_FIELDS) * 31;
 global HEADER_CIPHERTEXT_SIZE_IN_BYTES: u32 = 16;
 
-fn bytes_to_field(bytes: [u8; 32]) -> Field {
-    let mut result: Field = 0;
-    for i in 0..32 {
-        result = result * 256 + bytes[i] as Field;
+/// Convert ciphertext fields (excluding eph_pk_x) to bytes.
+/// Each field stores 31 bytes (high byte is always 0).
+fn bytes_from_fields(fields: [Field; MESSAGE_CIPHERTEXT_LEN - 1]) -> [u8; CIPHERTEXT_BYTES_LEN] {
+    let mut bytes = [0 as u8; CIPHERTEXT_BYTES_LEN];
+    for i in 0..MESSAGE_CIPHERTEXT_LEN - 1 {
+        let field_bytes: [u8; 32] = fields[i].to_be_bytes();
+        for j in 0..31 {
+            bytes[i * 31 + j] = field_bytes[j + 1];
+        }
+    }
+    bytes
+}
+
+/// Extract ciphertext fields without the ephemeral PK x-coordinate.
+fn extract_ciphertext_fields(
+    ciphertext: [Field; MESSAGE_CIPHERTEXT_LEN],
+) -> [Field; MESSAGE_CIPHERTEXT_LEN - 1] {
+    let mut result = [0 as Field; MESSAGE_CIPHERTEXT_LEN - 1];
+    for i in 0..MESSAGE_CIPHERTEXT_LEN - 1 {
+        result[i] = ciphertext[EPH_PK_X_SIZE_IN_FIELDS + i];
     }
     result
 }
 
-pub fn extract_plaintext_field(plaintext_bytes: [u8; PLAINTEXT_BYTES_LEN], index: u32) -> Field {
-    let mut field_bytes = [0 as u8; 32];
-    let offset = index * 32;
-    for j in 0..32 {
-        field_bytes[j] = plaintext_bytes[offset + j];
+/// Convert plaintext fields to bytes (32 bytes per field, big-endian).
+fn plaintext_fields_to_bytes(plaintext: [Field; SWAP_PLAINTEXT_FIELDS]) -> [u8; PLAINTEXT_BYTES_LEN] {
+    let mut bytes = [0 as u8; PLAINTEXT_BYTES_LEN];
+    for i in 0..SWAP_PLAINTEXT_FIELDS {
+        let field_bytes: [u8; 32] = plaintext[i].to_be_bytes();
+        for j in 0..32 {
+            bytes[i * 32 + j] = field_bytes[j];
+        }
     }
-    bytes_to_field(field_bytes)
+    bytes
 }
 
 // ============================================================
@@ -105,11 +127,14 @@ pub fn extract_plaintext_field(plaintext_bytes: [u8; PLAINTEXT_BYTES_LEN], index
 // ============================================================
 
 pub fn verify_encryption(
-    plaintext_bytes: [u8; PLAINTEXT_BYTES_LEN],
-    eph_pk_x: Field,
-    ciphertext_bytes: [u8; CIPHERTEXT_BYTES_LEN],
+    plaintext: [Field; SWAP_PLAINTEXT_FIELDS],
+    ciphertext: [Field; MESSAGE_CIPHERTEXT_LEN],
     ivsk_app: Field,
 ) {
+    let eph_pk_x = ciphertext[0];
+    let ciphertext_fields = extract_ciphertext_fields(ciphertext);
+    let ciphertext_bytes = bytes_from_fields(ciphertext_fields);
+
     let eph_pk_sign_byte = ciphertext_bytes[0];
     let eph_pk_sign = eph_pk_sign_byte != 0;
 
@@ -121,6 +146,7 @@ pub fn verify_encryption(
     let pairs = derive_aes_symmetric_key_and_iv_from_ecdh_shared_secret_using_poseidon2_unsafe::<2>(shared_secret);
     let (body_sym_key, body_iv) = pairs[0];
 
+    let plaintext_bytes = plaintext_fields_to_bytes(plaintext);
     let computed_body = aes128_encrypt(plaintext_bytes, body_iv, body_sym_key);
     let body_start = 1 + HEADER_CIPHERTEXT_SIZE_IN_BYTES;
     for i in 0..computed_body.len() {

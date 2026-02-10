@@ -9,6 +9,14 @@ import { computeAddressSecret } from '@aztec/stdlib/keys';
 import type { CompleteAddress } from '@aztec/stdlib/contract';
 import { LotStateTree } from './lot-state-tree';
 
+/** Parse a potentially negative hex string like "-0x1a" into a BigInt */
+function parseSignedHex(s: string): bigint {
+    if (s.startsWith('-0x') || s.startsWith('-0X')) {
+        return -BigInt(s.slice(1));
+    }
+    return BigInt(s);
+}
+
 /** Max concurrent lots (must match circuit MAX_LOTS) */
 const MAX_LOTS = 32;
 
@@ -57,14 +65,12 @@ export interface SwapData {
 export interface SwapProofResult {
     /** Final proof bytes */
     proof: Uint8Array;
-    /** Public outputs (7 Fields) */
+    /** Public outputs (6 values) */
     publicInputs: {
-        /** Poseidon2 hash of swap data */
+        /** Poseidon2 hash of ciphertext (auditor-verifiable) */
         leaf: string;
-        /** Absolute value of realized PnL */
+        /** Signed PnL (i64) */
         pnl: bigint;
-        /** True if PnL is negative (loss) */
-        pnlIsNegative: boolean;
         /** Lot state tree root after this swap */
         remainingLotStateRoot: string;
         /** Lot state tree root before this swap */
@@ -179,9 +185,12 @@ export class SwapProver {
         // Update buy leaf in local tree
         await lotStateTree.setLots(tokenOut, newBuyLots, newBuyNum);
 
+        // Parse ciphertext into fields (matching on-chain representation)
+        const ciphertextFields = this.parseCiphertextFields(event.encryptedLog);
+
         // Build circuit inputs
         const circuitInputs = this.prepareCircuitInputs(
-            plaintext, event.encryptedLog, event.blockNumber,
+            plaintext, ciphertextFields, event.blockNumber,
             initialRoot.toString(),
             sellData.lots, sellData.numLots, sellIndex, sellSiblingPath,
             buyData.lots, buyData.numLots, buyIndex, buySiblingPath,
@@ -193,12 +202,10 @@ export class SwapProver {
         // Execute circuit
         console.log('  Generating witness...');
         const { witness: circuitWitness, returnValue } = await this.noir!.execute(circuitInputs);
-        const [leaf, pnlAbs, pnlIsNeg, remainingRoot, initRoot, provenPriceFeed, provenBlockNumber] =
-            returnValue as [string, string, string, string, string, string, string];
+        const [leaf, pnlStr, remainingRoot, initRoot, provenPriceFeed, provenBlockNumber] =
+            returnValue as [string, string, string, string, string, string];
 
-        const pnlMagnitude = BigInt(pnlAbs);
-        const isNegative = BigInt(pnlIsNeg) === 1n;
-        const pnl = isNegative ? -pnlMagnitude : pnlMagnitude;
+        const pnl = parseSignedHex(pnlStr);
 
         console.log(`  leaf: ${leaf}, pnl: ${pnl}`);
 
@@ -226,8 +233,7 @@ export class SwapProver {
             proof: proof.proof,
             publicInputs: {
                 leaf,
-                pnl: pnlMagnitude,
-                pnlIsNegative: isNegative,
+                pnl,
                 remainingLotStateRoot: remainingRoot,
                 initialLotStateRoot: initRoot,
                 priceFeedAddress: provenPriceFeed,
@@ -242,7 +248,7 @@ export class SwapProver {
      */
     private prepareCircuitInputs(
         plaintext: Fr[],
-        encryptedLog: Buffer,
+        ciphertextFields: Fr[],
         blockNumber: bigint,
         initialLotStateRoot: string,
         sellLots: Lot[],
@@ -260,30 +266,6 @@ export class SwapProver {
         buyPriceWitness: any,
         previousBlockNumber: bigint,
     ): Record<string, unknown> {
-        // Plaintext bytes: 7 fields * 32 bytes = 224 bytes
-        const plaintextBytes: string[] = [];
-        for (const field of plaintext) {
-            const buf = field.toBuffer();
-            for (const byte of buf) {
-                plaintextBytes.push(byte.toString());
-            }
-        }
-
-        // Ciphertext: skip 32-byte tag
-        const ciphertextWithoutTag = encryptedLog.slice(32);
-        const ephPkX = Fr.fromBuffer(ciphertextWithoutTag.slice(0, 32));
-
-        // Remaining 16 fields -> unpack to 31 bytes each = 496 bytes
-        const ciphertextBytes: string[] = [];
-        const restBuffer = ciphertextWithoutTag.slice(32);
-        const paddedRest = Buffer.alloc(16 * 32);
-        restBuffer.copy(paddedRest, 0, 0, Math.min(restBuffer.length, paddedRest.length));
-        for (let f = 0; f < 16; f++) {
-            for (let j = 1; j < 32; j++) {
-                ciphertextBytes.push(paddedRest[f * 32 + j].toString());
-            }
-        }
-
         // Format lot arrays (pad to MAX_LOTS)
         const formatLots = (lots: Lot[]): Record<string, string>[] => {
             const result: Record<string, string>[] = [];
@@ -301,9 +283,8 @@ export class SwapProver {
         };
 
         return {
-            plaintext_bytes: plaintextBytes,
-            eph_pk_x: ephPkX.toString(),
-            ciphertext_bytes: ciphertextBytes,
+            plaintext: plaintext.map(f => f.toString()),
+            ciphertext: ciphertextFields.map(f => f.toString()),
             ivsk_app: this.addressSecret!.toString(),
             block_number: new Fr(blockNumber).toString(),
             initial_lot_state_root: initialLotStateRoot,
@@ -358,6 +339,24 @@ export class SwapProver {
             compacted.push({ amount: 0n, costPerUnit: 0n });
         }
         return { lots: compacted, numLots: newNumLots };
+    }
+
+    /**
+     * Parse an encrypted log buffer into ciphertext fields (matching on-chain representation).
+     * Skips the 32-byte tag, then reads 17 x 32-byte chunks as Fr fields.
+     */
+    private parseCiphertextFields(encryptedLog: Buffer): Fr[] {
+        const MESSAGE_CIPHERTEXT_LEN = 17;
+        const ciphertextWithoutTag = encryptedLog.slice(32);
+        const paddedBuffer = Buffer.alloc(MESSAGE_CIPHERTEXT_LEN * 32);
+        ciphertextWithoutTag.copy(paddedBuffer, 0, 0, Math.min(ciphertextWithoutTag.length, paddedBuffer.length));
+
+        const fields: Fr[] = [];
+        for (let i = 0; i < MESSAGE_CIPHERTEXT_LEN; i++) {
+            const chunk = paddedBuffer.slice(i * 32, (i + 1) * 32);
+            fields.push(Fr.fromBuffer(chunk));
+        }
+        return fields;
     }
 
     private async getPriceWitness(

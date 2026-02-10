@@ -6,8 +6,40 @@ import { getZeroHashes } from './imt';
 import type { SwapProver, SwapProofResult, SwapData } from './swap-prover';
 import { LotStateTree } from './lot-state-tree';
 
-/** Number of public inputs per child proof (7 Fields) */
-const NUM_PUBLIC_INPUTS = 7;
+/** Parse a potentially negative hex string like "-0x1a" into a BigInt */
+function parseSignedHex(s: string): bigint {
+    if (s.startsWith('-0x') || s.startsWith('-0X')) {
+        return -BigInt(s.slice(1));
+    }
+    return BigInt(s);
+}
+
+/** Encode a signed i64 bigint as its two's complement u64 Field string */
+function i64ToField(val: bigint): string {
+    if (val < 0n) {
+        return ((1n << 64n) + val).toString();
+    }
+    return val.toString();
+}
+
+/** Decode a two's complement u64 Field value back to signed i64 */
+function fieldToI64(val: bigint): bigint {
+    if (val >= (1n << 63n)) {
+        return val - (1n << 64n);
+    }
+    return val;
+}
+
+/** Decode a two's complement u64 Field value back to signed i64 */
+function fieldToI64(val: bigint): bigint {
+    if (val >= (1n << 63n)) {
+        return val - (1n << 64n);
+    }
+    return val;
+}
+
+/** Number of public inputs per child proof (6 values) */
+const NUM_PUBLIC_INPUTS = 6;
 
 /**
  * Configuration for SwapProofTree
@@ -33,10 +65,8 @@ export interface SwapProofTreeResult {
     publicInputs: {
         /** Merkle root of all leaf hashes */
         root: string;
-        /** Absolute PnL value */
+        /** Signed PnL (i64) */
         pnl: bigint;
-        /** True if PnL is negative (loss) */
-        pnlIsNegative: boolean;
         /** Lot state tree root after all swaps */
         remainingLotStateRoot: string;
         /** Lot state tree root before first swap */
@@ -147,8 +177,7 @@ export class SwapProofTree {
                 proofAsFields,
                 publicInputs: [
                     result.publicInputs.leaf,
-                    result.publicInputs.pnl.toString(),
-                    result.publicInputs.pnlIsNegative ? '1' : '0',
+                    i64ToField(result.publicInputs.pnl),
                     result.publicInputs.remainingLotStateRoot,
                     result.publicInputs.initialLotStateRoot,
                     result.publicInputs.priceFeedAddress,
@@ -166,23 +195,21 @@ export class SwapProofTree {
         const finalProof = await this.buildTree(swapArtifacts);
         console.log(`\nFinal proof generated!`);
 
-        const [root, pnlAbs, pnlIsNeg, remainingLotStateRoot, initialLotStateRoot, priceFeedAddr, blockNum] =
+        const [root, pnlStr, remainingLotStateRoot, initialLotStateRoot, priceFeedAddr, blockNum] =
             finalProof.publicInputs;
-        const pnlMagnitude = BigInt(pnlAbs);
-        const isNegative = BigInt(pnlIsNeg) === 1n;
+        const pnl = fieldToI64(BigInt(pnlStr));
 
         return {
             proof: finalProof.proof,
             publicInputs: {
                 root,
-                pnl: pnlMagnitude,
-                pnlIsNegative: isNegative,
+                pnl,
                 remainingLotStateRoot,
                 initialLotStateRoot,
                 priceFeedAddress: priceFeedAddr,
                 blockNumber: BigInt(blockNum),
             },
-            signedPnl: isNegative ? -pnlMagnitude : pnlMagnitude,
+            signedPnl: pnl,
             swapData: swapResults.map(r => r.swapData),
             lotStateTree,
         };
@@ -275,7 +302,7 @@ export class SwapProofTree {
 
         const hasRight = right !== null;
         const emptyProof = new Array(left.proofAsFields.length).fill('0x0');
-        const emptyPublicInputs = ['0x0', '0x0', '0x0', '0x0', '0x0', '0x0', '0x0'];
+        const emptyPublicInputs = ['0x0', '0x0', '0x0', '0x0', '0x0', '0x0'];
         const zeroLeafForLevel = this.zeroHashes![level];
 
         // Pre-compute summary vkey hash if needed
@@ -305,8 +332,8 @@ export class SwapProofTree {
         };
 
         const { witness, returnValue } = await this.summaryNoir!.execute(summaryInputs);
-        const [root, pnlAbs, pnlIsNeg, remainingLotStateRoot, initialLotStateRoot, priceFeedAddr, blockNum] =
-            returnValue as [string, string, string, string, string, string, string];
+        const [root, pnlStr, remainingLotStateRoot, initialLotStateRoot, priceFeedAddr, blockNum] =
+            returnValue as [string, string, string, string, string, string];
 
         const proof = await this.summaryBackend!.generateProof(witness, {
             verifierTarget: 'noir-recursive',
@@ -329,18 +356,16 @@ export class SwapProofTree {
         }
 
         const proofAsFields = this.proofBytesToFields(proof.proof);
-        const pnlMagnitude = BigInt(pnlAbs);
-        const isNeg = BigInt(pnlIsNeg) === 1n;
-        const signedPnl = isNeg ? -pnlMagnitude : pnlMagnitude;
+        const pnl = parseSignedHex(pnlStr);
 
         console.log(`  Root: ${root}`);
-        console.log(`  PnL so far: ${signedPnl} (${isNeg ? 'loss' : 'gain'})`);
+        console.log(`  PnL so far: ${pnl}`);
         console.log(`  Proof: valid`);
 
         return {
             proof: proof.proof,
             proofAsFields,
-            publicInputs: [root, pnlAbs, pnlIsNeg, remainingLotStateRoot, initialLotStateRoot, priceFeedAddr, blockNum],
+            publicInputs: [root, i64ToField(pnl), remainingLotStateRoot, initialLotStateRoot, priceFeedAddr, blockNum],
         };
     }
 
@@ -368,7 +393,7 @@ export class SwapProofTree {
         console.log('  Pre-computing summary vkey hash...');
 
         const emptyProof = new Array(sampleProof.proofAsFields.length).fill('0x0');
-        const emptyPublicInputs = ['0x0', '0x0', '0x0', '0x0', '0x0', '0x0', '0x0'];
+        const emptyPublicInputs = ['0x0', '0x0', '0x0', '0x0', '0x0', '0x0'];
 
         const throwawayInputs = {
             verification_key: vkAsFields,
