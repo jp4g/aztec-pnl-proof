@@ -149,12 +149,16 @@ pub struct Lot {
 }
 
 pub fn hash_lots(token_address: Field, lots: [Lot; MAX_LOTS], num_lots: u32) -> Field {
-    let mut preimage: [Field; LOTS_HASH_PREIMAGE_LEN] = [0; LOTS_HASH_PREIMAGE_LEN];
-    preimage[0] = token_address;
-    preimage[1] = num_lots as Field;
-    for i in 0..MAX_LOTS {
-        preimage[2 + i * 2] = lots[i].amount;
-        preimage[2 + i * 2 + 1] = lots[i].cost_per_unit;
+    if num_lots == 0 {
+        0
+    } else {
+        let mut preimage: [Field; LOTS_HASH_PREIMAGE_LEN] = [0; LOTS_HASH_PREIMAGE_LEN];
+        preimage[0] = token_address;
+        preimage[1] = num_lots as Field;
+        for i in 0..MAX_LOTS {
+            preimage[2 + i * 2] = lots[i].amount;
+            preimage[2 + i * 2 + 1] = lots[i].cost_per_unit;
+        }
+        poseidon2_hash(preimage)
     }
-    poseidon2_hash(preimage)
 }

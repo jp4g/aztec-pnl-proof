@@ -16,45 +16,81 @@ import { retrieveEncryptedEvents } from '../src/event-reader';
 import { SwapProver } from '../src/swap-prover';
 import { SwapProofTree } from '../src/swap-proof-tree';
 import { LotStateTree } from '../src/lot-state-tree';
+import { rebalancePools, type PoolState } from '../src/rebalance';
 
 import individualSwapCircuit from '../circuits/individual_swap/target/individual_swap.json' with { type: 'json' };
 import swapSummaryTreeCircuit from '../circuits/swap_summary_tree/target/swap_summary_tree.json' with { type: 'json' };
 
 const { AZTEC_NODE_URL = "http://localhost:8080" } = process.env;
 
-describe("PnL Proof Test (5 swaps, varying prices, multi-token lot tree)", () => {
+describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", () => {
 
     let node: AztecNode;
     let wallet: AuditableTestWallet;
     let addresses: AztecAddress[];
-    let token0: TokenContract;
-    let token1: TokenContract;
-    let liquidityToken: TokenContract;
-    let amm: AMMContract;
+
+    // 3 tokens
+    let tokenA: TokenContract;
+    let tokenB: TokenContract;
+    let tokenC: TokenContract;
+
+    // 3 AMM pools: AB (A/B), AC (A/C), BC (B/C)
+    let poolAB: AMMContract;
+    let poolAC: AMMContract;
+    let poolBC: AMMContract;
+
+    // LP tokens (one per pool)
+    let lpAB: TokenContract;
+    let lpAC: TokenContract;
+    let lpBC: TokenContract;
+
     let priceFeed: PriceFeedContract;
     let bb: Barretenberg;
 
     const DECIMALS = 9n;
-    const TOKEN0_LIQUIDITY = precision(10000n, DECIMALS);
-    const TOKEN1_LIQUIDITY = precision(20000n, DECIMALS);
 
-    // 5 swap amounts (all token0 -> token1, i.e. all buys of token1)
-    const SWAP_AMOUNTS = [
-        precision(10n, DECIMALS),
-        precision(8n, DECIMALS),
-        precision(12n, DECIMALS),
-        precision(6n, DECIMALS),
-        precision(15n, DECIMALS),
+    // Pool liquidity
+    const POOL_AB_LIQ_A = precision(10000n, DECIMALS);
+    const POOL_AB_LIQ_B = precision(5000n, DECIMALS);
+    const POOL_AC_LIQ_A = precision(10000n, DECIMALS);
+    const POOL_AC_LIQ_C = precision(2000n, DECIMALS);
+    const POOL_BC_LIQ_B = precision(5000n, DECIMALS);
+    const POOL_BC_LIQ_C = precision(2000n, DECIMALS);
+
+    // Swapper starts with 50 tokenA (private)
+    const INITIAL_TOKEN_A = precision(50n, DECIMALS);
+
+    // Oracle prices per swap: [tokenA, tokenB, tokenC]
+    // Swap 1-2 share baseline prices, then prices shift before each subsequent swap
+    const PRICE_SCHEDULE: [bigint, bigint, bigint][] = [
+        [100n, 200n, 500n],   // Swap 1: baseline
+        [100n, 200n, 500n],   // Swap 2: same prices
+        [130n, 170n, 600n],   // Swap 3: A up, B down, C up
+        [90n, 250n, 400n],    // Swap 4: A crashes, B moons, C drops
+        [110n, 220n, 550n],   // Swap 5: moderate recovery
+        [95n, 280n, 450n],    // Swap 6: A down, B up more, C down
     ];
-    const TOTAL_SWAP_IN = SWAP_AMOUNTS.reduce((a, b) => a + b, 0n);
 
-    // Prices change before each swap (token0_price, token1_price)
-    const PRICE_SCHEDULE: [bigint, bigint][] = [
-        [100n, 200n],  // Swap 1: token0=$1.00, token1=$2.00
-        [120n, 180n],  // Swap 2: token0 up, token1 down
-        [80n, 250n],   // Swap 3: token0 crashes, token1 moons
-        [150n, 160n],  // Swap 4: token0 recovers, token1 drops
-        [90n, 220n],   // Swap 5: token0 drops again, token1 rises
+    // Swap amounts (token_in amounts)
+    const SWAP_AMOUNTS = [
+        precision(15n, DECIMALS),  // Swap 1: 15 A -> B on poolAB
+        precision(10n, DECIMALS),  // Swap 2: 10 A -> C on poolAC
+        precision(5n, DECIMALS),   // Swap 3:  5 B -> C on poolBC
+        precision(3n, DECIMALS),   // Swap 4:  3 C -> A on poolAC
+        precision(12n, DECIMALS),  // Swap 5: 12 A -> B on poolAB
+        precision(4n, DECIMALS),   // Swap 6:  4 B -> A on poolAB
+    ];
+
+    // Swap directions: tokenIn -> tokenOut on pool
+    type TokenKey = 'A' | 'B' | 'C';
+    type PoolKey = 'AB' | 'AC' | 'BC';
+    const SWAP_DIRS: { inKey: TokenKey; outKey: TokenKey; pool: PoolKey }[] = [
+        { inKey: 'A', outKey: 'B', pool: 'AB' },  // Swap 1
+        { inKey: 'A', outKey: 'C', pool: 'AC' },  // Swap 2
+        { inKey: 'B', outKey: 'C', pool: 'BC' },  // Swap 3
+        { inKey: 'C', outKey: 'A', pool: 'AC' },  // Swap 4
+        { inKey: 'A', outKey: 'B', pool: 'AB' },  // Swap 5
+        { inKey: 'B', outKey: 'A', pool: 'AB' },  // Swap 6
     ];
 
     before(async () => {
@@ -80,113 +116,202 @@ describe("PnL Proof Test (5 swaps, varying prices, multi-token lot tree)", () =>
         priceFeed = await PriceFeedContract.deploy(wallet).send({ from: addresses[0] }).deployed();
         console.log(`  PriceFeed: ${priceFeed.address}`);
 
-        // Deploy token0
-        console.log("Deploying token0...");
-        token0 = await TokenContract.deploy(
-            wallet, addresses[0], "Token Zero", "TK0", 18,
-        ).send({ from: addresses[0] }).deployed();
-        console.log(`  token0: ${token0.address}`);
+        // Deploy 3 tokens
+        console.log("Deploying tokens...");
+        tokenA = await TokenContract.deploy(wallet, addresses[0], "Token A", "TKA", 18).send({ from: addresses[0] }).deployed();
+        tokenB = await TokenContract.deploy(wallet, addresses[0], "Token B", "TKB", 18).send({ from: addresses[0] }).deployed();
+        tokenC = await TokenContract.deploy(wallet, addresses[0], "Token C", "TKC", 18).send({ from: addresses[0] }).deployed();
+        console.log(`  tokenA: ${tokenA.address}`);
+        console.log(`  tokenB: ${tokenB.address}`);
+        console.log(`  tokenC: ${tokenC.address}`);
 
-        // Deploy token1
-        console.log("Deploying token1...");
-        token1 = await TokenContract.deploy(
-            wallet, addresses[0], "Token One", "TK1", 18,
-        ).send({ from: addresses[0] }).deployed();
-        console.log(`  token1: ${token1.address}`);
-
-        // Set initial prices
+        // Set initial oracle prices
         console.log("Setting initial prices...");
-        await priceFeed.methods.set_price(token0.address.toField(), PRICE_SCHEDULE[0][0]).send({ from: addresses[0] }).wait();
-        await priceFeed.methods.set_price(token1.address.toField(), PRICE_SCHEDULE[0][1]).send({ from: addresses[0] }).wait();
-        console.log(`  token0 price: ${PRICE_SCHEDULE[0][0]}, token1 price: ${PRICE_SCHEDULE[0][1]}`);
+        await priceFeed.methods.set_price(tokenA.address.toField(), PRICE_SCHEDULE[0][0]).send({ from: addresses[0] }).wait();
+        await priceFeed.methods.set_price(tokenB.address.toField(), PRICE_SCHEDULE[0][1]).send({ from: addresses[0] }).wait();
+        await priceFeed.methods.set_price(tokenC.address.toField(), PRICE_SCHEDULE[0][2]).send({ from: addresses[0] }).wait();
+        console.log(`  A=${PRICE_SCHEDULE[0][0]}, B=${PRICE_SCHEDULE[0][1]}, C=${PRICE_SCHEDULE[0][2]}`);
 
-        // Deploy liquidity token
-        console.log("Deploying liquidity token...");
-        liquidityToken = await TokenContract.deploy(
-            wallet, addresses[0], "LP Token", "LP", 18,
-        ).send({ from: addresses[0] }).deployed();
+        // Deploy 3 LP tokens
+        console.log("Deploying LP tokens...");
+        lpAB = await TokenContract.deploy(wallet, addresses[0], "LP AB", "LPAB", 18).send({ from: addresses[0] }).deployed();
+        lpAC = await TokenContract.deploy(wallet, addresses[0], "LP AC", "LPAC", 18).send({ from: addresses[0] }).deployed();
+        lpBC = await TokenContract.deploy(wallet, addresses[0], "LP BC", "LPBC", 18).send({ from: addresses[0] }).deployed();
 
-        // Deploy AMM
-        console.log("Deploying AMM...");
-        amm = await AMMContract.deploy(
-            wallet, token0.address, token1.address, liquidityToken.address,
-        ).send({ from: addresses[0] }).deployed();
-        console.log(`  AMM: ${amm.address}`);
+        // Deploy 3 AMM pools
+        console.log("Deploying AMM pools...");
+        poolAB = await AMMContract.deploy(wallet, tokenA.address, tokenB.address, lpAB.address).send({ from: addresses[0] }).deployed();
+        poolAC = await AMMContract.deploy(wallet, tokenA.address, tokenC.address, lpAC.address).send({ from: addresses[0] }).deployed();
+        poolBC = await AMMContract.deploy(wallet, tokenB.address, tokenC.address, lpBC.address).send({ from: addresses[0] }).deployed();
+        console.log(`  poolAB: ${poolAB.address}`);
+        console.log(`  poolAC: ${poolAC.address}`);
+        console.log(`  poolBC: ${poolBC.address}`);
 
-        // Seed AMM with liquidity
-        console.log("Seeding AMM with liquidity...");
-        await token0.methods.mint_to_public(amm.address, TOKEN0_LIQUIDITY).send({ from: addresses[0] }).wait();
-        await token1.methods.mint_to_public(amm.address, TOKEN1_LIQUIDITY).send({ from: addresses[0] }).wait();
+        // Seed pools with liquidity
+        console.log("Seeding pools with liquidity...");
+        await tokenA.methods.mint_to_public(poolAB.address, POOL_AB_LIQ_A).send({ from: addresses[0] }).wait();
+        await tokenB.methods.mint_to_public(poolAB.address, POOL_AB_LIQ_B).send({ from: addresses[0] }).wait();
+        await tokenA.methods.mint_to_public(poolAC.address, POOL_AC_LIQ_A).send({ from: addresses[0] }).wait();
+        await tokenC.methods.mint_to_public(poolAC.address, POOL_AC_LIQ_C).send({ from: addresses[0] }).wait();
+        await tokenB.methods.mint_to_public(poolBC.address, POOL_BC_LIQ_B).send({ from: addresses[0] }).wait();
+        await tokenC.methods.mint_to_public(poolBC.address, POOL_BC_LIQ_C).send({ from: addresses[0] }).wait();
 
-        // Mint enough token0 for all 5 swaps
-        console.log(`Minting ${TOTAL_SWAP_IN} token0 to swapper...`);
-        await token0.methods.mint_to_private(addresses[1], TOTAL_SWAP_IN).send({ from: addresses[0] }).wait();
+        // Mint tokenA to swapper (private)
+        console.log(`Minting ${INITIAL_TOKEN_A} tokenA to swapper...`);
+        await tokenA.methods.mint_to_private(addresses[1], INITIAL_TOKEN_A).send({ from: addresses[0] }).wait();
 
         console.log("Setup complete!");
     });
 
-    test("prove PnL from 5 swaps with varying prices", { timeout: 900000 }, async () => {
+    test("prove PnL from 6 swaps across 3 pools with varying prices", { timeout: 1200000 }, async () => {
         const swapper = addresses[1];
+        const minter = addresses[0];
 
-        // Track reserves for computing expected outputs
-        let reserve0 = TOKEN0_LIQUIDITY;
-        let reserve1 = TOKEN1_LIQUIDITY;
+        const tokenMap: Record<TokenKey, TokenContract> = { A: tokenA, B: tokenB, C: tokenC };
+        const poolMap: Record<PoolKey, AMMContract> = { AB: poolAB, AC: poolAC, BC: poolBC };
+
+        // Track pool state (reserves mutated by rebalancer + swaps)
+        const poolStates: Record<PoolKey, PoolState> = {
+            AB: { contract: poolAB, token0: tokenA, token1: tokenB, reserve0: POOL_AB_LIQ_A, reserve1: POOL_AB_LIQ_B },
+            AC: { contract: poolAC, token0: tokenA, token1: tokenC, reserve0: POOL_AC_LIQ_A, reserve1: POOL_AC_LIQ_C },
+            BC: { contract: poolBC, token0: tokenB, token1: tokenC, reserve0: POOL_BC_LIQ_B, reserve1: POOL_BC_LIQ_C },
+        };
+        const allPools = [poolStates.AB, poolStates.AC, poolStates.BC];
+
         const amountsOut: bigint[] = [];
 
         // ========================================
-        // Execute 5 swaps, updating prices before each
+        // Execute 6 swaps across 3 pools
         // ========================================
-        for (let i = 0; i < 5; i++) {
-            console.log(`\n=== SWAP ${i + 1}/5 ===`);
+        for (let i = 0; i < 6; i++) {
+            console.log(`\n=== SWAP ${i + 1}/6 ===`);
 
-            // Update prices before each swap (skip first since already set in setup)
+            const dir = SWAP_DIRS[i];
+            const tokenIn = tokenMap[dir.inKey];
+            const tokenOut = tokenMap[dir.outKey];
+            const pool = poolMap[dir.pool];
+            const ps = poolStates[dir.pool];
+            const amountIn = SWAP_AMOUNTS[i];
+
+            // Rebalance pools when prices change
             if (i > 0) {
-                const [p0, p1] = PRICE_SCHEDULE[i];
-                console.log(`  Updating prices: token0=${p0}, token1=${p1}`);
-                await priceFeed.methods.set_price(token0.address.toField(), p0).send({ from: addresses[0] }).wait();
-                await priceFeed.methods.set_price(token1.address.toField(), p1).send({ from: addresses[0] }).wait();
+                const [pA, pB, pC] = PRICE_SCHEDULE[i];
+                const [prevA, prevB, prevC] = PRICE_SCHEDULE[i - 1];
+                if (pA !== prevA || pB !== prevB || pC !== prevC) {
+                    console.log(`  Rebalancing to prices: A=${pA}, B=${pB}, C=${pC}`);
+                    await rebalancePools({
+                        priceFeed,
+                        minter,
+                        pools: allPools,
+                        tokenPrices: [
+                            { token: tokenA, price: pA },
+                            { token: tokenB, price: pB },
+                            { token: tokenC, price: pC },
+                        ],
+                    });
+                }
             }
 
-            const amountIn = SWAP_AMOUNTS[i];
+            // Determine reserve ordering for AMM call
+            const sellingToken0 = tokenIn.address.equals(ps.token0.address);
+            const reserveIn = sellingToken0 ? ps.reserve0 : ps.reserve1;
+            const reserveOut = sellingToken0 ? ps.reserve1 : ps.reserve0;
+
             const nonce = Fr.random();
             const authwit = await wallet.createAuthWit(swapper, {
-                caller: amm.address,
-                action: token0.methods.transfer_to_public(swapper, amm.address, amountIn, nonce),
+                caller: pool.address,
+                action: tokenIn.methods.transfer_to_public(swapper, pool.address, amountIn, nonce),
             });
 
-            const amountOut = await amm.methods
-                .get_amount_out_for_exact_in(reserve0, reserve1, amountIn)
+            const amountOut = await pool.methods
+                .get_amount_out_for_exact_in(reserveIn, reserveOut, amountIn)
                 .simulate({ from: swapper });
-            console.log(`  Amount in: ${amountIn}, Expected out: ${amountOut}`);
+            console.log(`  ${dir.inKey} -> ${dir.outKey} on pool${dir.pool}: in=${amountIn}, out=${amountOut}`);
 
-            await amm.methods
-                .swap_exact_tokens_for_tokens(token0.address, token1.address, amountIn, amountOut, nonce)
+            await pool.methods
+                .swap_exact_tokens_for_tokens(tokenIn.address, tokenOut.address, amountIn, amountOut, nonce)
                 .with({ authWitnesses: [authwit] })
                 .send({ from: swapper })
                 .wait();
             console.log(`  Swap ${i + 1} executed!`);
 
             amountsOut.push(BigInt(amountOut));
-            reserve0 += amountIn;
-            reserve1 -= BigInt(amountOut);
+
+            // Update tracked reserves
+            if (sellingToken0) {
+                ps.reserve0 += amountIn;
+                ps.reserve1 -= BigInt(amountOut);
+            } else {
+                ps.reserve1 += amountIn;
+                ps.reserve0 -= BigInt(amountOut);
+            }
         }
 
         // ========================================
-        // Discover swap events
+        // Discover swap events from all 3 pools
         // ========================================
         console.log("\n=== Discover swap events ===");
 
-        const taggingSecrets = await wallet.exportTaggingSecrets(swapper, [amm.address], [swapper]);
+        const taggingSecrets = await wallet.exportTaggingSecrets(
+            swapper,
+            [poolAB.address, poolAC.address, poolBC.address],
+            [swapper],
+        );
         const events = await retrieveEncryptedEvents(node, taggingSecrets);
         console.log(`  Found ${events.totalEvents} events`);
-        expect(events.totalEvents).toBeGreaterThanOrEqual(5);
+        expect(events.totalEvents).toBeGreaterThanOrEqual(6);
 
-        const allEvents = events.secrets.flatMap(s => s.events);
-        const blockNumbers = allEvents.slice(0, 5).map(e => BigInt(e.blockNumber));
+        // Collect all events and sort chronologically
+        const allEvents = events.secrets
+            .flatMap(s => s.events)
+            .sort((a, b) => Number(a.blockNumber) - Number(b.blockNumber));
+        const swapEvents = allEvents.slice(0, 6);
+        const blockNumbers = swapEvents.map(e => BigInt(e.blockNumber));
         console.log(`  Block numbers: ${blockNumbers.join(', ')}`);
 
         // ========================================
-        // Aggregate swap proofs with multi-token lot tree
+        // Compute expected PnL via FIFO lot tracking
+        // ========================================
+        console.log("\n=== Compute expected PnL ===");
+
+        const priceIdx: Record<TokenKey, number> = { A: 0, B: 1, C: 2 };
+        const lotTracker: Record<TokenKey, { amount: bigint; costPerUnit: bigint }[]> = {
+            A: [{ amount: INITIAL_TOKEN_A, costPerUnit: PRICE_SCHEDULE[0][0] }],
+            B: [],
+            C: [],
+        };
+
+        let expectedPnl = 0n;
+
+        for (let i = 0; i < 6; i++) {
+            const dir = SWAP_DIRS[i];
+            const sellPrice = PRICE_SCHEDULE[i][priceIdx[dir.inKey]];
+            const buyPrice = PRICE_SCHEDULE[i][priceIdx[dir.outKey]];
+            const amountIn = SWAP_AMOUNTS[i];
+            const amountOut = amountsOut[i];
+
+            // FIFO consume lots of tokenIn
+            let remaining = amountIn;
+            const sellLots = lotTracker[dir.inKey];
+            for (const lot of sellLots) {
+                if (remaining <= 0n) break;
+                const consumed = remaining < lot.amount ? remaining : lot.amount;
+                expectedPnl += consumed * (sellPrice - lot.costPerUnit);
+                lot.amount -= consumed;
+                remaining -= consumed;
+            }
+            lotTracker[dir.inKey] = sellLots.filter(l => l.amount > 0n);
+
+            // Add buy lot for tokenOut
+            lotTracker[dir.outKey].push({ amount: amountOut, costPerUnit: buyPrice });
+
+            console.log(`  Swap ${i + 1}: sell ${dir.inKey}@${sellPrice}, buy ${dir.outKey}@${buyPrice}, PnL so far: ${expectedPnl}`);
+        }
+
+        console.log(`  Expected total PnL: ${expectedPnl}`);
+
+        // ========================================
+        // Generate and aggregate swap proofs
         // ========================================
         console.log("\n=== Generate and aggregate swap proofs ===");
 
@@ -214,18 +339,16 @@ describe("PnL Proof Test (5 swaps, varying prices, multi-token lot tree)", () =>
 
         const priceFeedAssetsSlot = PriceFeedContract.storage.assets.slot;
 
-        // Initialize lot state tree with token0 lot from mint.
-        // The swapper starts with TOTAL_SWAP_IN of token0.
-        // We use the initial token0 price as the cost basis.
+        // Initialize lot state tree with tokenA lot from mint
         const lotStateTree = new LotStateTree();
         await lotStateTree.setLots(
-            token0.address.toField(),
-            [{ amount: TOTAL_SWAP_IN, costPerUnit: PRICE_SCHEDULE[0][0] }],
+            tokenA.address.toField(),
+            [{ amount: INITIAL_TOKEN_A, costPerUnit: PRICE_SCHEDULE[0][0] }],
             1,
         );
 
         const result = await proofTree.prove(
-            allEvents.slice(0, 5).map((e, i) => ({
+            swapEvents.map((e, i) => ({
                 encryptedLog: e.ciphertextBuffer,
                 blockNumber: blockNumbers[i],
             })),
@@ -248,69 +371,57 @@ describe("PnL Proof Test (5 swaps, varying prices, multi-token lot tree)", () =>
         // ========================================
         console.log("\n=== Verify results ===");
 
-        // Each swap sells token0 at the current token0 price.
-        // PnL per swap = SWAP_AMOUNTS[i] * (PRICE_SCHEDULE[i][0] - PRICE_SCHEDULE[0][0])
-        // because the initial cost basis for token0 is PRICE_SCHEDULE[0][0] = 100
-        //
-        // Swap 1: 10e9 * (100 - 100) = 0
-        // Swap 2: 8e9 * (120 - 100) = 160e9
-        // Swap 3: 12e9 * (80 - 100) = -240e9
-        // Swap 4: 6e9 * (150 - 100) = 300e9
-        // Swap 5: 15e9 * (90 - 100) = -150e9
-        // Total: 0 + 160e9 - 240e9 + 300e9 - 150e9 = 70e9
-        let expectedPnl = 0n;
-        const initialCostBasis = PRICE_SCHEDULE[0][0];
-        for (let i = 0; i < 5; i++) {
-            const sellPrice = PRICE_SCHEDULE[i][0];
-            expectedPnl += SWAP_AMOUNTS[i] * (sellPrice - initialCostBasis);
-        }
         console.log(`  Expected total PnL: ${expectedPnl}`);
         console.log(`  Actual total PnL:   ${result.signedPnl}`);
-
         expect(result.signedPnl).toBe(expectedPnl);
 
-        // 5 buys of token1 -> 5 token1 lots
-        const token1Lots = lotStateTree.getLots(token1.address.toField());
-        expect(token1Lots.numLots).toBe(5);
-
-        // Each token1 lot should have the amount out and the token1 oracle price at that block
-        for (let i = 0; i < 5; i++) {
-            expect(token1Lots.lots[i].amount).toBe(amountsOut[i]);
-            expect(token1Lots.lots[i].costPerUnit).toBe(PRICE_SCHEDULE[i][1]);
-            console.log(`  Token1 Lot ${i}: amount=${token1Lots.lots[i].amount}, costPerUnit=${token1Lots.lots[i].costPerUnit}`);
+        // Verify remaining lots match our FIFO tracker
+        for (const key of ['A', 'B', 'C'] as const) {
+            const token = tokenMap[key];
+            const expected = lotTracker[key];
+            const actual = lotStateTree.getLots(token.address.toField());
+            expect(actual.numLots).toBe(expected.length);
+            for (let j = 0; j < expected.length; j++) {
+                expect(actual.lots[j].amount).toBe(expected[j].amount);
+                expect(actual.lots[j].costPerUnit).toBe(expected[j].costPerUnit);
+                console.log(`  ${key} Lot ${j}: amount=${actual.lots[j].amount}, cost=${actual.lots[j].costPerUnit}`);
+            }
+            if (expected.length === 0) {
+                console.log(`  ${key}: all lots consumed`);
+            }
         }
-
-        // Token0 lots should all be consumed
-        const token0Lots = lotStateTree.getLots(token0.address.toField());
-        expect(token0Lots.numLots).toBe(0);
 
         // Verify price feed address
         expect(result.publicInputs.priceFeedAddress).toBe(priceFeed.address.toField().toString());
 
         // Verify block number is the last swap's block
-        expect(result.publicInputs.blockNumber).toBe(blockNumbers[4]);
+        expect(result.publicInputs.blockNumber).toBe(blockNumbers[5]);
 
-        // Verify merkle root matches TS-computed
+        // Verify merkle root
         const expectedLeaves: Fr[] = [];
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < 6; i++) {
+            const dir = SWAP_DIRS[i];
             expectedLeaves.push(await poseidon2Hash([
                 new Fr(blockNumbers[i]),
-                token0.address.toField(),
-                token1.address.toField(),
+                tokenMap[dir.inKey].address.toField(),
+                tokenMap[dir.outKey].address.toField(),
                 new Fr(SWAP_AMOUNTS[i]),
                 new Fr(amountsOut[i]),
                 new Fr(1n),
             ]));
         }
-        // The swap_summary_tree builds a binary tree with zero hashes for padding
-        // 5 leaves: [l0,l1], [l2,l3], [l4,zero_0] -> [h01,h23], [h4z,zero_1] -> [hA, hB] -> root
+
+        // 6 leaves -> binary tree:
+        // Level 0: [l0,l1], [l2,l3], [l4,l5]
+        // Level 1: [h01,h23], [h45,zero_1]
+        // Level 2: root
         const zero0 = Fr.ZERO;
         const zero1 = await poseidon2Hash([zero0, zero0]);
         const h01 = await poseidon2Hash([expectedLeaves[0], expectedLeaves[1]]);
         const h23 = await poseidon2Hash([expectedLeaves[2], expectedLeaves[3]]);
-        const h4z = await poseidon2Hash([expectedLeaves[4], zero0]);
+        const h45 = await poseidon2Hash([expectedLeaves[4], expectedLeaves[5]]);
         const hA = await poseidon2Hash([h01, h23]);
-        const hB = await poseidon2Hash([h4z, zero1]);
+        const hB = await poseidon2Hash([h45, zero1]);
         const expectedRoot = await poseidon2Hash([hA, hB]);
 
         expect(result.publicInputs.root).toBe(expectedRoot.toString());

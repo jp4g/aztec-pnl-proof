@@ -152,6 +152,9 @@ export class LotStateTree {
      * preimage = [token_address, num_lots, lot0.amount, lot0.cost_per_unit, lot1.amount, ...]
      */
     static async hashLots(tokenAddress: Fr, numLots: number, lots: Lot[]): Promise<Fr> {
+        if (numLots === 0) {
+            return Fr.ZERO;
+        }
         const preimageLen = MAX_LOTS * 2 + 2;
         const preimage: Fr[] = new Array(preimageLen).fill(Fr.ZERO);
         preimage[0] = tokenAddress;
