@@ -139,20 +139,22 @@ pub fn verify_encryption(
 // FIFO Lot Tracking
 // ============================================================
 
-pub global MAX_LOTS: u32 = 8;
-pub global LOTS_HASH_PREIMAGE_LEN: u32 = 17; // MAX_LOTS * 2 + 1
+pub global MAX_LOTS: u32 = 32;
+pub global LOTS_HASH_PREIMAGE_LEN: u32 = 66; // MAX_LOTS * 2 + 2 (token_address + num_lots)
+pub global LOT_TREE_HEIGHT: u32 = 3; // 8 token slots
 
 pub struct Lot {
     pub amount: Field,
     pub cost_per_unit: Field,
 }
 
-pub fn hash_lots(lots: [Lot; MAX_LOTS], num_lots: u32) -> Field {
+pub fn hash_lots(token_address: Field, lots: [Lot; MAX_LOTS], num_lots: u32) -> Field {
     let mut preimage: [Field; LOTS_HASH_PREIMAGE_LEN] = [0; LOTS_HASH_PREIMAGE_LEN];
-    preimage[0] = num_lots as Field;
+    preimage[0] = token_address;
+    preimage[1] = num_lots as Field;
     for i in 0..MAX_LOTS {
-        preimage[1 + i * 2] = lots[i].amount;
-        preimage[1 + i * 2 + 1] = lots[i].cost_per_unit;
+        preimage[2 + i * 2] = lots[i].amount;
+        preimage[2 + i * 2 + 1] = lots[i].cost_per_unit;
     }
     poseidon2_hash(preimage)
 }

@@ -3,10 +3,11 @@ import { Noir } from '@aztec/noir-noir_js';
 import { Barretenberg, UltraHonkBackend } from '@aztec/bb.js';
 import type { CompiledCircuit } from '@aztec/noir-types';
 import { getZeroHashes } from './imt';
-import type { SwapProver, SwapProofResult, SwapData, Lot } from './swap-prover';
+import type { SwapProver, SwapProofResult, SwapData } from './swap-prover';
+import { LotStateTree } from './lot-state-tree';
 
-/** Number of public inputs per child proof (6 Fields) */
-const NUM_PUBLIC_INPUTS = 6;
+/** Number of public inputs per child proof (7 Fields) */
+const NUM_PUBLIC_INPUTS = 7;
 
 /**
  * Configuration for SwapProofTree
@@ -36,21 +37,21 @@ export interface SwapProofTreeResult {
         pnl: bigint;
         /** True if PnL is negative (loss) */
         pnlIsNegative: boolean;
-        /** Hash of lot state after all swaps */
-        remainingLotsHash: string;
-        /** Hash of lot state before first swap (empty lots) */
-        initialLotsHash: string;
+        /** Lot state tree root after all swaps */
+        remainingLotStateRoot: string;
+        /** Lot state tree root before first swap */
+        initialLotStateRoot: string;
         /** PriceFeed contract address */
         priceFeedAddress: string;
+        /** Block number of last swap */
+        blockNumber: bigint;
     };
     /** Signed PnL (negative means loss) */
     signedPnl: bigint;
     /** Individual swap data from each leaf */
     swapData: SwapData[];
-    /** Final lot state (for downstream use) */
-    remainingLots: Lot[];
-    /** Number of active lots after all swaps */
-    remainingNumLots: number;
+    /** Final lot state tree */
+    lotStateTree: LotStateTree;
 }
 
 /**
@@ -59,16 +60,16 @@ export interface SwapProofTreeResult {
 interface ProofArtifact {
     proof: Uint8Array;
     proofAsFields: string[];
-    publicInputs: string[]; // [leaf, pnl, pnl_is_negative, remaining_lots_hash, initial_lots_hash, price_feed_address]
+    publicInputs: string[]; // 7 fields
 }
 
 /**
- * SwapProofTree generates individual swap proofs (with FIFO lot chaining)
+ * SwapProofTree generates individual swap proofs (with multi-token lot chaining)
  * then aggregates them into a single recursive summary proof.
  *
- * Each swap proof tracks one token's FIFO cost basis lots.
- * The summary tree builds a merkle root of swap leaf hashes
- * and sums signed PnL across all swaps.
+ * Each swap proof updates two leaves in the lot state tree (sell-side and buy-side).
+ * The summary tree builds a merkle root of swap leaf hashes,
+ * sums signed PnL, and enforces chronological block ordering.
  */
 export class SwapProofTree {
     private config: SwapProofTreeConfig;
@@ -89,21 +90,20 @@ export class SwapProofTree {
     }
 
     /**
-     * Prove all swap events for a single tracked token and aggregate
-     * into a single summary proof.
+     * Prove all swap events and aggregate into a single summary proof.
      *
-     * Events must be sorted chronologically. Lot state chains through
-     * each proof in order.
+     * Events must be sorted chronologically. The lot state tree is mutated
+     * in-place through each sequential proof.
      *
      * @param events - Encrypted swap events sorted by block number
-     * @param tokenAddress - The token whose FIFO lots we track
+     * @param lotStateTree - Multi-token lot state tree (mutated in-place)
      * @param priceFeedAddress - PriceFeed contract address
      * @param priceFeedAssetsSlot - Storage slot of the PriceFeed `assets` map
      * @returns Aggregated proof with merkle root and signed PnL
      */
     async prove(
         events: { encryptedLog: Buffer; blockNumber: bigint }[],
-        tokenAddress: Fr,
+        lotStateTree: LotStateTree,
         priceFeedAddress: Fr,
         priceFeedAssetsSlot: Fr,
     ): Promise<SwapProofTreeResult> {
@@ -111,23 +111,21 @@ export class SwapProofTree {
 
         console.log(`\n=== SwapProofTree: Aggregating ${events.length} swap proofs ===`);
 
-        // Step 1: Prove each swap individually, chaining lot state
+        // Step 1: Prove each swap individually, chaining lot state tree
         const swapResults: SwapProofResult[] = [];
         const swapArtifacts: ProofArtifact[] = [];
 
-        let currentLots: Lot[] = [];
-        let currentNumLots = 0;
+        let previousBlockNumber = 0n;
 
         for (let i = 0; i < events.length; i++) {
             console.log(`\n--- Proving swap ${i + 1}/${events.length} ---`);
 
             const result = await this.config.swapProver.prove(
                 events[i],
-                tokenAddress,
+                lotStateTree,
                 priceFeedAddress,
                 priceFeedAssetsSlot,
-                currentLots,
-                currentNumLots,
+                previousBlockNumber,
             );
 
             // Extract leaf vkey artifacts from the first proof
@@ -151,25 +149,24 @@ export class SwapProofTree {
                     result.publicInputs.leaf,
                     result.publicInputs.pnl.toString(),
                     result.publicInputs.pnlIsNegative ? '1' : '0',
-                    result.publicInputs.remainingLotsHash,
-                    result.publicInputs.initialLotsHash,
+                    result.publicInputs.remainingLotStateRoot,
+                    result.publicInputs.initialLotStateRoot,
                     result.publicInputs.priceFeedAddress,
+                    result.publicInputs.blockNumber.toString(),
                 ],
             });
 
-            // Chain lot state to next proof
-            currentLots = result.remainingLots;
-            currentNumLots = result.remainingNumLots;
+            // Chain block number to next proof
+            previousBlockNumber = events[i].blockNumber;
         }
 
         console.log(`\nIndividual proofs generated: ${swapArtifacts.length}`);
 
         // Step 2: Build recursive tree from individual proofs
-        // Always wrap in summary tree for uniform proof structure (privacy)
         const finalProof = await this.buildTree(swapArtifacts);
         console.log(`\nFinal proof generated!`);
 
-        const [root, pnlAbs, pnlIsNeg, remainingLotsHash, initialLotsHash, priceFeedAddr] =
+        const [root, pnlAbs, pnlIsNeg, remainingLotStateRoot, initialLotStateRoot, priceFeedAddr, blockNum] =
             finalProof.publicInputs;
         const pnlMagnitude = BigInt(pnlAbs);
         const isNegative = BigInt(pnlIsNeg) === 1n;
@@ -180,14 +177,14 @@ export class SwapProofTree {
                 root,
                 pnl: pnlMagnitude,
                 pnlIsNegative: isNegative,
-                remainingLotsHash,
-                initialLotsHash,
+                remainingLotStateRoot,
+                initialLotStateRoot,
                 priceFeedAddress: priceFeedAddr,
+                blockNumber: BigInt(blockNum),
             },
             signedPnl: isNegative ? -pnlMagnitude : pnlMagnitude,
             swapData: swapResults.map(r => r.swapData),
-            remainingLots: currentLots,
-            remainingNumLots: currentNumLots,
+            lotStateTree,
         };
     }
 
@@ -278,7 +275,7 @@ export class SwapProofTree {
 
         const hasRight = right !== null;
         const emptyProof = new Array(left.proofAsFields.length).fill('0x0');
-        const emptyPublicInputs = ['0x0', '0x0', '0x0', '0x0', '0x0', '0x0'];
+        const emptyPublicInputs = ['0x0', '0x0', '0x0', '0x0', '0x0', '0x0', '0x0'];
         const zeroLeafForLevel = this.zeroHashes![level];
 
         // Pre-compute summary vkey hash if needed
@@ -308,8 +305,8 @@ export class SwapProofTree {
         };
 
         const { witness, returnValue } = await this.summaryNoir!.execute(summaryInputs);
-        const [root, pnlAbs, pnlIsNeg, remainingLotsHash, initialLotsHash, priceFeedAddr] =
-            returnValue as [string, string, string, string, string, string];
+        const [root, pnlAbs, pnlIsNeg, remainingLotStateRoot, initialLotStateRoot, priceFeedAddr, blockNum] =
+            returnValue as [string, string, string, string, string, string, string];
 
         const proof = await this.summaryBackend!.generateProof(witness, {
             verifierTarget: 'noir-recursive',
@@ -343,7 +340,7 @@ export class SwapProofTree {
         return {
             proof: proof.proof,
             proofAsFields,
-            publicInputs: [root, pnlAbs, pnlIsNeg, remainingLotsHash, initialLotsHash, priceFeedAddr],
+            publicInputs: [root, pnlAbs, pnlIsNeg, remainingLotStateRoot, initialLotStateRoot, priceFeedAddr, blockNum],
         };
     }
 
@@ -371,7 +368,7 @@ export class SwapProofTree {
         console.log('  Pre-computing summary vkey hash...');
 
         const emptyProof = new Array(sampleProof.proofAsFields.length).fill('0x0');
-        const emptyPublicInputs = ['0x0', '0x0', '0x0', '0x0', '0x0', '0x0'];
+        const emptyPublicInputs = ['0x0', '0x0', '0x0', '0x0', '0x0', '0x0', '0x0'];
 
         const throwawayInputs = {
             verification_key: vkAsFields,

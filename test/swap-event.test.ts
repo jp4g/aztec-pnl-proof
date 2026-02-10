@@ -15,13 +15,14 @@ import { poseidon2Hash } from '@aztec/foundation/crypto/poseidon';
 import { retrieveEncryptedEvents } from '../src/event-reader';
 import { SwapProver } from '../src/swap-prover';
 import { SwapProofTree } from '../src/swap-proof-tree';
+import { LotStateTree } from '../src/lot-state-tree';
 
 import individualSwapCircuit from '../circuits/individual_swap/target/individual_swap.json' with { type: 'json' };
 import swapSummaryTreeCircuit from '../circuits/swap_summary_tree/target/swap_summary_tree.json' with { type: 'json' };
 
 const { AZTEC_NODE_URL = "http://localhost:8080" } = process.env;
 
-describe("Swap Event Proof Test (Buy + Sell with FIFO PnL)", () => {
+describe("Swap Event Proof Test (Buy + Sell with Multi-Token Lot Tree)", () => {
 
     let node: AztecNode;
     let wallet: AuditableTestWallet;
@@ -83,7 +84,7 @@ describe("Swap Event Proof Test (Buy + Sell with FIFO PnL)", () => {
         ).send({ from: addresses[0] }).deployed();
         console.log(`  token1: ${token1.address}`);
 
-        // Set initial prices
+        // Set initial prices for BOTH tokens
         console.log("Setting initial prices...");
         await priceFeed.methods.set_price(token0.address.toField(), TOKEN0_PRICE).send({ from: addresses[0] }).wait();
         await priceFeed.methods.set_price(token1.address.toField(), TOKEN1_BUY_PRICE).send({ from: addresses[0] }).wait();
@@ -114,10 +115,9 @@ describe("Swap Event Proof Test (Buy + Sell with FIFO PnL)", () => {
         console.log("Setup complete!");
     });
 
-    test("buy then sell with FIFO PnL", { timeout: 600000 }, async () => {
+    test("buy then sell with multi-token lot tree PnL", { timeout: 600000 }, async () => {
         const swapper = addresses[1];
         const priceFeedAssetsSlot = PriceFeedContract.storage.assets.slot;
-        const trackedToken = token1.address.toField();
 
         // ========================================
         // STEP 1: Buy token1 (token0 -> token1) at price 200
@@ -166,8 +166,6 @@ describe("Swap Event Proof Test (Buy + Sell with FIFO PnL)", () => {
             action: token1.methods.transfer_to_public(swapper, amm.address, sellAmount, nonce2),
         });
 
-        // For sell: token_in=token1, token_out=token0
-        // reserve_in = token1 reserve, reserve_out = token0 reserve
         const amountOut2 = await amm.methods
             .get_amount_out_for_exact_in(reserve1AfterBuy, reserve0AfterBuy, sellAmount)
             .simulate({ from: swapper });
@@ -197,7 +195,7 @@ describe("Swap Event Proof Test (Buy + Sell with FIFO PnL)", () => {
         console.log(`  Event 2 (sell): ${allEvents[1].ciphertextBytes} bytes, block ${allEvents[1].blockNumber}`);
 
         // ========================================
-        // STEP 5: Generate individual swap proofs with lot chaining
+        // STEP 5: Generate individual swap proofs with multi-token lot tree
         // ========================================
         console.log("\n=== STEP 5: Generate individual swap proofs ===");
 
@@ -219,10 +217,20 @@ describe("Swap Event Proof Test (Buy + Sell with FIFO PnL)", () => {
         const buyBlockNumber = BigInt(allEvents[0].blockNumber);
         const sellBlockNumber = BigInt(allEvents[1].blockNumber);
 
-        // Prove buy (no initial lots)
+        // Initialize lot state tree with token0 lot from mint
+        // (swapper starts with BUY_AMOUNT_IN of token0 at TOKEN0_PRICE)
+        const lotStateTree = new LotStateTree();
+        await lotStateTree.setLots(
+            token0.address.toField(),
+            [{ amount: BUY_AMOUNT_IN, costPerUnit: TOKEN0_PRICE }],
+            1,
+        );
+
+        // Prove buy (token0 -> token1)
+        // Sell-side = token0 (consumes the minted lot), Buy-side = token1 (creates new lot)
         const buyResult = await prover.prove(
             { encryptedLog: allEvents[0].ciphertextBuffer, blockNumber: buyBlockNumber },
-            trackedToken,
+            lotStateTree,
             priceFeed.address.toField(),
             priceFeedAssetsSlot,
         );
@@ -230,42 +238,55 @@ describe("Swap Event Proof Test (Buy + Sell with FIFO PnL)", () => {
         console.log(`\n  Buy proof:`);
         console.log(`    leaf: ${buyResult.publicInputs.leaf}`);
         console.log(`    pnl: ${buyResult.publicInputs.pnl} (negative: ${buyResult.publicInputs.pnlIsNegative})`);
-        console.log(`    lots after: ${buyResult.remainingNumLots}`);
 
-        // Buy should create 1 lot, PnL = 0
+        // Buy consumes token0 lot. PnL on token0:
+        // proceeds = BUY_AMOUNT_IN * TOKEN0_PRICE, cost = BUY_AMOUNT_IN * TOKEN0_PRICE => PnL = 0
         expect(buyResult.publicInputs.pnl).toBe(0n);
         expect(buyResult.publicInputs.pnlIsNegative).toBe(false);
-        expect(buyResult.remainingNumLots).toBe(1);
-        expect(buyResult.remainingLots[0].amount).toBe(BigInt(amountOut1));
-        expect(buyResult.remainingLots[0].costPerUnit).toBe(TOKEN1_BUY_PRICE);
 
-        // Prove sell (chain lots from buy)
+        // Verify lot state tree: token0 lot consumed, token1 lot created
+        const token1Lots = lotStateTree.getLots(token1.address.toField());
+        expect(token1Lots.numLots).toBe(1);
+        expect(token1Lots.lots[0].amount).toBe(BigInt(amountOut1));
+        expect(token1Lots.lots[0].costPerUnit).toBe(TOKEN1_BUY_PRICE);
+
+        const token0LotsAfterBuy = lotStateTree.getLots(token0.address.toField());
+        expect(token0LotsAfterBuy.numLots).toBe(0);
+
+        // Prove sell (token1 -> token0)
+        // Sell-side = token1 (consumes the lot), Buy-side = token0 (creates new lot)
         const sellResult = await prover.prove(
             { encryptedLog: allEvents[1].ciphertextBuffer, blockNumber: sellBlockNumber },
-            trackedToken,
+            lotStateTree,
             priceFeed.address.toField(),
             priceFeedAssetsSlot,
-            buyResult.remainingLots,
-            buyResult.remainingNumLots,
+            buyBlockNumber, // previous block number
         );
 
         console.log(`\n  Sell proof:`);
         console.log(`    leaf: ${sellResult.publicInputs.leaf}`);
         console.log(`    pnl: ${sellResult.publicInputs.pnl} (negative: ${sellResult.publicInputs.pnlIsNegative})`);
-        console.log(`    lots after: ${sellResult.remainingNumLots}`);
 
-        // Sell should consume the lot, realize PnL
-        // PnL = sellAmount * (SELL_PRICE - BUY_PRICE) = amountOut1 * (300 - 200) = amountOut1 * 100
+        // Sell consumes token1 lot. PnL on token1:
+        // proceeds = amountOut1 * SELL_PRICE, cost = amountOut1 * BUY_PRICE
+        // PnL = amountOut1 * (300 - 200) = amountOut1 * 100
         const expectedPnl = BigInt(amountOut1) * (TOKEN1_SELL_PRICE - TOKEN1_BUY_PRICE);
         console.log(`\n  Expected PnL: ${expectedPnl}`);
         console.log(`  Actual PnL:   ${sellResult.publicInputs.pnl}`);
 
         expect(sellResult.publicInputs.pnl).toBe(expectedPnl);
         expect(sellResult.publicInputs.pnlIsNegative).toBe(false); // gain, not loss
-        expect(sellResult.remainingNumLots).toBe(0); // all lots consumed
 
-        // Lot hash chain: buy's remaining = sell's initial
-        expect(buyResult.publicInputs.remainingLotsHash).toBe(sellResult.publicInputs.initialLotsHash);
+        // Verify lot state tree: token1 lots consumed, token0 lot created
+        const token1LotsAfterSell = lotStateTree.getLots(token1.address.toField());
+        expect(token1LotsAfterSell.numLots).toBe(0);
+
+        const token0LotsAfterSell = lotStateTree.getLots(token0.address.toField());
+        expect(token0LotsAfterSell.numLots).toBe(1);
+        expect(token0LotsAfterSell.lots[0].amount).toBe(BigInt(amountOut2));
+
+        // Lot state root chain: buy's remaining = sell's initial
+        expect(buyResult.publicInputs.remainingLotStateRoot).toBe(sellResult.publicInputs.initialLotStateRoot);
 
         // Verify swap data
         expect(buyResult.swapData.tokenIn).toBe(token0.address.toField().toString());
@@ -313,12 +334,20 @@ describe("Swap Event Proof Test (Buy + Sell with FIFO PnL)", () => {
             swapProver: prover,
         });
 
+        // Fresh lot state tree for aggregation (same initial state)
+        const aggLotStateTree = new LotStateTree();
+        await aggLotStateTree.setLots(
+            token0.address.toField(),
+            [{ amount: BUY_AMOUNT_IN, costPerUnit: TOKEN0_PRICE }],
+            1,
+        );
+
         const aggregateResult = await proofTree.prove(
             [
                 { encryptedLog: allEvents[0].ciphertextBuffer, blockNumber: buyBlockNumber },
                 { encryptedLog: allEvents[1].ciphertextBuffer, blockNumber: sellBlockNumber },
             ],
-            trackedToken,
+            aggLotStateTree,
             priceFeed.address.toField(),
             priceFeedAssetsSlot,
         );
@@ -334,12 +363,12 @@ describe("Swap Event Proof Test (Buy + Sell with FIFO PnL)", () => {
         expect(aggregateResult.publicInputs.pnl).toBe(expectedPnl);
         expect(aggregateResult.publicInputs.pnlIsNegative).toBe(false);
 
-        // All lots consumed
-        expect(aggregateResult.remainingNumLots).toBe(0);
-
         // Verify merkle root = poseidon2Hash([buyLeaf, sellLeaf])
         const expectedRoot = await poseidon2Hash([expectedBuyLeaf, expectedSellLeaf]);
         expect(aggregateResult.publicInputs.root).toBe(expectedRoot.toString());
+
+        // Verify block number
+        expect(aggregateResult.publicInputs.blockNumber).toBe(sellBlockNumber);
 
         console.log(`\n  Expected root: ${expectedRoot.toString()}`);
         console.log(`  Actual root:   ${aggregateResult.publicInputs.root}`);

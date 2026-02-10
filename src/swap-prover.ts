@@ -7,9 +7,10 @@ import type { AztecNode } from '@aztec/aztec.js/node';
 import { decryptLog } from './decrypt';
 import { computeAddressSecret } from '@aztec/stdlib/keys';
 import type { CompleteAddress } from '@aztec/stdlib/contract';
+import { LotStateTree } from './lot-state-tree';
 
 /** Max concurrent lots (must match circuit MAX_LOTS) */
-const MAX_LOTS = 8;
+const MAX_LOTS = 32;
 
 /** Generator index for siloing public leaf indices */
 const GENERATOR_INDEX__PUBLIC_LEAF_INDEX = 23;
@@ -56,7 +57,7 @@ export interface SwapData {
 export interface SwapProofResult {
     /** Final proof bytes */
     proof: Uint8Array;
-    /** Public outputs (6 Fields) */
+    /** Public outputs (7 Fields) */
     publicInputs: {
         /** Poseidon2 hash of swap data */
         leaf: string;
@@ -64,25 +65,23 @@ export interface SwapProofResult {
         pnl: bigint;
         /** True if PnL is negative (loss) */
         pnlIsNegative: boolean;
-        /** Hash of lot state after this swap */
-        remainingLotsHash: string;
-        /** Hash of lot state before this swap */
-        initialLotsHash: string;
+        /** Lot state tree root after this swap */
+        remainingLotStateRoot: string;
+        /** Lot state tree root before this swap */
+        initialLotStateRoot: string;
         /** PriceFeed contract address */
         priceFeedAddress: string;
+        /** Block number of this swap */
+        blockNumber: bigint;
     };
     /** Decoded swap parameters */
     swapData: SwapData;
-    /** Lot state after this swap (for chaining to next proof) */
-    remainingLots: Lot[];
-    /** Number of active lots after this swap */
-    remainingNumLots: number;
 }
 
 /**
  * SwapProver generates a proof for a single swap event.
- * Each swap's encryption is verified, the oracle price is proven via Merkle proof,
- * and FIFO capital gains are computed using i64 arithmetic.
+ * Each swap updates two leaves in the lot state tree (sell-side and buy-side tokens).
+ * The lot state tree is mutated in-place.
  */
 export class SwapProver {
     private config: SwapProverConfig;
@@ -97,23 +96,21 @@ export class SwapProver {
     }
 
     /**
-     * Prove a single swap event with FIFO lot state.
+     * Prove a single swap event with multi-token lot state tree.
      *
      * @param event - Encrypted swap event
-     * @param tokenAddress - The token whose lots we track
+     * @param lotStateTree - Multi-token lot state tree (mutated in-place)
      * @param priceFeedAddress - PriceFeed contract address
      * @param priceFeedAssetsSlot - Storage slot of the PriceFeed `assets` map
-     * @param initialLots - FIFO lots carried from previous proof
-     * @param initialNumLots - Number of active lots
-     * @returns Proof with signed PnL and updated lot state
+     * @param previousBlockNumber - Block number from previous proof (0 for first)
+     * @returns Proof with signed PnL (lot state tree is updated in-place)
      */
     async prove(
         event: { encryptedLog: Buffer; blockNumber: bigint },
-        tokenAddress: Fr,
+        lotStateTree: LotStateTree,
         priceFeedAddress: Fr,
         priceFeedAssetsSlot: Fr,
-        initialLots: Lot[] = [],
-        initialNumLots: number = 0,
+        previousBlockNumber: bigint = 0n,
     ): Promise<SwapProofResult> {
         await this.initialize();
 
@@ -127,36 +124,77 @@ export class SwapProver {
         );
         if (!plaintext) throw new Error('Failed to decrypt swap event');
 
+        // Extract token addresses from plaintext
+        const tokenIn = plaintext[2];
+        const tokenOut = plaintext[3];
+        const amountIn = plaintext[4].toBigInt();
+        const amountOut = plaintext[5].toBigInt();
+
+        console.log(`  token_in: ${tokenIn}, token_out: ${tokenOut}`);
+        console.log(`  amount_in: ${amountIn}, amount_out: ${amountOut}`);
+
+        // Ensure both tokens have slots in the tree
+        const sellIndex = lotStateTree.assignSlot(tokenIn);
+        const buyIndex = lotStateTree.assignSlot(tokenOut);
+
         // Get block header for public data tree root
         const header = await this.config.node.getBlockHeader(Number(event.blockNumber));
         if (!header) throw new Error(`Block header not found for block ${event.blockNumber}`);
         const publicDataTreeRoot = header.state.partial.publicDataTree.root;
 
-        // Only need price witness for the tracked token
-        const tokenSlot = await poseidon2Hash([priceFeedAssetsSlot, tokenAddress]);
-        const treeIndex = await poseidon2HashWithSeparator(
-            [priceFeedAddress, tokenSlot],
-            GENERATOR_INDEX__PUBLIC_LEAF_INDEX,
+        // Get price witnesses for BOTH tokens
+        const sellPriceWitness = await this.getPriceWitness(
+            priceFeedAddress, priceFeedAssetsSlot, tokenIn, event.blockNumber,
         );
-        const witness = await this.config.node.getPublicDataWitness(
-            Number(event.blockNumber), treeIndex,
+        const buyPriceWitness = await this.getPriceWitness(
+            priceFeedAddress, priceFeedAssetsSlot, tokenOut, event.blockNumber,
         );
-        if (!witness) throw new Error('Failed to get token price witness');
 
-        console.log(`  token price: ${witness.leafPreimage.leaf.value}`);
+        console.log(`  sell token price: ${sellPriceWitness.leafPreimage.leaf.value}`);
+        console.log(`  buy token price: ${buyPriceWitness.leafPreimage.leaf.value}`);
+
+        // Get sell-side lots and sibling path from INITIAL tree state
+        const sellData = lotStateTree.getLots(tokenIn);
+        const sellSiblingPath = await lotStateTree.getSiblingPath(sellIndex);
+        const initialRoot = await lotStateTree.getRoot();
+
+        // Mirror circuit sell-side logic in TS to update the tree
+        const sellPrice = sellPriceWitness.leafPreimage.leaf.value.toBigInt();
+        const { lots: newSellLots, numLots: newSellNum } =
+            this.consumeLotsFIFO(sellData.lots, sellData.numLots, amountIn, sellPrice);
+
+        // Update sell leaf in local tree
+        await lotStateTree.setLots(tokenIn, newSellLots, newSellNum);
+
+        // Get buy-side lots and sibling path from INTERMEDIATE tree state
+        const buyData = lotStateTree.getLots(tokenOut);
+        const buySiblingPath = await lotStateTree.getSiblingPath(buyIndex);
+
+        // Mirror circuit buy-side logic in TS
+        const buyPrice = buyPriceWitness.leafPreimage.leaf.value.toBigInt();
+        const newBuyLots = [...buyData.lots];
+        newBuyLots[buyData.numLots] = { amount: amountOut, costPerUnit: buyPrice };
+        const newBuyNum = buyData.numLots + 1;
+
+        // Update buy leaf in local tree
+        await lotStateTree.setLots(tokenOut, newBuyLots, newBuyNum);
 
         // Build circuit inputs
         const circuitInputs = this.prepareCircuitInputs(
             plaintext, event.encryptedLog, event.blockNumber,
-            tokenAddress, priceFeedAddress, priceFeedAssetsSlot,
-            publicDataTreeRoot, witness, initialLots, initialNumLots,
+            initialRoot.toString(),
+            sellData.lots, sellData.numLots, sellIndex, sellSiblingPath,
+            buyData.lots, buyData.numLots, buyIndex, buySiblingPath,
+            priceFeedAddress, priceFeedAssetsSlot,
+            publicDataTreeRoot, sellPriceWitness, buyPriceWitness,
+            previousBlockNumber,
         );
 
         // Execute circuit
         console.log('  Generating witness...');
         const { witness: circuitWitness, returnValue } = await this.noir!.execute(circuitInputs);
-        const [leaf, pnlAbs, pnlIsNeg, remainingLotsHash, initialLotsHash, provenPriceFeed] =
-            returnValue as [string, string, string, string, string, string];
+        const [leaf, pnlAbs, pnlIsNeg, remainingRoot, initRoot, provenPriceFeed, provenBlockNumber] =
+            returnValue as [string, string, string, string, string, string, string];
 
         const pnlMagnitude = BigInt(pnlAbs);
         const isNegative = BigInt(pnlIsNeg) === 1n;
@@ -175,15 +213,11 @@ export class SwapProver {
         if (!isValid) throw new Error('Swap proof verification failed');
         console.log('  Proof verified!');
 
-        // Mirror circuit lot logic in TS for state chaining
-        const { lots: remainingLots, numLots: remainingNumLots } =
-            this.computeRemainingLots(plaintext, tokenAddress, initialLots, initialNumLots, witness);
-
         const swapData: SwapData = {
             tokenIn: plaintext[2].toString(),
             tokenOut: plaintext[3].toString(),
-            amountIn: plaintext[4].toBigInt(),
-            amountOut: plaintext[5].toBigInt(),
+            amountIn,
+            amountOut,
             isExactInput: plaintext[6].toBigInt(),
             blockNumber: event.blockNumber,
         };
@@ -194,30 +228,37 @@ export class SwapProver {
                 leaf,
                 pnl: pnlMagnitude,
                 pnlIsNegative: isNegative,
-                remainingLotsHash,
-                initialLotsHash,
+                remainingLotStateRoot: remainingRoot,
+                initialLotStateRoot: initRoot,
                 priceFeedAddress: provenPriceFeed,
+                blockNumber: BigInt(provenBlockNumber),
             },
             swapData,
-            remainingLots,
-            remainingNumLots,
         };
     }
 
     /**
-     * Build circuit inputs for a single swap.
+     * Build circuit inputs for a single swap with dual-token lot tree.
      */
     private prepareCircuitInputs(
         plaintext: Fr[],
         encryptedLog: Buffer,
         blockNumber: bigint,
-        tokenAddress: Fr,
+        initialLotStateRoot: string,
+        sellLots: Lot[],
+        sellNumLots: number,
+        sellLeafIndex: number,
+        sellSiblingPath: Fr[],
+        buyLots: Lot[],
+        buyNumLots: number,
+        buyLeafIndex: number,
+        buySiblingPath: Fr[],
         priceFeedAddress: Fr,
         priceFeedAssetsSlot: Fr,
         publicDataTreeRoot: Fr,
-        witness: any,
-        initialLots: Lot[],
-        initialNumLots: number,
+        sellPriceWitness: any,
+        buyPriceWitness: any,
+        previousBlockNumber: bigint,
     ): Record<string, unknown> {
         // Plaintext bytes: 7 fields * 32 bytes = 224 bytes
         const plaintextBytes: string[] = [];
@@ -243,18 +284,21 @@ export class SwapProver {
             }
         }
 
-        // Lot state (pad to MAX_LOTS)
-        const lotsInput: Record<string, string>[] = [];
-        for (let i = 0; i < MAX_LOTS; i++) {
-            if (i < initialLots.length && initialLots[i].amount > 0n) {
-                lotsInput.push({
-                    amount: initialLots[i].amount.toString(),
-                    cost_per_unit: initialLots[i].costPerUnit.toString(),
-                });
-            } else {
-                lotsInput.push({ amount: '0', cost_per_unit: '0' });
+        // Format lot arrays (pad to MAX_LOTS)
+        const formatLots = (lots: Lot[]): Record<string, string>[] => {
+            const result: Record<string, string>[] = [];
+            for (let i = 0; i < MAX_LOTS; i++) {
+                if (i < lots.length && lots[i].amount > 0n) {
+                    result.push({
+                        amount: lots[i].amount.toString(),
+                        cost_per_unit: lots[i].costPerUnit.toString(),
+                    });
+                } else {
+                    result.push({ amount: '0', cost_per_unit: '0' });
+                }
             }
-        }
+            return result;
+        };
 
         return {
             plaintext_bytes: plaintextBytes,
@@ -262,66 +306,76 @@ export class SwapProver {
             ciphertext_bytes: ciphertextBytes,
             ivsk_app: this.addressSecret!.toString(),
             block_number: new Fr(blockNumber).toString(),
-            token_address: tokenAddress.toString(),
+            initial_lot_state_root: initialLotStateRoot,
+            sell_lots: formatLots(sellLots),
+            sell_num_lots: sellNumLots.toString(),
+            sell_leaf_index: new Fr(BigInt(sellLeafIndex)).toString(),
+            sell_sibling_path: sellSiblingPath.map(f => f.toString()),
+            buy_lots: formatLots(buyLots),
+            buy_num_lots: buyNumLots.toString(),
+            buy_leaf_index: new Fr(BigInt(buyLeafIndex)).toString(),
+            buy_sibling_path: buySiblingPath.map(f => f.toString()),
             price_feed_address: priceFeedAddress.toString(),
             price_feed_assets_slot: priceFeedAssetsSlot.toString(),
             public_data_tree_root: publicDataTreeRoot.toString(),
-            price_witness: this.formatPriceWitness(witness),
-            initial_lots: lotsInput,
-            initial_num_lots: initialNumLots.toString(),
+            sell_price_witness: this.formatPriceWitness(sellPriceWitness),
+            buy_price_witness: this.formatPriceWitness(buyPriceWitness),
+            previous_block_number: new Fr(previousBlockNumber).toString(),
         };
     }
 
     /**
-     * Mirror the circuit's lot update logic in TypeScript for state chaining.
+     * Consume lots FIFO and return updated lots (mirrors circuit logic).
      */
-    private computeRemainingLots(
-        plaintext: Fr[],
-        tokenAddress: Fr,
-        initialLots: Lot[],
-        initialNumLots: number,
-        witness: any,
+    private consumeLotsFIFO(
+        lots: Lot[],
+        numLots: number,
+        sellAmount: bigint,
+        _sellPrice: bigint,
     ): { lots: Lot[]; numLots: number } {
-        const tokenOut = plaintext[3];
-        const amountIn = plaintext[4].toBigInt();
-        const amountOut = plaintext[5].toBigInt();
-        const tokenPrice = witness.leafPreimage.leaf.value.toBigInt();
-
-        const isBuy = tokenOut.equals(tokenAddress);
-
-        // Clone lots (pad to MAX_LOTS)
-        const lots: Lot[] = [];
+        const lotsCopy: Lot[] = [];
         for (let i = 0; i < MAX_LOTS; i++) {
-            if (i < initialLots.length) {
-                lots.push({ ...initialLots[i] });
+            if (i < lots.length) {
+                lotsCopy.push({ ...lots[i] });
             } else {
-                lots.push({ amount: 0n, costPerUnit: 0n });
+                lotsCopy.push({ amount: 0n, costPerUnit: 0n });
             }
         }
-        let numLots = initialNumLots;
 
-        if (isBuy) {
-            lots[numLots] = { amount: amountOut, costPerUnit: tokenPrice };
-            numLots++;
-        } else {
-            let remaining = amountIn;
-            for (let j = 0; j < MAX_LOTS; j++) {
-                if (remaining > 0n && lots[j].amount > 0n) {
-                    const consumed = remaining < lots[j].amount ? remaining : lots[j].amount;
-                    lots[j].amount -= consumed;
-                    remaining -= consumed;
-                }
+        let remaining = sellAmount;
+        for (let j = 0; j < MAX_LOTS; j++) {
+            if (remaining > 0n && lotsCopy[j].amount > 0n) {
+                const consumed = remaining < lotsCopy[j].amount ? remaining : lotsCopy[j].amount;
+                lotsCopy[j].amount -= consumed;
+                remaining -= consumed;
             }
-            // Compact: remove empty lots, shift to front
-            const compacted: Lot[] = lots.filter(l => l.amount > 0n);
-            numLots = compacted.length;
-            while (compacted.length < MAX_LOTS) {
-                compacted.push({ amount: 0n, costPerUnit: 0n });
-            }
-            return { lots: compacted, numLots };
         }
 
-        return { lots, numLots };
+        // Compact
+        const compacted = lotsCopy.filter(l => l.amount > 0n);
+        const newNumLots = compacted.length;
+        while (compacted.length < MAX_LOTS) {
+            compacted.push({ amount: 0n, costPerUnit: 0n });
+        }
+        return { lots: compacted, numLots: newNumLots };
+    }
+
+    private async getPriceWitness(
+        priceFeedAddress: Fr,
+        priceFeedAssetsSlot: Fr,
+        tokenAddress: Fr,
+        blockNumber: bigint,
+    ): Promise<any> {
+        const tokenSlot = await poseidon2Hash([priceFeedAssetsSlot, tokenAddress]);
+        const treeIndex = await poseidon2HashWithSeparator(
+            [priceFeedAddress, tokenSlot],
+            GENERATOR_INDEX__PUBLIC_LEAF_INDEX,
+        );
+        const witness = await this.config.node.getPublicDataWitness(
+            Number(blockNumber), treeIndex,
+        );
+        if (!witness) throw new Error(`Failed to get price witness for token ${tokenAddress}`);
+        return witness;
     }
 
     private formatPriceWitness(witness: any): Record<string, unknown> {

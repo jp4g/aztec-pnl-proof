@@ -15,13 +15,14 @@ import { poseidon2Hash } from '@aztec/foundation/crypto/poseidon';
 import { retrieveEncryptedEvents } from '../src/event-reader';
 import { SwapProver } from '../src/swap-prover';
 import { SwapProofTree } from '../src/swap-proof-tree';
+import { LotStateTree } from '../src/lot-state-tree';
 
 import individualSwapCircuit from '../circuits/individual_swap/target/individual_swap.json' with { type: 'json' };
 import swapSummaryTreeCircuit from '../circuits/swap_summary_tree/target/swap_summary_tree.json' with { type: 'json' };
 
 const { AZTEC_NODE_URL = "http://localhost:8080" } = process.env;
 
-describe("PnL Proof Test (5 swaps, varying prices)", () => {
+describe("PnL Proof Test (5 swaps, varying prices, multi-token lot tree)", () => {
 
     let node: AztecNode;
     let wallet: AuditableTestWallet;
@@ -48,7 +49,6 @@ describe("PnL Proof Test (5 swaps, varying prices)", () => {
     const TOTAL_SWAP_IN = SWAP_AMOUNTS.reduce((a, b) => a + b, 0n);
 
     // Prices change before each swap (token0_price, token1_price)
-    // With 4-decimal precision convention: 100 = $0.01, 10000 = $1.00
     const PRICE_SCHEDULE: [bigint, bigint][] = [
         [100n, 200n],  // Swap 1: token0=$1.00, token1=$2.00
         [120n, 180n],  // Swap 2: token0 up, token1 down
@@ -128,11 +128,6 @@ describe("PnL Proof Test (5 swaps, varying prices)", () => {
     test("prove PnL from 5 swaps with varying prices", { timeout: 900000 }, async () => {
         const swapper = addresses[1];
 
-        // We track token1 — all 5 swaps are token0→token1, so all are "buys" of token1.
-        // PnL will be 0 (no sells to realize gains). This test validates lot accumulation
-        // across 5 swaps with varying oracle prices, and the full aggregation pipeline.
-        const trackedToken = token1.address.toField();
-
         // Track reserves for computing expected outputs
         let reserve0 = TOKEN0_LIQUIDITY;
         let reserve1 = TOKEN1_LIQUIDITY;
@@ -191,7 +186,7 @@ describe("PnL Proof Test (5 swaps, varying prices)", () => {
         console.log(`  Block numbers: ${blockNumbers.join(', ')}`);
 
         // ========================================
-        // Aggregate swap proofs with FIFO PnL
+        // Aggregate swap proofs with multi-token lot tree
         // ========================================
         console.log("\n=== Generate and aggregate swap proofs ===");
 
@@ -218,12 +213,23 @@ describe("PnL Proof Test (5 swaps, varying prices)", () => {
         });
 
         const priceFeedAssetsSlot = PriceFeedContract.storage.assets.slot;
+
+        // Initialize lot state tree with token0 lot from mint.
+        // The swapper starts with TOTAL_SWAP_IN of token0.
+        // We use the initial token0 price as the cost basis.
+        const lotStateTree = new LotStateTree();
+        await lotStateTree.setLots(
+            token0.address.toField(),
+            [{ amount: TOTAL_SWAP_IN, costPerUnit: PRICE_SCHEDULE[0][0] }],
+            1,
+        );
+
         const result = await proofTree.prove(
             allEvents.slice(0, 5).map((e, i) => ({
                 encryptedLog: e.ciphertextBuffer,
                 blockNumber: blockNumbers[i],
             })),
-            trackedToken,
+            lotStateTree,
             priceFeed.address.toField(),
             priceFeedAssetsSlot,
         );
@@ -232,32 +238,57 @@ describe("PnL Proof Test (5 swaps, varying prices)", () => {
         console.log(`  root: ${result.publicInputs.root}`);
         console.log(`  pnl: ${result.publicInputs.pnl} (negative: ${result.publicInputs.pnlIsNegative})`);
         console.log(`  signedPnl: ${result.signedPnl}`);
-        console.log(`  remainingLotsHash: ${result.publicInputs.remainingLotsHash}`);
-        console.log(`  initialLotsHash: ${result.publicInputs.initialLotsHash}`);
+        console.log(`  remainingLotStateRoot: ${result.publicInputs.remainingLotStateRoot}`);
+        console.log(`  initialLotStateRoot: ${result.publicInputs.initialLotStateRoot}`);
         console.log(`  price_feed_address: ${result.publicInputs.priceFeedAddress}`);
+        console.log(`  block_number: ${result.publicInputs.blockNumber}`);
 
         // ========================================
         // Verify results
         // ========================================
         console.log("\n=== Verify results ===");
 
-        // All swaps are buys of token1, so PnL = 0 (no sells to realize gains)
-        expect(result.signedPnl).toBe(0n);
-        expect(result.publicInputs.pnl).toBe(0n);
-        expect(result.publicInputs.pnlIsNegative).toBe(false);
-
-        // 5 buys -> 5 lots
-        expect(result.remainingNumLots).toBe(5);
-
-        // Each lot should have the amount out from the swap and the oracle price at that block
+        // Each swap sells token0 at the current token0 price.
+        // PnL per swap = SWAP_AMOUNTS[i] * (PRICE_SCHEDULE[i][0] - PRICE_SCHEDULE[0][0])
+        // because the initial cost basis for token0 is PRICE_SCHEDULE[0][0] = 100
+        //
+        // Swap 1: 10e9 * (100 - 100) = 0
+        // Swap 2: 8e9 * (120 - 100) = 160e9
+        // Swap 3: 12e9 * (80 - 100) = -240e9
+        // Swap 4: 6e9 * (150 - 100) = 300e9
+        // Swap 5: 15e9 * (90 - 100) = -150e9
+        // Total: 0 + 160e9 - 240e9 + 300e9 - 150e9 = 70e9
+        let expectedPnl = 0n;
+        const initialCostBasis = PRICE_SCHEDULE[0][0];
         for (let i = 0; i < 5; i++) {
-            expect(result.remainingLots[i].amount).toBe(amountsOut[i]);
-            expect(result.remainingLots[i].costPerUnit).toBe(PRICE_SCHEDULE[i][1]);
-            console.log(`  Lot ${i}: amount=${result.remainingLots[i].amount}, costPerUnit=${result.remainingLots[i].costPerUnit}`);
+            const sellPrice = PRICE_SCHEDULE[i][0];
+            expectedPnl += SWAP_AMOUNTS[i] * (sellPrice - initialCostBasis);
         }
+        console.log(`  Expected total PnL: ${expectedPnl}`);
+        console.log(`  Actual total PnL:   ${result.signedPnl}`);
+
+        expect(result.signedPnl).toBe(expectedPnl);
+
+        // 5 buys of token1 -> 5 token1 lots
+        const token1Lots = lotStateTree.getLots(token1.address.toField());
+        expect(token1Lots.numLots).toBe(5);
+
+        // Each token1 lot should have the amount out and the token1 oracle price at that block
+        for (let i = 0; i < 5; i++) {
+            expect(token1Lots.lots[i].amount).toBe(amountsOut[i]);
+            expect(token1Lots.lots[i].costPerUnit).toBe(PRICE_SCHEDULE[i][1]);
+            console.log(`  Token1 Lot ${i}: amount=${token1Lots.lots[i].amount}, costPerUnit=${token1Lots.lots[i].costPerUnit}`);
+        }
+
+        // Token0 lots should all be consumed
+        const token0Lots = lotStateTree.getLots(token0.address.toField());
+        expect(token0Lots.numLots).toBe(0);
 
         // Verify price feed address
         expect(result.publicInputs.priceFeedAddress).toBe(priceFeed.address.toField().toString());
+
+        // Verify block number is the last swap's block
+        expect(result.publicInputs.blockNumber).toBe(blockNumbers[4]);
 
         // Verify merkle root matches TS-computed
         const expectedLeaves: Fr[] = [];
