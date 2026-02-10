@@ -1,13 +1,18 @@
 import { Fr } from '@aztec/foundation/curves/bn254';
+import { poseidon2Hash, poseidon2HashWithSeparator } from '@aztec/foundation/crypto/poseidon';
 import { Noir } from '@aztec/noir-noir_js';
 import { Barretenberg, UltraHonkBackend } from '@aztec/bb.js';
 import type { CompiledCircuit } from '@aztec/noir-types';
+import type { AztecNode } from '@aztec/aztec.js/node';
 import { decryptLog } from './decrypt';
 import { computeAddressSecret } from '@aztec/stdlib/keys';
 import type { CompleteAddress } from '@aztec/stdlib/contract';
 
-/** MESSAGE_CIPHERTEXT_LEN from Aztec constants (17 fields) */
-const MESSAGE_CIPHERTEXT_LEN = 17;
+/** Max swaps per batch proof (must match circuit MAX_SWAPS) */
+const MAX_SWAPS = 8;
+
+/** Generator index for siloing public leaf indices */
+const GENERATOR_INDEX__PUBLIC_LEAF_INDEX = 23;
 
 /**
  * Configuration for SwapProver
@@ -21,37 +26,49 @@ export interface SwapProverConfig {
     recipientCompleteAddress: CompleteAddress;
     /** Master incoming viewing secret key */
     ivskM: Fr;
+    /** Aztec node client for fetching price witnesses */
+    node: AztecNode;
 }
 
 /**
- * Result of a swap event proof
+ * Decoded swap data from a single event
+ */
+export interface SwapData {
+    tokenIn: string;
+    tokenOut: string;
+    amountIn: bigint;
+    amountOut: bigint;
+    isExactInput: bigint;
+    blockNumber: bigint;
+}
+
+/**
+ * Result of a batch swap proof (up to 8 swaps)
  */
 export interface SwapProofResult {
     /** Final proof bytes */
     proof: Uint8Array;
-    /** Public outputs: (leaf_hash, vkey_marker) */
+    /** Public outputs: (root, vkey_marker, total_value_in, total_value_out, price_feed_address) */
     publicInputs: {
-        /** Leaf hash: poseidon2([block_number, token_in, token_out, amount_in, amount_out, is_exact_input]) */
-        leaf: string;
-        /** Vkey marker: 0 for leaf-level proofs */
+        /** Merkle sub-root of up to 8 leaf hashes */
+        root: string;
+        /** Vkey marker: 0 for batch proofs */
         vkeyMarker: string;
+        /** Sum of amount_in * price_in across all swaps */
+        totalValueIn: bigint;
+        /** Sum of amount_out * price_out across all swaps */
+        totalValueOut: bigint;
+        /** PriceFeed contract address */
+        priceFeedAddress: string;
     };
-    /** Decoded swap parameters (from decryption, not in proof) */
-    swapData: {
-        tokenIn: string;
-        tokenOut: string;
-        amountIn: bigint;
-        amountOut: bigint;
-        isExactInput: bigint;
-        blockNumber: bigint;
-    };
+    /** Decoded swap parameters for each event in the batch */
+    swapData: SwapData[];
 }
 
 /**
- * SwapProver generates a proof that a swap event occurred with specific parameters.
- *
- * It takes a raw encrypted event ciphertext, decrypts it, and generates a ZK proof
- * that the ciphertext decrypts to the asserted swap parameters.
+ * SwapProver generates a batch proof for up to 8 swap events.
+ * Each swap's encryption is verified, prices are proven via Merkle proofs,
+ * and the batch is aggregated into a sub-tree root with summed values.
  */
 export class SwapProver {
     private config: SwapProverConfig;
@@ -66,120 +83,242 @@ export class SwapProver {
     }
 
     /**
-     * Prove a single swap event from its encrypted ciphertext.
+     * Prove a batch of swap events (up to MAX_SWAPS).
      *
-     * @param encryptedLog - Raw encrypted log buffer (includes 32-byte tag prefix)
-     * @param blockNumber - L2 block number where this event was included
-     * @returns Proof and proven swap parameters
+     * @param events - Array of swap events (1 to 8)
+     * @param priceFeedAddress - PriceFeed contract address
+     * @param priceFeedAssetsSlot - Storage slot of the PriceFeed `assets` map
+     * @returns Batch proof with sub-tree root and summed PnL values
      */
-    async prove(encryptedLog: Buffer, blockNumber: bigint): Promise<SwapProofResult> {
+    async prove(
+        events: { encryptedLog: Buffer; blockNumber: bigint }[],
+        priceFeedAddress: Fr,
+        priceFeedAssetsSlot: Fr,
+    ): Promise<SwapProofResult> {
+        if (events.length === 0 || events.length > MAX_SWAPS) {
+            throw new Error(`Expected 1-${MAX_SWAPS} events, got ${events.length}`);
+        }
         await this.initialize();
 
-        console.log(`\n=== SwapProver: Proving swap event ===`);
-        console.log(`  Ciphertext size: ${encryptedLog.length} bytes`);
-        console.log(`  Block number: ${blockNumber}`);
+        console.log(`\n=== SwapProver: Proving batch of ${events.length} swap events ===`);
 
-        // 1. Decrypt the event to get plaintext fields
-        const plaintext = await decryptLog(
-            encryptedLog,
-            this.config.recipientCompleteAddress,
-            this.config.ivskM,
+        // Decrypt all events and fetch witnesses
+        const perSwap: {
+            plaintext: Fr[];
+            encryptedLog: Buffer;
+            blockNumber: bigint;
+            publicDataTreeRoot: Fr;
+            witnessIn: any;
+            witnessOut: any;
+        }[] = [];
+
+        for (let i = 0; i < events.length; i++) {
+            const event = events[i];
+            console.log(`\n--- Decrypting swap ${i + 1}/${events.length} ---`);
+
+            const plaintext = await decryptLog(
+                event.encryptedLog,
+                this.config.recipientCompleteAddress,
+                this.config.ivskM,
+            );
+            if (!plaintext) {
+                throw new Error(`Failed to decrypt swap event ${i}`);
+            }
+
+            const header = await this.config.node.getBlockHeader(Number(event.blockNumber));
+            if (!header) {
+                throw new Error(`Block header not found for block ${event.blockNumber}`);
+            }
+            const publicDataTreeRoot = header.state.partial.publicDataTree.root;
+
+            const slotIn = await poseidon2Hash([priceFeedAssetsSlot, plaintext[2]]);
+            const slotOut = await poseidon2Hash([priceFeedAssetsSlot, plaintext[3]]);
+            const treeIndexIn = await poseidon2HashWithSeparator(
+                [priceFeedAddress, slotIn],
+                GENERATOR_INDEX__PUBLIC_LEAF_INDEX,
+            );
+            const treeIndexOut = await poseidon2HashWithSeparator(
+                [priceFeedAddress, slotOut],
+                GENERATOR_INDEX__PUBLIC_LEAF_INDEX,
+            );
+
+            const witnessIn = await this.config.node.getPublicDataWitness(Number(event.blockNumber), treeIndexIn);
+            if (!witnessIn) throw new Error(`Failed to get price-in witness for swap ${i}`);
+            const witnessOut = await this.config.node.getPublicDataWitness(Number(event.blockNumber), treeIndexOut);
+            if (!witnessOut) throw new Error(`Failed to get price-out witness for swap ${i}`);
+
+            console.log(`  price_in: ${witnessIn.leafPreimage.leaf.value}`);
+            console.log(`  price_out: ${witnessOut.leafPreimage.leaf.value}`);
+
+            perSwap.push({
+                plaintext,
+                encryptedLog: event.encryptedLog,
+                blockNumber: event.blockNumber,
+                publicDataTreeRoot,
+                witnessIn,
+                witnessOut,
+            });
+        }
+
+        // Build circuit inputs (pad to MAX_SWAPS)
+        const circuitInputs = this.prepareCircuitInputs(
+            perSwap,
+            priceFeedAddress,
+            priceFeedAssetsSlot,
         );
-        if (!plaintext) {
-            throw new Error('Failed to decrypt swap event');
-        }
 
-        console.log(`  Decrypted ${plaintext.length} plaintext fields`);
-        for (let i = 0; i < plaintext.length; i++) {
-            console.log(`    [${i}]: ${plaintext[i]}`);
-        }
-
-        // 2. Prepare circuit inputs
-        const circuitInputs = this.prepareCircuitInputs(plaintext, encryptedLog, blockNumber);
-
-        // Decode swap values from plaintext (for caller convenience)
-        const tokenIn = plaintext[2].toString();
-        const tokenOut = plaintext[3].toString();
-        const amountIn = BigInt(plaintext[4].toBigInt());
-        const amountOut = BigInt(plaintext[5].toBigInt());
-        const isExactInput = BigInt(plaintext[6].toBigInt());
-
-        console.log(`  Decoded token_in: ${tokenIn}`);
-        console.log(`  Decoded token_out: ${tokenOut}`);
-        console.log(`  Decoded amount_in: ${amountIn}`);
-        console.log(`  Decoded amount_out: ${amountOut}`);
-        console.log(`  Decoded is_exact_input: ${isExactInput}`);
-
-        // 3. Generate witness
-        console.log('  Generating witness...');
+        // Generate witness
+        console.log('\n  Generating witness...');
         const { witness, returnValue } = await this.noir!.execute(circuitInputs);
-        const [leaf, vkeyMarker] = returnValue as [string, string];
+        const [root, vkeyMarker, totalValueIn, totalValueOut, provenPriceFeed] =
+            returnValue as [string, string, string, string, string];
 
-        console.log(`  Proven leaf: ${leaf}`);
-        console.log(`  Proven block_number: ${blockNumber}`);
+        console.log(`  Root: ${root}`);
+        console.log(`  total_value_in: ${BigInt(totalValueIn)}, total_value_out: ${BigInt(totalValueOut)}`);
 
-        // 4. Generate proof
+        // Generate proof
         console.log('  Generating proof...');
         const proof = await this.backend!.generateProof(witness, { verifierTarget: 'noir-recursive' });
         const isValid = await this.backend!.verifyProof(proof, { verifierTarget: 'noir-recursive' });
         if (!isValid) {
-            throw new Error('Swap proof verification failed');
+            throw new Error('Batch swap proof verification failed');
         }
         console.log('  Proof verified!');
+
+        // Collect swap data for all events
+        const swapData: SwapData[] = perSwap.map(s => ({
+            tokenIn: s.plaintext[2].toString(),
+            tokenOut: s.plaintext[3].toString(),
+            amountIn: BigInt(s.plaintext[4].toBigInt()),
+            amountOut: BigInt(s.plaintext[5].toBigInt()),
+            isExactInput: BigInt(s.plaintext[6].toBigInt()),
+            blockNumber: s.blockNumber,
+        }));
 
         return {
             proof: proof.proof,
             publicInputs: {
-                leaf,
+                root,
                 vkeyMarker,
+                totalValueIn: BigInt(totalValueIn),
+                totalValueOut: BigInt(totalValueOut),
+                priceFeedAddress: provenPriceFeed,
             },
-            swapData: {
-                tokenIn,
-                tokenOut,
-                amountIn,
-                amountOut,
-                isExactInput,
-                blockNumber,
-            },
+            swapData,
         };
     }
 
     /**
-     * Prepare circuit inputs from decrypted plaintext and raw ciphertext.
+     * Build circuit inputs for a batch of swaps, padding unused slots with zeros.
      */
     private prepareCircuitInputs(
-        plaintext: Fr[],
-        encryptedLogBuffer: Buffer,
-        blockNumber: bigint,
-    ): { plaintext: { storage: string[]; len: string }; ciphertext: string[]; ivsk_app: string; block_number: string } {
-        // Convert plaintext to BoundedVec format (max capacity 14)
-        const plaintextStorage = plaintext.map(f => f.toString());
-        const plaintextLen = plaintextStorage.length;
-        while (plaintextStorage.length < 14) {
-            plaintextStorage.push("0");
-        }
+        swaps: {
+            plaintext: Fr[];
+            encryptedLog: Buffer;
+            blockNumber: bigint;
+            publicDataTreeRoot: Fr;
+            witnessIn: any;
+            witnessOut: any;
+        }[],
+        priceFeedAddress: Fr,
+        priceFeedAssetsSlot: Fr,
+    ): Record<string, unknown> {
+        const allPlaintextBytes: string[][] = [];
+        const allEphPkX: string[] = [];
+        const allCiphertextBytes: string[][] = [];
+        const allBlockNumbers: string[] = [];
+        const allPublicDataTreeRoots: string[] = [];
+        const allPriceWitnesses: Record<string, unknown>[][] = [];
 
-        // Parse ciphertext: skip 32-byte tag, then read MESSAGE_CIPHERTEXT_LEN fields
-        const ciphertextWithoutTag = encryptedLogBuffer.slice(32);
-        const ciphertextFields: string[] = [];
+        for (let i = 0; i < MAX_SWAPS; i++) {
+            if (i < swaps.length) {
+                const s = swaps[i];
 
-        const paddedBuffer = Buffer.alloc(MESSAGE_CIPHERTEXT_LEN * 32);
-        ciphertextWithoutTag.copy(paddedBuffer, 0, 0, Math.min(ciphertextWithoutTag.length, paddedBuffer.length));
+                // Plaintext bytes: 7 fields * 32 bytes = 224 bytes
+                const plaintextBytes: string[] = [];
+                for (const field of s.plaintext) {
+                    const buf = field.toBuffer();
+                    for (const byte of buf) {
+                        plaintextBytes.push(byte.toString());
+                    }
+                }
+                allPlaintextBytes.push(plaintextBytes);
 
-        for (let i = 0; i < MESSAGE_CIPHERTEXT_LEN; i++) {
-            const chunk = paddedBuffer.slice(i * 32, (i + 1) * 32);
-            const field = Fr.fromBuffer(chunk);
-            ciphertextFields.push(field.toString());
+                // Ciphertext: skip 32-byte tag
+                const ciphertextWithoutTag = s.encryptedLog.slice(32);
+                const ephPkX = Fr.fromBuffer(ciphertextWithoutTag.slice(0, 32));
+                allEphPkX.push(ephPkX.toString());
+
+                // Remaining 16 fields -> unpack to 31 bytes each = 496 bytes
+                const ciphertextBytes: string[] = [];
+                const restBuffer = ciphertextWithoutTag.slice(32);
+                const paddedRest = Buffer.alloc(16 * 32);
+                restBuffer.copy(paddedRest, 0, 0, Math.min(restBuffer.length, paddedRest.length));
+                for (let f = 0; f < 16; f++) {
+                    for (let j = 1; j < 32; j++) {
+                        ciphertextBytes.push(paddedRest[f * 32 + j].toString());
+                    }
+                }
+                allCiphertextBytes.push(ciphertextBytes);
+
+                allBlockNumbers.push(new Fr(s.blockNumber).toString());
+                allPublicDataTreeRoots.push(s.publicDataTreeRoot.toString());
+
+                allPriceWitnesses.push([
+                    this.formatPriceWitness(s.witnessIn),
+                    this.formatPriceWitness(s.witnessOut),
+                ]);
+            } else {
+                // Padding: zeros for inactive slots
+                allPlaintextBytes.push(new Array(224).fill('0'));
+                allEphPkX.push('0');
+                allCiphertextBytes.push(new Array(496).fill('0'));
+                allBlockNumbers.push('0');
+                allPublicDataTreeRoots.push('0');
+                allPriceWitnesses.push([
+                    this.zeroPriceWitness(),
+                    this.zeroPriceWitness(),
+                ]);
+            }
         }
 
         return {
-            plaintext: {
-                storage: plaintextStorage,
-                len: plaintextLen.toString(),
-            },
-            ciphertext: ciphertextFields,
+            num_swaps: swaps.length.toString(),
+            plaintext_bytes: allPlaintextBytes,
+            eph_pk_x: allEphPkX,
+            ciphertext_bytes: allCiphertextBytes,
             ivsk_app: this.addressSecret!.toString(),
-            block_number: new Fr(blockNumber).toString(),
+            block_numbers: allBlockNumbers,
+            price_feed_address: priceFeedAddress.toString(),
+            price_feed_assets_slot: priceFeedAssetsSlot.toString(),
+            public_data_tree_roots: allPublicDataTreeRoots,
+            price_witnesses: allPriceWitnesses,
+        };
+    }
+
+    private formatPriceWitness(witness: any): Record<string, unknown> {
+        return {
+            leaf_preimage: {
+                slot: witness.leafPreimage.leaf.slot.toString(),
+                value: witness.leafPreimage.leaf.value.toString(),
+                next_slot: witness.leafPreimage.nextKey.toString(),
+                next_index: new Fr(BigInt(witness.leafPreimage.nextIndex)).toString(),
+            },
+            witness_index: new Fr(BigInt(witness.index)).toString(),
+            witness_path: witness.siblingPath.toFields().map((f: Fr) => f.toString()),
+        };
+    }
+
+    private zeroPriceWitness(): Record<string, unknown> {
+        return {
+            leaf_preimage: {
+                slot: '0',
+                value: '0',
+                next_slot: '0',
+                next_index: '0',
+            },
+            witness_index: '0',
+            witness_path: new Array(40).fill('0'),
         };
     }
 

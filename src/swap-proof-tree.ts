@@ -3,10 +3,13 @@ import { Noir } from '@aztec/noir-noir_js';
 import { Barretenberg, UltraHonkBackend } from '@aztec/bb.js';
 import type { CompiledCircuit } from '@aztec/noir-types';
 import { getZeroHashes } from './imt';
-import type { SwapProver, SwapProofResult } from './swap-prover';
+import type { SwapProver, SwapProofResult, SwapData } from './swap-prover';
 
 /** Number of public inputs per child proof */
-const NUM_PUBLIC_INPUTS = 2;
+const NUM_PUBLIC_INPUTS = 5;
+
+/** Max swaps per batch (must match circuit MAX_SWAPS) */
+const BATCH_SIZE = 8;
 
 /**
  * Configuration for SwapProofTree
@@ -18,7 +21,7 @@ export interface SwapProofTreeConfig {
     leafCircuit: CompiledCircuit;
     /** Compiled swap_summary_tree circuit */
     summaryCircuit: CompiledCircuit;
-    /** SwapProver instance (for generating leaf proofs) */
+    /** SwapProver instance (for generating batch proofs) */
     swapProver: SwapProver;
 }
 
@@ -34,9 +37,17 @@ export interface SwapProofTreeResult {
         root: string;
         /** Summary circuit vkey hash */
         vkeyHash: string;
+        /** Total value_in across all swaps */
+        totalValueIn: bigint;
+        /** Total value_out across all swaps */
+        totalValueOut: bigint;
+        /** PriceFeed contract address */
+        priceFeedAddress: string;
     };
+    /** PnL = totalValueOut - totalValueIn */
+    pnl: bigint;
     /** Individual swap data from each leaf */
-    swapData: SwapProofResult['swapData'][];
+    swapData: SwapData[];
 }
 
 /**
@@ -45,12 +56,15 @@ export interface SwapProofTreeResult {
 interface ProofArtifact {
     proof: Uint8Array;
     proofAsFields: string[];
-    publicInputs: string[]; // [leaf_or_root, vkey_marker]
+    publicInputs: string[]; // [root, vkey_marker, value_in, value_out, price_feed_address]
 }
 
 /**
- * SwapProofTree aggregates multiple swap leaf proofs into a single
- * recursive summary proof with a merkle root.
+ * SwapProofTree aggregates batch swap proofs into a single
+ * recursive summary proof with a merkle root and total PnL.
+ *
+ * Each batch proof covers up to 8 swaps. For <= 8 swaps total,
+ * only a single batch proof is needed (no summary tree).
  */
 export class SwapProofTree {
     private config: SwapProofTreeConfig;
@@ -74,29 +88,35 @@ export class SwapProofTree {
      * Prove all swap events and aggregate into a single summary proof.
      *
      * @param events - Array of { encryptedLog, blockNumber } for each swap
-     * @returns Aggregated proof with merkle root
+     * @param priceFeedAddress - PriceFeed contract address
+     * @param priceFeedAssetsSlot - Storage slot of the PriceFeed `assets` map
+     * @returns Aggregated proof with merkle root and total PnL
      */
     async prove(
         events: { encryptedLog: Buffer; blockNumber: bigint }[],
+        priceFeedAddress: Fr,
+        priceFeedAssetsSlot: Fr,
     ): Promise<SwapProofTreeResult> {
         await this.initialize();
 
         console.log(`\n=== SwapProofTree: Aggregating ${events.length} swap proofs ===`);
 
-        // Step 1: Prove all leaves
-        const leafResults: SwapProofResult[] = [];
-        const leafArtifacts: ProofArtifact[] = [];
+        // Step 1: Prove batches of up to BATCH_SIZE swaps
+        const batchResults: SwapProofResult[] = [];
+        const batchArtifacts: ProofArtifact[] = [];
 
-        for (let i = 0; i < events.length; i++) {
-            const event = events[i];
-            console.log(`\n--- Proving leaf ${i + 1}/${events.length} ---`);
+        for (let i = 0; i < events.length; i += BATCH_SIZE) {
+            const batch = events.slice(i, Math.min(i + BATCH_SIZE, events.length));
+            const batchIdx = Math.floor(i / BATCH_SIZE);
+            console.log(`\n--- Proving batch ${batchIdx + 1} (${batch.length} swaps) ---`);
 
             const result = await this.config.swapProver.prove(
-                event.encryptedLog,
-                event.blockNumber,
+                batch,
+                priceFeedAddress,
+                priceFeedAssetsSlot,
             );
 
-            // Extract vkey artifacts from the first leaf proof
+            // Extract vkey artifacts from the first batch proof
             if (!this.leafVkAsFields) {
                 const artifacts = await this.leafBackend!.generateRecursiveProofArtifacts(
                     result.proof,
@@ -104,34 +124,47 @@ export class SwapProofTree {
                 );
                 this.leafVkAsFields = artifacts.vkAsFields;
                 this.leafVkHash = artifacts.vkHash;
-                console.log(`  Leaf vkey hash: ${this.leafVkHash}`);
+                console.log(`  Batch vkey hash: ${this.leafVkHash}`);
             }
 
             const proofAsFields = this.proofBytesToFields(result.proof);
 
-            leafResults.push(result);
-            leafArtifacts.push({
+            batchResults.push(result);
+            batchArtifacts.push({
                 proof: result.proof,
                 proofAsFields,
-                publicInputs: [result.publicInputs.leaf, result.publicInputs.vkeyMarker],
+                publicInputs: [
+                    result.publicInputs.root,
+                    result.publicInputs.vkeyMarker,
+                    result.publicInputs.totalValueIn.toString(),
+                    result.publicInputs.totalValueOut.toString(),
+                    result.publicInputs.priceFeedAddress,
+                ],
             });
         }
 
-        console.log(`\nLeaf proofs generated: ${leafArtifacts.length}`);
+        console.log(`\nBatch proofs generated: ${batchArtifacts.length}`);
 
-        // Step 2: Build tree recursively
-        const finalProof = await this.buildTree(leafArtifacts);
+        // Step 2: Build recursive tree from batch proofs
+        // Always wrap in summary tree for uniform proof structure (privacy)
+        const finalProof = await this.buildTree(batchArtifacts);
         console.log(`\nFinal proof generated!`);
 
-        const [root, vkeyHash] = finalProof.publicInputs;
+        const [root, vkeyHash, totalValueIn, totalValueOut, priceFeedAddr] = finalProof.publicInputs;
+        const totalIn = BigInt(totalValueIn);
+        const totalOut = BigInt(totalValueOut);
 
         return {
             proof: finalProof.proof,
             publicInputs: {
                 root,
                 vkeyHash,
+                totalValueIn: totalIn,
+                totalValueOut: totalOut,
+                priceFeedAddress: priceFeedAddr,
             },
-            swapData: leafResults.map(r => r.swapData),
+            pnl: totalOut - totalIn,
+            swapData: batchResults.flatMap(r => r.swapData),
         };
     }
 
@@ -216,7 +249,7 @@ export class SwapProofTree {
 
         const hasRight = right !== null;
         const emptyProof = new Array(left.proofAsFields.length).fill('0x0');
-        const emptyPublicInputs = ['0x0', '0x0'];
+        const emptyPublicInputs = ['0x0', '0x0', '0x0', '0x0', '0x0'];
         const zeroLeafForLevel = this.zeroHashes![level];
 
         // Pre-compute summary vkey hash if needed
@@ -246,7 +279,8 @@ export class SwapProofTree {
         };
 
         const { witness, returnValue } = await this.summaryNoir!.execute(summaryInputs);
-        const [root, outVkeyHash] = returnValue as [string, string];
+        const [root, outVkeyHash, totalValueIn, totalValueOut, priceFeedAddr] =
+            returnValue as [string, string, string, string, string];
 
         const proof = await this.summaryBackend!.generateProof(witness, {
             verifierTarget: 'noir-recursive',
@@ -271,12 +305,13 @@ export class SwapProofTree {
         const proofAsFields = this.proofBytesToFields(proof.proof);
 
         console.log(`  Root: ${root}`);
+        console.log(`  PnL so far: value_in=${BigInt(totalValueIn)}, value_out=${BigInt(totalValueOut)}`);
         console.log(`  Proof: valid`);
 
         return {
             proof: proof.proof,
             proofAsFields,
-            publicInputs: [root, outVkeyHash],
+            publicInputs: [root, outVkeyHash, totalValueIn, totalValueOut, priceFeedAddr],
         };
     }
 
@@ -304,7 +339,7 @@ export class SwapProofTree {
         console.log('  Pre-computing summary vkey hash...');
 
         const emptyProof = new Array(sampleProof.proofAsFields.length).fill('0x0');
-        const emptyPublicInputs = ['0x0', '0x0'];
+        const emptyPublicInputs = ['0x0', '0x0', '0x0', '0x0', '0x0'];
 
         const throwawayInputs = {
             verification_key: vkAsFields,

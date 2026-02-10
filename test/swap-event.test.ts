@@ -4,6 +4,7 @@ import { getInitialTestAccountsData } from '@aztec/accounts/testing';
 import { AztecAddress } from '@aztec/aztec.js/addresses';
 import { createAztecNodeClient, type AztecNode } from "@aztec/aztec.js/node";
 import { TokenContract } from '@aztec/noir-contracts.js/Token';
+import { PriceFeedContract } from '@aztec/noir-contracts.js/PriceFeed';
 import { AMMContract } from '../src/artifacts/AMM';
 import { precision } from "../src/utils";
 import { AuditableTestWallet } from "@aztec/note-collector";
@@ -29,6 +30,7 @@ describe("Swap Event Proof Test", () => {
     let token1: TokenContract;
     let liquidityToken: TokenContract;
     let amm: AMMContract;
+    let priceFeed: PriceFeedContract;
     let bb: Barretenberg;
 
     // Initial AMM liquidity (use 9 decimals to avoid u128 overflow in AMM math)
@@ -39,6 +41,10 @@ describe("Swap Event Proof Test", () => {
     // Swap amounts
     const SWAP1_AMOUNT_IN = precision(10n, DECIMALS);
     const SWAP2_AMOUNT_IN = precision(5n, DECIMALS);
+
+    // Prices for PriceFeed
+    const TOKEN0_PRICE = 100n;
+    const TOKEN1_PRICE = 200n;
 
     before(async () => {
         console.log("Initializing Barretenberg...");
@@ -58,46 +64,41 @@ describe("Swap Event Proof Test", () => {
             addresses.push(manager.address);
         }
 
+        // Deploy PriceFeed
+        console.log("Deploying PriceFeed...");
+        priceFeed = await PriceFeedContract.deploy(wallet).send({ from: addresses[0] }).deployed();
+        console.log(`  PriceFeed: ${priceFeed.address}`);
+
         // Deploy token0
         console.log("Deploying token0...");
         token0 = await TokenContract.deploy(
-            wallet,
-            addresses[0],
-            "Token Zero",
-            "TK0",
-            18,
+            wallet, addresses[0], "Token Zero", "TK0", 18,
         ).send({ from: addresses[0] }).deployed();
         console.log(`  token0: ${token0.address}`);
 
         // Deploy token1
         console.log("Deploying token1...");
         token1 = await TokenContract.deploy(
-            wallet,
-            addresses[0],
-            "Token One",
-            "TK1",
-            18,
+            wallet, addresses[0], "Token One", "TK1", 18,
         ).send({ from: addresses[0] }).deployed();
         console.log(`  token1: ${token1.address}`);
+
+        // Set prices
+        console.log("Setting prices...");
+        await priceFeed.methods.set_price(token0.address.toField(), TOKEN0_PRICE).send({ from: addresses[0] }).wait();
+        await priceFeed.methods.set_price(token1.address.toField(), TOKEN1_PRICE).send({ from: addresses[0] }).wait();
 
         // Deploy liquidity token
         console.log("Deploying liquidity token...");
         liquidityToken = await TokenContract.deploy(
-            wallet,
-            addresses[0],
-            "LP Token",
-            "LP",
-            18,
+            wallet, addresses[0], "LP Token", "LP", 18,
         ).send({ from: addresses[0] }).deployed();
         console.log(`  liquidity token: ${liquidityToken.address}`);
 
         // Deploy our custom AMM (with swap event emission)
         console.log("Deploying AMM...");
         amm = await AMMContract.deploy(
-            wallet,
-            token0.address,
-            token1.address,
-            liquidityToken.address,
+            wallet, token0.address, token1.address, liquidityToken.address,
         ).send({ from: addresses[0] }).deployed();
         console.log(`  AMM: ${amm.address}`);
 
@@ -115,6 +116,7 @@ describe("Swap Event Proof Test", () => {
 
     test("prove and aggregate swap events", { timeout: 600000 }, async () => {
         const swapper = addresses[1];
+        const priceFeedAssetsSlot = PriceFeedContract.storage.assets.slot;
 
         // ========================================
         // STEP 1: Execute first swap (exact tokens in)
@@ -144,7 +146,6 @@ describe("Swap Event Proof Test", () => {
         // ========================================
         console.log("\n=== STEP 2: Execute second swap ===");
 
-        // After first swap, reserves have changed. Query new reserves.
         const newToken0Reserve = TOKEN0_LIQUIDITY + SWAP1_AMOUNT_IN;
         const newToken1Reserve = TOKEN1_LIQUIDITY - BigInt(amountOutMin1);
 
@@ -200,29 +201,38 @@ describe("Swap Event Proof Test", () => {
             circuit: individualSwapCircuit as CompiledCircuit,
             recipientCompleteAddress,
             ivskM,
+            node,
         });
 
         // Prove first swap
         const event1BlockNumber = BigInt(allEvents[0].blockNumber);
-        const result1 = await prover.prove(allEvents[0].ciphertextBuffer, event1BlockNumber);
+        const result1 = await prover.prove(
+            allEvents[0].ciphertextBuffer,
+            event1BlockNumber,
+            priceFeed.address.toField(),
+            priceFeedAssetsSlot,
+        );
 
         console.log(`\n  Swap 1 proof:`);
         console.log(`    leaf: ${result1.publicInputs.leaf}`);
         console.log(`    vkeyMarker: ${result1.publicInputs.vkeyMarker}`);
-        console.log(`    token_in: ${result1.swapData.tokenIn}`);
-        console.log(`    amount_in: ${result1.swapData.amountIn}`);
-        console.log(`    amount_out: ${result1.swapData.amountOut}`);
+        console.log(`    valueIn: ${result1.publicInputs.valueIn}`);
+        console.log(`    valueOut: ${result1.publicInputs.valueOut}`);
 
         // Prove second swap
         const event2BlockNumber = BigInt(allEvents[1].blockNumber);
-        const result2 = await prover.prove(allEvents[1].ciphertextBuffer, event2BlockNumber);
+        const result2 = await prover.prove(
+            allEvents[1].ciphertextBuffer,
+            event2BlockNumber,
+            priceFeed.address.toField(),
+            priceFeedAssetsSlot,
+        );
 
         console.log(`\n  Swap 2 proof:`);
         console.log(`    leaf: ${result2.publicInputs.leaf}`);
         console.log(`    vkeyMarker: ${result2.publicInputs.vkeyMarker}`);
-        console.log(`    token_in: ${result2.swapData.tokenIn}`);
-        console.log(`    amount_in: ${result2.swapData.amountIn}`);
-        console.log(`    amount_out: ${result2.swapData.amountOut}`);
+        console.log(`    valueIn: ${result2.publicInputs.valueIn}`);
+        console.log(`    valueOut: ${result2.publicInputs.valueOut}`);
 
         // Verify individual proof results
         expect(BigInt(result1.publicInputs.vkeyMarker)).toBe(0n);
@@ -275,14 +285,21 @@ describe("Swap Event Proof Test", () => {
             swapProver: prover,
         });
 
-        const aggregateResult = await proofTree.prove([
-            { encryptedLog: allEvents[0].ciphertextBuffer, blockNumber: event1BlockNumber },
-            { encryptedLog: allEvents[1].ciphertextBuffer, blockNumber: event2BlockNumber },
-        ]);
+        const aggregateResult = await proofTree.prove(
+            [
+                { encryptedLog: allEvents[0].ciphertextBuffer, blockNumber: event1BlockNumber },
+                { encryptedLog: allEvents[1].ciphertextBuffer, blockNumber: event2BlockNumber },
+            ],
+            priceFeed.address.toField(),
+            priceFeedAssetsSlot,
+        );
 
         console.log(`\n=== AGGREGATE PROOF RESULT ===`);
         console.log(`  root: ${aggregateResult.publicInputs.root}`);
         console.log(`  vkeyHash: ${aggregateResult.publicInputs.vkeyHash}`);
+        console.log(`  totalValueIn: ${aggregateResult.publicInputs.totalValueIn}`);
+        console.log(`  totalValueOut: ${aggregateResult.publicInputs.totalValueOut}`);
+        console.log(`  PnL: ${aggregateResult.pnl}`);
         console.log(`  Proof size: ${aggregateResult.proof.length} bytes`);
 
         // Verify merkle root matches TS-computed poseidon2Hash([leaf1, leaf2])

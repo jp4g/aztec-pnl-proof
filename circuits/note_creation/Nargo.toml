@@ -1,7 +1,0 @@
-[package]
-name = "note_creation"
-type = "bin"
-authors = [""]
-
-[dependencies]
-protocol_types = { path = "../../../aztec-packages/noir-projects/noir-protocol-circuits/crates/types" }

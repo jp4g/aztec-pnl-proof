@@ -1,7 +1,0 @@
-[package]
-name = "spot_price"
-type = "bin"
-authors = [""]
-
-[dependencies]
-protocol_types = { path = "../../../aztec-packages/noir-projects/noir-protocol-circuits/crates/types" }

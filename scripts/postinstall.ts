@@ -61,14 +61,6 @@ async function postinstall() {
     console.log('✓ AMM artifact generated');
 
     // Compile Noir circuits
-    console.log('Compiling spot_price circuit...');
-    await $`cd circuits/spot_price && nargo compile`;
-    console.log('✓ spot_price compiled');
-
-    console.log('Compiling note_creation circuit...');
-    await $`cd circuits/note_creation && nargo compile`;
-    console.log('✓ note_creation compiled');
-
     console.log('Compiling individual_swap circuit...');
     await $`cd circuits/individual_swap && nargo compile`;
     console.log('✓ individual_swap compiled');

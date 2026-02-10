@@ -1,0 +1,491 @@
+<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg version="1.1" width="1200" height="214" onload="init(evt)" viewBox="0 0 1200 214" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:fg="http://github.com/jonhoo/inferno"><!--Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples.--><!--NOTES: --><defs><linearGradient id="background" y1="0" y2="1" x1="0" x2="0"><stop stop-color="#eeeeee" offset="5%"/><stop stop-color="#eeeeb0" offset="95%"/></linearGradient></defs><style type="text/css">
+text { font-family:monospace; font-size:12px }
+#title { text-anchor:middle; font-size:17px; }
+#matched { text-anchor:end; }
+#search { text-anchor:end; opacity:0.1; cursor:pointer; }
+#search:hover, #search.show { opacity:1; }
+#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+#unzoom { cursor:pointer; }
+#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+.hide { display:none; }
+.parent { opacity:0.5; }
+</style><script type="text/ecmascript"><![CDATA[
+        var nametype = 'Function:';
+        var fontsize = 12;
+        var fontwidth = 0.59;
+        var xpad = 10;
+        var inverted = false;
+        var searchcolor = 'rgb(230,0,230)';
+        var fluiddrawing = true;
+        var truncate_text_right = true;
+    ]]><![CDATA["use strict";
+var details, searchbtn, unzoombtn, matchedtxt, svg, searching, frames, known_font_width;
+function init(evt) {
+    details = document.getElementById("details").firstChild;
+    searchbtn = document.getElementById("search");
+    unzoombtn = document.getElementById("unzoom");
+    matchedtxt = document.getElementById("matched");
+    svg = document.getElementsByTagName("svg")[0];
+    frames = document.getElementById("frames");
+    known_font_width = get_monospace_width(frames);
+    total_samples = parseInt(frames.attributes.total_samples.value);
+    searching = 0;
+
+    // Use GET parameters to restore a flamegraph's state.
+    var restore_state = function() {
+        var params = get_params();
+        if (params.x && params.y)
+            zoom(find_group(document.querySelector('[*|x="' + params.x + '"][y="' + params.y + '"]')));
+        if (params.s)
+            search(params.s);
+    };
+
+    if (fluiddrawing) {
+        // Make width dynamic so the SVG fits its parent's width.
+        svg.removeAttribute("width");
+        // Edge requires us to have a viewBox that gets updated with size changes.
+        var isEdge = /Edge\/\d./i.test(navigator.userAgent);
+        if (!isEdge) {
+            svg.removeAttribute("viewBox");
+        }
+        var update_for_width_change = function() {
+            if (isEdge) {
+                svg.attributes.viewBox.value = "0 0 " + svg.width.baseVal.value + " " + svg.height.baseVal.value;
+            }
+
+            // Keep consistent padding on left and right of frames container.
+            frames.attributes.width.value = svg.width.baseVal.value - xpad * 2;
+
+            // Text truncation needs to be adjusted for the current width.
+            update_text_for_elements(frames.children);
+
+            // Keep search elements at a fixed distance from right edge.
+            var svgWidth = svg.width.baseVal.value;
+            searchbtn.attributes.x.value = svgWidth - xpad;
+            matchedtxt.attributes.x.value = svgWidth - xpad;
+        };
+        window.addEventListener('resize', function() {
+            update_for_width_change();
+        });
+        // This needs to be done asynchronously for Safari to work.
+        setTimeout(function() {
+            unzoom();
+            update_for_width_change();
+            restore_state();
+        }, 0);
+    } else {
+        restore_state();
+    }
+}
+// event listeners
+window.addEventListener("click", function(e) {
+    var target = find_group(e.target);
+    if (target) {
+        if (target.nodeName == "a") {
+            if (e.ctrlKey === false) return;
+            e.preventDefault();
+        }
+        if (target.classList.contains("parent")) unzoom();
+        zoom(target);
+
+        // set parameters for zoom state
+        var el = target.querySelector("rect");
+        if (el && el.attributes && el.attributes.y && el.attributes["fg:x"]) {
+            var params = get_params()
+            params.x = el.attributes["fg:x"].value;
+            params.y = el.attributes.y.value;
+            history.replaceState(null, null, parse_params(params));
+        }
+    }
+    else if (e.target.id == "unzoom") {
+        unzoom();
+
+        // remove zoom state
+        var params = get_params();
+        if (params.x) delete params.x;
+        if (params.y) delete params.y;
+        history.replaceState(null, null, parse_params(params));
+    }
+    else if (e.target.id == "search") search_prompt();
+}, false)
+// mouse-over for info
+// show
+window.addEventListener("mouseover", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = nametype + " " + g_to_text(target);
+}, false)
+// clear
+window.addEventListener("mouseout", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = ' ';
+}, false)
+// ctrl-F for search
+window.addEventListener("keydown",function (e) {
+    if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+        e.preventDefault();
+        search_prompt();
+    }
+}, false)
+// functions
+function get_params() {
+    var params = {};
+    var paramsarr = window.location.search.substr(1).split('&');
+    for (var i = 0; i < paramsarr.length; ++i) {
+        var tmp = paramsarr[i].split("=");
+        if (!tmp[0] || !tmp[1]) continue;
+        params[tmp[0]]  = decodeURIComponent(tmp[1]);
+    }
+    return params;
+}
+function parse_params(params) {
+    var uri = "?";
+    for (var key in params) {
+        uri += key + '=' + encodeURIComponent(params[key]) + '&';
+    }
+    if (uri.slice(-1) == "&")
+        uri = uri.substring(0, uri.length - 1);
+    if (uri == '?')
+        uri = window.location.href.split('?')[0];
+    return uri;
+}
+function find_child(node, selector) {
+    var children = node.querySelectorAll(selector);
+    if (children.length) return children[0];
+    return;
+}
+function find_group(node) {
+    var parent = node.parentElement;
+    if (!parent) return;
+    if (parent.id == "frames") return node;
+    return find_group(parent);
+}
+function orig_save(e, attr, val) {
+    if (e.attributes["fg:orig_" + attr] != undefined) return;
+    if (e.attributes[attr] == undefined) return;
+    if (val == undefined) val = e.attributes[attr].value;
+    e.setAttribute("fg:orig_" + attr, val);
+}
+function orig_load(e, attr) {
+    if (e.attributes["fg:orig_"+attr] == undefined) return;
+    e.attributes[attr].value = e.attributes["fg:orig_" + attr].value;
+    e.removeAttribute("fg:orig_" + attr);
+}
+function g_to_text(e) {
+    var text = find_child(e, "title").firstChild.nodeValue;
+    return (text)
+}
+function g_to_func(e) {
+    var func = g_to_text(e);
+    // if there's any manipulation we want to do to the function
+    // name before it's searched, do it here before returning.
+    return (func);
+}
+function get_monospace_width(frames) {
+    // Given the id="frames" element, return the width of text characters if
+    // this is a monospace font, otherwise return 0.
+    text = find_child(frames.children[0], "text");
+    originalContent = text.textContent;
+    text.textContent = "!";
+    bangWidth = text.getComputedTextLength();
+    text.textContent = "W";
+    wWidth = text.getComputedTextLength();
+    text.textContent = originalContent;
+    if (bangWidth === wWidth) {
+        return bangWidth;
+    } else {
+        return 0;
+    }
+}
+function update_text_for_elements(elements) {
+    // In order to render quickly in the browser, you want to do one pass of
+    // reading attributes, and one pass of mutating attributes. See
+    // https://web.dev/avoid-large-complex-layouts-and-layout-thrashing/ for details.
+
+    // Fall back to inefficient calculation, if we're variable-width font.
+    // TODO This should be optimized somehow too.
+    if (known_font_width === 0) {
+        for (var i = 0; i < elements.length; i++) {
+            update_text(elements[i]);
+        }
+        return;
+    }
+
+    var textElemNewAttributes = [];
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var r = find_child(e, "rect");
+        var t = find_child(e, "text");
+        var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+        var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+        var newX = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+        // Smaller than this size won't fit anything
+        if (w < 2 * known_font_width) {
+            textElemNewAttributes.push([newX, ""]);
+            continue;
+        }
+
+        // Fit in full text width
+        if (txt.length * known_font_width < w) {
+            textElemNewAttributes.push([newX, txt]);
+            continue;
+        }
+
+        var substringLength = Math.floor(w / known_font_width) - 2;
+        if (truncate_text_right) {
+            // Truncate the right side of the text.
+            textElemNewAttributes.push([newX, txt.substring(0, substringLength) + ".."]);
+            continue;
+        } else {
+            // Truncate the left side of the text.
+            textElemNewAttributes.push([newX, ".." + txt.substring(txt.length - substringLength, txt.length)]);
+            continue;
+        }
+    }
+
+    console.assert(textElemNewAttributes.length === elements.length, "Resize failed, please file a bug at https://github.com/jonhoo/inferno/");
+
+    // Now that we know new textContent, set it all in one go so we don't refresh a bazillion times.
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var values = textElemNewAttributes[i];
+        var t = find_child(e, "text");
+        t.attributes.x.value = values[0];
+        t.textContent = values[1];
+    }
+}
+
+function update_text(e) {
+    var r = find_child(e, "rect");
+    var t = find_child(e, "text");
+    var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+    var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+    t.attributes.x.value = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+    // Smaller than this size won't fit anything
+    if (w < 2 * fontsize * fontwidth) {
+        t.textContent = "";
+        return;
+    }
+    t.textContent = txt;
+    // Fit in full text width
+    if (t.getComputedTextLength() < w)
+        return;
+    if (truncate_text_right) {
+        // Truncate the right side of the text.
+        for (var x = txt.length - 2; x > 0; x--) {
+            if (t.getSubStringLength(0, x + 2) <= w) {
+                t.textContent = txt.substring(0, x) + "..";
+                return;
+            }
+        }
+    } else {
+        // Truncate the left side of the text.
+        for (var x = 2; x < txt.length; x++) {
+            if (t.getSubStringLength(x - 2, txt.length) <= w) {
+                t.textContent = ".." + txt.substring(x, txt.length);
+                return;
+            }
+        }
+    }
+    t.textContent = "";
+}
+// zoom
+function zoom_reset(e) {
+    if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * parseInt(e.attributes["fg:x"].value) / total_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / total_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_reset(c[i]);
+    }
+}
+function zoom_child(e, x, zoomed_width_samples) {
+    if (e.tagName == "text") {
+        var parent_x = parseFloat(find_child(e.parentNode, "rect[x]").attributes.x.value);
+        e.attributes.x.value = format_percent(parent_x + (100 * 3 / frames.attributes.width.value));
+    } else if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * (parseInt(e.attributes["fg:x"].value) - x) / zoomed_width_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / zoomed_width_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_child(c[i], x, zoomed_width_samples);
+    }
+}
+function zoom_parent(e) {
+    if (e.attributes) {
+        if (e.attributes.x != undefined) {
+            e.attributes.x.value = "0.0%";
+        }
+        if (e.attributes.width != undefined) {
+            e.attributes.width.value = "100.0%";
+        }
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_parent(c[i]);
+    }
+}
+function zoom(node) {
+    var attr = find_child(node, "rect").attributes;
+    var width = parseInt(attr["fg:w"].value);
+    var xmin = parseInt(attr["fg:x"].value);
+    var xmax = xmin + width;
+    var ymin = parseFloat(attr.y.value);
+    unzoombtn.classList.remove("hide");
+    var el = frames.children;
+    var to_update_text = [];
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        var a = find_child(e, "rect").attributes;
+        var ex = parseInt(a["fg:x"].value);
+        var ew = parseInt(a["fg:w"].value);
+        // Is it an ancestor
+        if (!inverted) {
+            var upstack = parseFloat(a.y.value) > ymin;
+        } else {
+            var upstack = parseFloat(a.y.value) < ymin;
+        }
+        if (upstack) {
+            // Direct ancestor
+            if (ex <= xmin && (ex+ew) >= xmax) {
+                e.classList.add("parent");
+                zoom_parent(e);
+                to_update_text.push(e);
+            }
+            // not in current path
+            else
+                e.classList.add("hide");
+        }
+        // Children maybe
+        else {
+            // no common path
+            if (ex < xmin || ex >= xmax) {
+                e.classList.add("hide");
+            }
+            else {
+                zoom_child(e, xmin, width);
+                to_update_text.push(e);
+            }
+        }
+    }
+    update_text_for_elements(to_update_text);
+}
+function unzoom() {
+    unzoombtn.classList.add("hide");
+    var el = frames.children;
+    for(var i = 0; i < el.length; i++) {
+        el[i].classList.remove("parent");
+        el[i].classList.remove("hide");
+        zoom_reset(el[i]);
+    }
+    update_text_for_elements(el);
+}
+// search
+function reset_search() {
+    var el = document.querySelectorAll("#frames rect");
+    for (var i = 0; i < el.length; i++) {
+        orig_load(el[i], "fill")
+    }
+    var params = get_params();
+    delete params.s;
+    history.replaceState(null, null, parse_params(params));
+}
+function search_prompt() {
+    if (!searching) {
+        var term = prompt("Enter a search term (regexp " +
+            "allowed, eg: ^ext4_)", "");
+        if (term != null) {
+            search(term)
+        }
+    } else {
+        reset_search();
+        searching = 0;
+        searchbtn.classList.remove("show");
+        searchbtn.firstChild.nodeValue = "Search"
+        matchedtxt.classList.add("hide");
+        matchedtxt.firstChild.nodeValue = ""
+    }
+}
+function search(term) {
+    var re = new RegExp(term);
+    var el = frames.children;
+    var matches = new Object();
+    var maxwidth = 0;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        // Skip over frames which are either not visible, or below the zoomed-to frame
+        if (e.classList.contains("hide") || e.classList.contains("parent")) {
+            continue;
+        }
+        var func = g_to_func(e);
+        var rect = find_child(e, "rect");
+        if (func == null || rect == null)
+            continue;
+        // Save max width. Only works as we have a root frame
+        var w = parseInt(rect.attributes["fg:w"].value);
+        if (w > maxwidth)
+            maxwidth = w;
+        if (func.match(re)) {
+            // highlight
+            var x = parseInt(rect.attributes["fg:x"].value);
+            orig_save(rect, "fill");
+            rect.attributes.fill.value = searchcolor;
+            // remember matches
+            if (matches[x] == undefined) {
+                matches[x] = w;
+            } else {
+                if (w > matches[x]) {
+                    // overwrite with parent
+                    matches[x] = w;
+                }
+            }
+            searching = 1;
+        }
+    }
+    if (!searching)
+        return;
+    var params = get_params();
+    params.s = term;
+    history.replaceState(null, null, parse_params(params));
+
+    searchbtn.classList.add("show");
+    searchbtn.firstChild.nodeValue = "Reset Search";
+    // calculate percent matched, excluding vertical overlap
+    var count = 0;
+    var lastx = -1;
+    var lastw = 0;
+    var keys = Array();
+    for (k in matches) {
+        if (matches.hasOwnProperty(k))
+            keys.push(k);
+    }
+    // sort the matched frames by their x location
+    // ascending, then width descending
+    keys.sort(function(a, b){
+        return a - b;
+    });
+    // Step through frames saving only the biggest bottom-up frames
+    // thanks to the sort order. This relies on the tree property
+    // where children are always smaller than their parents.
+    for (var k in keys) {
+        var x = parseInt(keys[k]);
+        var w = matches[keys[k]];
+        if (x >= lastx + lastw) {
+            count += w;
+            lastx = x;
+            lastw = w;
+        }
+    }
+    // display matched percent
+    matchedtxt.classList.remove("hide");
+    var pct = 100 * count / maxwidth;
+    if (pct != 100) pct = pct.toFixed(1);
+    matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+}
+function format_percent(n) {
+    return n.toFixed(4) + "%";
+}
+]]></script><rect x="0" y="0" width="100%" height="214" fill="url(#background)"/><text id="title" fill="rgb(0,0,0)" x="50.0000%" y="24.00">Artifact: ./target/individual_swap.json, Function: __sqrt_0</text><text id="details" fill="rgb(0,0,0)" x="10" y="197.00"> </text><text id="unzoom" class="hide" fill="rgb(0,0,0)" x="10" y="24.00">Reset Zoom</text><text id="search" fill="rgb(0,0,0)" x="1190" y="24.00">Search</text><text id="matched" fill="rgb(0,0,0)" x="1190" y="197.00"> </text><svg id="frames" x="10" width="1180" total_samples="1305"><g><title>brillig::call (3 opcodes, 0.23%)</title><rect x="0.0000%" y="133" width="0.2299%" height="23" fill="rgb(255,242,242)" fg:x="0" fg:w="3"/><text x="0.2500%" y="147.50"></text></g><g><title>brillig::calldata_copy (1 opcodes, 0.08%)</title><rect x="0.2299%" y="133" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="3" fg:w="1"/><text x="0.4799%" y="147.50"></text></g><g><title>brillig::const (15 opcodes, 1.15%)</title><rect x="0.3065%" y="133" width="1.1494%" height="23" fill="rgb(255,233,233)" fg:x="4" fg:w="15"/><text x="0.5565%" y="147.50"></text></g><g><title>brillig::iconst (1 opcodes, 0.08%)</title><rect x="1.4559%" y="133" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="19" fg:w="1"/><text x="1.7059%" y="147.50"></text></g><g><title>brillig::jump (30 opcodes, 2.30%)</title><rect x="1.5326%" y="133" width="2.2989%" height="23" fill="rgb(255,227,227)" fg:x="20" fg:w="30"/><text x="1.7826%" y="147.50">b..</text></g><g><title>brillig::jump_if (10 opcodes, 0.77%)</title><rect x="3.8314%" y="133" width="0.7663%" height="23" fill="rgb(255,236,236)" fg:x="50" fg:w="10"/><text x="4.0814%" y="147.50"></text></g><g><title>brillig::mov (27 opcodes, 2.07%)</title><rect x="4.5977%" y="133" width="2.0690%" height="23" fill="rgb(255,228,228)" fg:x="60" fg:w="27"/><text x="4.8477%" y="147.50">b..</text></g><g><title>brillig::return (3 opcodes, 0.23%)</title><rect x="6.6667%" y="133" width="0.2299%" height="23" fill="rgb(255,242,242)" fg:x="87" fg:w="3"/><text x="6.9167%" y="147.50"></text></g><g><title>brillig::stop (1 opcodes, 0.08%)</title><rect x="6.8966%" y="133" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="90" fg:w="1"/><text x="7.1466%" y="147.50"></text></g><g><title>brillig::trap (1 opcodes, 0.08%)</title><rect x="6.9732%" y="133" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="91" fg:w="1"/><text x="7.2232%" y="147.50"></text></g><g><title>brillig::const (1 opcodes, 0.08%)</title><rect x="7.0498%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="92" fg:w="1"/><text x="7.2998%" y="75.50"></text></g><g><title>brillig::mov (1 opcodes, 0.08%)</title><rect x="7.1264%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="93" fg:w="1"/><text x="7.3764%" y="75.50"></text></g><g><title>brillig::store (1 opcodes, 0.08%)</title><rect x="7.2031%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="94" fg:w="1"/><text x="7.4531%" y="75.50"></text></g><g><title>field.nr:61:17::1 as Field (4 opcodes, 0.31%)</title><rect x="7.0498%" y="85" width="0.3065%" height="23" fill="rgb(255,241,241)" fg:x="92" fg:w="4"/><text x="7.2998%" y="99.50"></text></g><g><title>brillig::u32::add (1 opcodes, 0.08%)</title><rect x="7.2797%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="95" fg:w="1"/><text x="7.5297%" y="75.50"></text></g><g><title>brillig::const (3 opcodes, 0.23%)</title><rect x="7.3563%" y="37" width="0.2299%" height="23" fill="rgb(255,242,242)" fg:x="96" fg:w="3"/><text x="7.6063%" y="51.50"></text></g><g><title>brillig::iconst (1 opcodes, 0.08%)</title><rect x="7.5862%" y="37" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="99" fg:w="1"/><text x="7.8362%" y="51.50"></text></g><g><title>brillig::mov (2 opcodes, 0.15%)</title><rect x="7.6628%" y="37" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="100" fg:w="2"/><text x="7.9128%" y="51.50"></text></g><g><title>brillig::store (254 opcodes, 19.46%)</title><rect x="7.8161%" y="37" width="19.4636%" height="23" fill="rgb(255,183,183)" fg:x="102" fg:w="254"/><text x="8.0661%" y="51.50">brillig::store</text></g><g><title>field.nr:62:24::y.to_le_bits (515 opcodes, 39.46%)</title><rect x="7.3563%" y="85" width="39.4636%" height="23" fill="rgb(255,155,155)" fg:x="96" fg:w="515"/><text x="7.6063%" y="99.50">field.nr:62:24::y.to_le_bits</text></g><g><title>mod.nr:32:20::__to_le_bits(self) (515 opcodes, 39.46%)</title><rect x="7.3563%" y="61" width="39.4636%" height="23" fill="rgb(255,155,155)" fg:x="96" fg:w="515"/><text x="7.6063%" y="75.50">mod.nr:32:20::__to_le_bits(self)</text></g><g><title>brillig::u32::add (255 opcodes, 19.54%)</title><rect x="27.2797%" y="37" width="19.5402%" height="23" fill="rgb(255,183,183)" fg:x="356" fg:w="255"/><text x="27.5297%" y="51.50">brillig::u32::add</text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="46.8199%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="611" fg:w="1"/><text x="47.0699%" y="75.50"></text></g><g><title>field.nr:64:17::254 (2 opcodes, 0.15%)</title><rect x="46.8199%" y="85" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="611" fg:w="2"/><text x="47.0699%" y="99.50"></text></g><g><title>brillig::u32::lt (1 opcodes, 0.08%)</title><rect x="46.8966%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="612" fg:w="1"/><text x="47.1466%" y="75.50"></text></g><g><title>field.nr:65:9::r *= r (1 opcodes, 0.08%)</title><rect x="46.9732%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="613" fg:w="1"/><text x="47.2232%" y="99.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="46.9732%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="613" fg:w="1"/><text x="47.2232%" y="75.50"></text></g><g><title>field.nr:66:14::(b[254 - 1 - i] as Field) * x + (1 - b[254 - 1 - i] as Field) (1 opcodes, 0.08%)</title><rect x="47.0498%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="614" fg:w="1"/><text x="47.2998%" y="99.50"></text></g><g><title>brillig::field::add (1 opcodes, 0.08%)</title><rect x="47.0498%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="614" fg:w="1"/><text x="47.2998%" y="75.50"></text></g><g><title>field.nr:66:14::(b[254 - 1 - i] as Field) * x (1 opcodes, 0.08%)</title><rect x="47.1264%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="615" fg:w="1"/><text x="47.3764%" y="99.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="47.1264%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="615" fg:w="1"/><text x="47.3764%" y="75.50"></text></g><g><title>field.nr:66:15::b[254 - 1 - i] as Field (1 opcodes, 0.08%)</title><rect x="47.2031%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="616" fg:w="1"/><text x="47.4531%" y="99.50"></text></g><g><title>brillig::cast (1 opcodes, 0.08%)</title><rect x="47.2031%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="616" fg:w="1"/><text x="47.4531%" y="75.50"></text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="47.2797%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="617" fg:w="1"/><text x="47.5297%" y="75.50"></text></g><g><title>field.nr:66:15::b[254 - 1 - i] (3 opcodes, 0.23%)</title><rect x="47.2797%" y="85" width="0.2299%" height="23" fill="rgb(255,242,242)" fg:x="617" fg:w="3"/><text x="47.5297%" y="99.50"></text></g><g><title>brillig::u32::add (2 opcodes, 0.15%)</title><rect x="47.3563%" y="61" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="618" fg:w="2"/><text x="47.6063%" y="75.50"></text></g><g><title>brillig::call (2 opcodes, 0.15%)</title><rect x="47.5096%" y="61" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="620" fg:w="2"/><text x="47.7596%" y="75.50"></text></g><g><title>brillig::jump_if (2 opcodes, 0.15%)</title><rect x="47.6628%" y="61" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="622" fg:w="2"/><text x="47.9128%" y="75.50"></text></g><g><title>brillig::u32::lt (1 opcodes, 0.08%)</title><rect x="47.8161%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="624" fg:w="1"/><text x="48.0661%" y="75.50"></text></g><g><title>brillig::u32::lte (1 opcodes, 0.08%)</title><rect x="47.8927%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="625" fg:w="1"/><text x="48.1427%" y="75.50"></text></g><g><title>field.nr:66:17::254 - 1 - i (7 opcodes, 0.54%)</title><rect x="47.5096%" y="85" width="0.5364%" height="23" fill="rgb(255,239,239)" fg:x="620" fg:w="7"/><text x="47.7596%" y="99.50"></text></g><g><title>brillig::u32::sub (1 opcodes, 0.08%)</title><rect x="47.9693%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="626" fg:w="1"/><text x="48.2193%" y="75.50"></text></g><g><title>field.nr:66:47::1 - b[254 - 1 - i] as Field (1 opcodes, 0.08%)</title><rect x="48.0460%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="627" fg:w="1"/><text x="48.2960%" y="99.50"></text></g><g><title>brillig::field::sub (1 opcodes, 0.08%)</title><rect x="48.0460%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="627" fg:w="1"/><text x="48.2960%" y="75.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="48.1226%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="628" fg:w="1"/><text x="48.3726%" y="75.50"></text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="48.1992%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="629" fg:w="1"/><text x="48.4492%" y="75.50"></text></g><g><title>brillig::store (1 opcodes, 0.08%)</title><rect x="48.2759%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="630" fg:w="1"/><text x="48.5259%" y="75.50"></text></g><g><title>field.nr:92:13::pow(x, -1 / 2) (540 opcodes, 41.38%)</title><rect x="7.0498%" y="109" width="41.3793%" height="23" fill="rgb(255,153,153)" fg:x="92" fg:w="540"/><text x="7.2998%" y="123.50">field.nr:92:13::pow(x, -1 / 2)</text></g><g><title>field.nr:66:9::r *= (b[254 - 1 - i] as Field) * x + (1 - b[254 - 1 - i] as Field) (4 opcodes, 0.31%)</title><rect x="48.1226%" y="85" width="0.3065%" height="23" fill="rgb(255,241,241)" fg:x="628" fg:w="4"/><text x="48.3726%" y="99.50"></text></g><g><title>brillig::u32::add (1 opcodes, 0.08%)</title><rect x="48.3525%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="631" fg:w="1"/><text x="48.6025%" y="75.50"></text></g><g><title>field.nr:93:10::v - 1 (1 opcodes, 0.08%)</title><rect x="48.4291%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="632" fg:w="1"/><text x="48.6791%" y="123.50"></text></g><g><title>brillig::field::sub (1 opcodes, 0.08%)</title><rect x="48.4291%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="632" fg:w="1"/><text x="48.6791%" y="99.50"></text></g><g><title>brillig::const (1 opcodes, 0.08%)</title><rect x="48.5057%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="633" fg:w="1"/><text x="48.7557%" y="99.50"></text></g><g><title>field.nr:93:5::v * (v - 1) == 0 (2 opcodes, 0.15%)</title><rect x="48.5057%" y="109" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="633" fg:w="2"/><text x="48.7557%" y="123.50"></text></g><g><title>brillig::field::eq (1 opcodes, 0.08%)</title><rect x="48.5824%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="634" fg:w="1"/><text x="48.8324%" y="99.50"></text></g><g><title>field.nr:127:17::is_square(x) (544 opcodes, 41.69%)</title><rect x="7.0498%" y="133" width="41.6858%" height="23" fill="rgb(255,153,153)" fg:x="92" fg:w="544"/><text x="7.2998%" y="147.50">field.nr:127:17::is_square(x)</text></g><g><title>field.nr:93:5::v * (v - 1) (1 opcodes, 0.08%)</title><rect x="48.6590%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="635" fg:w="1"/><text x="48.9090%" y="123.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="48.6590%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="635" fg:w="1"/><text x="48.9090%" y="99.50"></text></g><g><title>brillig::mov (1 opcodes, 0.08%)</title><rect x="48.7356%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="636" fg:w="1"/><text x="48.9856%" y="99.50"></text></g><g><title>brillig::u32::add (1 opcodes, 0.08%)</title><rect x="48.8123%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="637" fg:w="1"/><text x="49.0623%" y="99.50"></text></g><g><title>brillig::mov (1 opcodes, 0.08%)</title><rect x="48.8889%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="638" fg:w="1"/><text x="49.1389%" y="75.50"></text></g><g><title>brillig::store (1 opcodes, 0.08%)</title><rect x="48.9655%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="639" fg:w="1"/><text x="49.2155%" y="75.50"></text></g><g><title>field.nr:61:17::1 as Field (3 opcodes, 0.23%)</title><rect x="48.8889%" y="85" width="0.2299%" height="23" fill="rgb(255,242,242)" fg:x="638" fg:w="3"/><text x="49.1389%" y="99.50"></text></g><g><title>brillig::u32::add (1 opcodes, 0.08%)</title><rect x="49.0421%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="640" fg:w="1"/><text x="49.2921%" y="75.50"></text></g><g><title>brillig::const (1 opcodes, 0.08%)</title><rect x="49.1188%" y="37" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="641" fg:w="1"/><text x="49.3688%" y="51.50"></text></g><g><title>brillig::iconst (1 opcodes, 0.08%)</title><rect x="49.1954%" y="37" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="642" fg:w="1"/><text x="49.4454%" y="51.50"></text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="49.2720%" y="37" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="643" fg:w="1"/><text x="49.5220%" y="51.50"></text></g><g><title>brillig::mov (2 opcodes, 0.15%)</title><rect x="49.3487%" y="37" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="644" fg:w="2"/><text x="49.5987%" y="51.50"></text></g><g><title>brillig::store (255 opcodes, 19.54%)</title><rect x="49.5019%" y="37" width="19.5402%" height="23" fill="rgb(255,183,183)" fg:x="646" fg:w="255"/><text x="49.7519%" y="51.50">brillig::store</text></g><g><title>field.nr:62:24::y.to_le_bits (516 opcodes, 39.54%)</title><rect x="49.1188%" y="85" width="39.5402%" height="23" fill="rgb(255,155,155)" fg:x="641" fg:w="516"/><text x="49.3688%" y="99.50">field.nr:62:24::y.to_le_bits</text></g><g><title>mod.nr:32:20::__to_le_bits(self) (516 opcodes, 39.54%)</title><rect x="49.1188%" y="61" width="39.5402%" height="23" fill="rgb(255,155,155)" fg:x="641" fg:w="516"/><text x="49.3688%" y="75.50">mod.nr:32:20::__to_le_bits(self)</text></g><g><title>brillig::u32::add (256 opcodes, 19.62%)</title><rect x="69.0421%" y="37" width="19.6169%" height="23" fill="rgb(255,183,183)" fg:x="901" fg:w="256"/><text x="69.2921%" y="51.50">brillig::u32::add</text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="88.6590%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1157" fg:w="1"/><text x="88.9090%" y="75.50"></text></g><g><title>field.nr:64:17::254 (2 opcodes, 0.15%)</title><rect x="88.6590%" y="85" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1157" fg:w="2"/><text x="88.9090%" y="99.50"></text></g><g><title>brillig::u32::lt (1 opcodes, 0.08%)</title><rect x="88.7356%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1158" fg:w="1"/><text x="88.9856%" y="75.50"></text></g><g><title>field.nr:65:9::r *= r (1 opcodes, 0.08%)</title><rect x="88.8123%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1159" fg:w="1"/><text x="89.0623%" y="99.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="88.8123%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1159" fg:w="1"/><text x="89.0623%" y="75.50"></text></g><g><title>field.nr:66:14::(b[254 - 1 - i] as Field) * x + (1 - b[254 - 1 - i] as Field) (1 opcodes, 0.08%)</title><rect x="88.8889%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1160" fg:w="1"/><text x="89.1389%" y="99.50"></text></g><g><title>brillig::field::add (1 opcodes, 0.08%)</title><rect x="88.8889%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1160" fg:w="1"/><text x="89.1389%" y="75.50"></text></g><g><title>field.nr:66:14::(b[254 - 1 - i] as Field) * x (1 opcodes, 0.08%)</title><rect x="88.9655%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1161" fg:w="1"/><text x="89.2155%" y="99.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="88.9655%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1161" fg:w="1"/><text x="89.2155%" y="75.50"></text></g><g><title>field.nr:66:15::b[254 - 1 - i] as Field (1 opcodes, 0.08%)</title><rect x="89.0421%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1162" fg:w="1"/><text x="89.2921%" y="99.50"></text></g><g><title>brillig::cast (1 opcodes, 0.08%)</title><rect x="89.0421%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1162" fg:w="1"/><text x="89.2921%" y="75.50"></text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="89.1188%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1163" fg:w="1"/><text x="89.3688%" y="75.50"></text></g><g><title>field.nr:66:15::b[254 - 1 - i] (3 opcodes, 0.23%)</title><rect x="89.1188%" y="85" width="0.2299%" height="23" fill="rgb(255,242,242)" fg:x="1163" fg:w="3"/><text x="89.3688%" y="99.50"></text></g><g><title>brillig::u32::add (2 opcodes, 0.15%)</title><rect x="89.1954%" y="61" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1164" fg:w="2"/><text x="89.4454%" y="75.50"></text></g><g><title>brillig::call (2 opcodes, 0.15%)</title><rect x="89.3487%" y="61" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1166" fg:w="2"/><text x="89.5987%" y="75.50"></text></g><g><title>brillig::jump_if (2 opcodes, 0.15%)</title><rect x="89.5019%" y="61" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1168" fg:w="2"/><text x="89.7519%" y="75.50"></text></g><g><title>brillig::u32::lt (1 opcodes, 0.08%)</title><rect x="89.6552%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1170" fg:w="1"/><text x="89.9052%" y="75.50"></text></g><g><title>brillig::u32::lte (1 opcodes, 0.08%)</title><rect x="89.7318%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1171" fg:w="1"/><text x="89.9818%" y="75.50"></text></g><g><title>field.nr:66:17::254 - 1 - i (7 opcodes, 0.54%)</title><rect x="89.3487%" y="85" width="0.5364%" height="23" fill="rgb(255,239,239)" fg:x="1166" fg:w="7"/><text x="89.5987%" y="99.50"></text></g><g><title>brillig::u32::sub (1 opcodes, 0.08%)</title><rect x="89.8084%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1172" fg:w="1"/><text x="90.0584%" y="75.50"></text></g><g><title>field.nr:66:47::1 - b[254 - 1 - i] as Field (1 opcodes, 0.08%)</title><rect x="89.8851%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1173" fg:w="1"/><text x="90.1351%" y="99.50"></text></g><g><title>brillig::field::sub (1 opcodes, 0.08%)</title><rect x="89.8851%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1173" fg:w="1"/><text x="90.1351%" y="75.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="89.9617%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1174" fg:w="1"/><text x="90.2117%" y="75.50"></text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="90.0383%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1175" fg:w="1"/><text x="90.2883%" y="75.50"></text></g><g><title>brillig::store (1 opcodes, 0.08%)</title><rect x="90.1149%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1176" fg:w="1"/><text x="90.3649%" y="75.50"></text></g><g><title>field.nr:102:17::pow(x, C3) (542 opcodes, 41.53%)</title><rect x="48.7356%" y="109" width="41.5326%" height="23" fill="rgb(255,153,153)" fg:x="636" fg:w="542"/><text x="48.9856%" y="123.50">field.nr:102:17::pow(x, C3)</text></g><g><title>field.nr:66:9::r *= (b[254 - 1 - i] as Field) * x + (1 - b[254 - 1 - i] as Field) (4 opcodes, 0.31%)</title><rect x="89.9617%" y="85" width="0.3065%" height="23" fill="rgb(255,241,241)" fg:x="1174" fg:w="4"/><text x="90.2117%" y="99.50"></text></g><g><title>brillig::u32::add (1 opcodes, 0.08%)</title><rect x="90.1916%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1177" fg:w="1"/><text x="90.4416%" y="75.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="90.2682%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1178" fg:w="1"/><text x="90.5182%" y="99.50"></text></g><g><title>brillig::mov (1 opcodes, 0.08%)</title><rect x="90.3448%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1179" fg:w="1"/><text x="90.5948%" y="99.50"></text></g><g><title>brillig::store (1 opcodes, 0.08%)</title><rect x="90.4215%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1180" fg:w="1"/><text x="90.6715%" y="99.50"></text></g><g><title>field.nr:103:17::z * z * x (4 opcodes, 0.31%)</title><rect x="90.2682%" y="109" width="0.3065%" height="23" fill="rgb(255,241,241)" fg:x="1178" fg:w="4"/><text x="90.5182%" y="123.50"></text></g><g><title>brillig::u32::add (1 opcodes, 0.08%)</title><rect x="90.4981%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1181" fg:w="1"/><text x="90.7481%" y="99.50"></text></g><g><title>field.nr:103:17::z * z (1 opcodes, 0.08%)</title><rect x="90.5747%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1182" fg:w="1"/><text x="90.8247%" y="123.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="90.5747%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1182" fg:w="1"/><text x="90.8247%" y="99.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="90.6513%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1183" fg:w="1"/><text x="90.9013%" y="99.50"></text></g><g><title>brillig::mov (2 opcodes, 0.15%)</title><rect x="90.7280%" y="85" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1184" fg:w="2"/><text x="90.9780%" y="99.50"></text></g><g><title>brillig::store (3 opcodes, 0.23%)</title><rect x="90.8812%" y="85" width="0.2299%" height="23" fill="rgb(255,242,242)" fg:x="1186" fg:w="3"/><text x="91.1312%" y="99.50"></text></g><g><title>field.nr:104:5::z *= x (8 opcodes, 0.61%)</title><rect x="90.6513%" y="109" width="0.6130%" height="23" fill="rgb(255,238,238)" fg:x="1183" fg:w="8"/><text x="90.9013%" y="123.50"></text></g><g><title>brillig::u32::add (2 opcodes, 0.15%)</title><rect x="91.1111%" y="85" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1189" fg:w="2"/><text x="91.3611%" y="99.50"></text></g><g><title>field.nr:108:18::C1 - 1 (1 opcodes, 0.08%)</title><rect x="91.2644%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1191" fg:w="1"/><text x="91.5144%" y="123.50"></text></g><g><title>brillig::u32::lt (1 opcodes, 0.08%)</title><rect x="91.2644%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1191" fg:w="1"/><text x="91.5144%" y="99.50"></text></g><g><title>brillig::call (1 opcodes, 0.08%)</title><rect x="91.3410%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1192" fg:w="1"/><text x="91.5910%" y="99.50"></text></g><g><title>brillig::jump_if (1 opcodes, 0.08%)</title><rect x="91.4176%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1193" fg:w="1"/><text x="91.6676%" y="99.50"></text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="91.4943%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1194" fg:w="1"/><text x="91.7443%" y="99.50"></text></g><g><title>brillig::u32::lt (1 opcodes, 0.08%)</title><rect x="91.5709%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1195" fg:w="1"/><text x="91.8209%" y="99.50"></text></g><g><title>brillig::u32::lte (1 opcodes, 0.08%)</title><rect x="91.6475%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1196" fg:w="1"/><text x="91.8975%" y="99.50"></text></g><g><title>field.nr:109:23::C1 - i - 1 (6 opcodes, 0.46%)</title><rect x="91.3410%" y="109" width="0.4598%" height="23" fill="rgb(255,239,239)" fg:x="1192" fg:w="6"/><text x="91.5910%" y="123.50"></text></g><g><title>brillig::u32::sub (1 opcodes, 0.08%)</title><rect x="91.7241%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1197" fg:w="1"/><text x="91.9741%" y="99.50"></text></g><g><title>field.nr:109:23::C1 - i (1 opcodes, 0.08%)</title><rect x="91.8008%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1198" fg:w="1"/><text x="92.0508%" y="123.50"></text></g><g><title>brillig::u32::sub (1 opcodes, 0.08%)</title><rect x="91.8008%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1198" fg:w="1"/><text x="92.0508%" y="99.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="91.8774%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1199" fg:w="1"/><text x="92.1274%" y="99.50"></text></g><g><title>brillig::load (2 opcodes, 0.15%)</title><rect x="91.9540%" y="85" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1200" fg:w="2"/><text x="92.2040%" y="99.50"></text></g><g><title>brillig::store (1 opcodes, 0.08%)</title><rect x="92.1073%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1202" fg:w="1"/><text x="92.3573%" y="99.50"></text></g><g><title>field.nr:110:13::b *= b (5 opcodes, 0.38%)</title><rect x="91.8774%" y="109" width="0.3831%" height="23" fill="rgb(255,240,240)" fg:x="1199" fg:w="5"/><text x="92.1274%" y="123.50"></text></g><g><title>brillig::u32::add (1 opcodes, 0.08%)</title><rect x="92.1839%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1203" fg:w="1"/><text x="92.4339%" y="99.50"></text></g><g><title>brillig::field::eq (1 opcodes, 0.08%)</title><rect x="92.2605%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1204" fg:w="1"/><text x="92.5105%" y="99.50"></text></g><g><title>field.nr:113:17::b == 1 (2 opcodes, 0.15%)</title><rect x="92.2605%" y="109" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1204" fg:w="2"/><text x="92.5105%" y="123.50"></text></g><g><title>brillig::not (1 opcodes, 0.08%)</title><rect x="92.3372%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1205" fg:w="1"/><text x="92.5872%" y="99.50"></text></g><g><title>field.nr:113:26::1 (1 opcodes, 0.08%)</title><rect x="92.4138%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1206" fg:w="1"/><text x="92.6638%" y="123.50"></text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="92.4138%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1206" fg:w="1"/><text x="92.6638%" y="99.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="92.4904%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1207" fg:w="1"/><text x="92.7404%" y="99.50"></text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="92.5670%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1208" fg:w="1"/><text x="92.8170%" y="99.50"></text></g><g><title>field.nr:113:9::z *= if b == 1 { 1 } else { c } (3 opcodes, 0.23%)</title><rect x="92.4904%" y="109" width="0.2299%" height="23" fill="rgb(255,242,242)" fg:x="1207" fg:w="3"/><text x="92.7404%" y="123.50"></text></g><g><title>brillig::store (1 opcodes, 0.08%)</title><rect x="92.6437%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1209" fg:w="1"/><text x="92.8937%" y="99.50"></text></g><g><title>brillig::cast (2 opcodes, 0.15%)</title><rect x="92.7203%" y="85" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1210" fg:w="2"/><text x="92.9703%" y="99.50"></text></g><g><title>brillig::field::add (1 opcodes, 0.08%)</title><rect x="92.8736%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1212" fg:w="1"/><text x="93.1236%" y="99.50"></text></g><g><title>brillig::field::mul (2 opcodes, 0.15%)</title><rect x="92.9502%" y="85" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1213" fg:w="2"/><text x="93.2002%" y="99.50"></text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="93.1034%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1215" fg:w="1"/><text x="93.3534%" y="99.50"></text></g><g><title>field.nr:115:9::c *= c (7 opcodes, 0.54%)</title><rect x="92.7203%" y="109" width="0.5364%" height="23" fill="rgb(255,239,239)" fg:x="1210" fg:w="7"/><text x="92.9703%" y="123.50"></text></g><g><title>brillig::store (1 opcodes, 0.08%)</title><rect x="93.1801%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1216" fg:w="1"/><text x="93.4301%" y="99.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="93.2567%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1217" fg:w="1"/><text x="93.5067%" y="99.50"></text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="93.3333%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1218" fg:w="1"/><text x="93.5833%" y="99.50"></text></g><g><title>brillig::store (2 opcodes, 0.15%)</title><rect x="93.4100%" y="85" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1219" fg:w="2"/><text x="93.6600%" y="99.50"></text></g><g><title>field.nr:129:20::tonelli_shanks_sqrt(x) (586 opcodes, 44.90%)</title><rect x="48.7356%" y="133" width="44.9042%" height="23" fill="rgb(255,149,149)" fg:x="636" fg:w="586"/><text x="48.9856%" y="147.50">field.nr:129:20::tonelli_shanks_sqrt(x)</text></g><g><title>field.nr:117:9::t *= if b == 1 { 1 } else { c } (5 opcodes, 0.38%)</title><rect x="93.2567%" y="109" width="0.3831%" height="23" fill="rgb(255,240,240)" fg:x="1217" fg:w="5"/><text x="93.5067%" y="123.50"></text></g><g><title>brillig::u32::add (1 opcodes, 0.08%)</title><rect x="93.5632%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1221" fg:w="1"/><text x="93.8132%" y="99.50"></text></g><g><title>field.nr:145:33::x * KNOWN_NON_RESIDUE (1 opcodes, 0.08%)</title><rect x="93.6398%" y="133" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1222" fg:w="1"/><text x="93.8898%" y="147.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="93.6398%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1222" fg:w="1"/><text x="93.8898%" y="123.50"></text></g><g><title>brillig::mov (1 opcodes, 0.08%)</title><rect x="93.7165%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1223" fg:w="1"/><text x="93.9665%" y="99.50"></text></g><g><title>brillig::u32::add (1 opcodes, 0.08%)</title><rect x="93.7931%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1224" fg:w="1"/><text x="94.0431%" y="99.50"></text></g><g><title>brillig::mov (1 opcodes, 0.08%)</title><rect x="93.8697%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1225" fg:w="1"/><text x="94.1197%" y="75.50"></text></g><g><title>brillig::store (1 opcodes, 0.08%)</title><rect x="93.9464%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1226" fg:w="1"/><text x="94.1964%" y="75.50"></text></g><g><title>field.nr:61:17::1 as Field (3 opcodes, 0.23%)</title><rect x="93.8697%" y="85" width="0.2299%" height="23" fill="rgb(255,242,242)" fg:x="1225" fg:w="3"/><text x="94.1197%" y="99.50"></text></g><g><title>brillig::u32::add (1 opcodes, 0.08%)</title><rect x="94.0230%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1227" fg:w="1"/><text x="94.2730%" y="75.50"></text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="94.0996%" y="37" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1228" fg:w="1"/><text x="94.3496%" y="51.50"></text></g><g><title>brillig::store (1 opcodes, 0.08%)</title><rect x="94.1762%" y="37" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1229" fg:w="1"/><text x="94.4262%" y="51.50"></text></g><g><title>field.nr:62:24::y.to_le_bits (3 opcodes, 0.23%)</title><rect x="94.0996%" y="85" width="0.2299%" height="23" fill="rgb(255,242,242)" fg:x="1228" fg:w="3"/><text x="94.3496%" y="99.50"></text></g><g><title>mod.nr:32:20::__to_le_bits(self) (3 opcodes, 0.23%)</title><rect x="94.0996%" y="61" width="0.2299%" height="23" fill="rgb(255,242,242)" fg:x="1228" fg:w="3"/><text x="94.3496%" y="75.50"></text></g><g><title>brillig::u32::add (1 opcodes, 0.08%)</title><rect x="94.2529%" y="37" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1230" fg:w="1"/><text x="94.5029%" y="51.50"></text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="94.3295%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1231" fg:w="1"/><text x="94.5795%" y="75.50"></text></g><g><title>field.nr:64:17::254 (2 opcodes, 0.15%)</title><rect x="94.3295%" y="85" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1231" fg:w="2"/><text x="94.5795%" y="99.50"></text></g><g><title>brillig::u32::lt (1 opcodes, 0.08%)</title><rect x="94.4061%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1232" fg:w="1"/><text x="94.6561%" y="75.50"></text></g><g><title>field.nr:65:9::r *= r (1 opcodes, 0.08%)</title><rect x="94.4828%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1233" fg:w="1"/><text x="94.7328%" y="99.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="94.4828%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1233" fg:w="1"/><text x="94.7328%" y="75.50"></text></g><g><title>field.nr:66:14::(b[254 - 1 - i] as Field) * x + (1 - b[254 - 1 - i] as Field) (1 opcodes, 0.08%)</title><rect x="94.5594%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1234" fg:w="1"/><text x="94.8094%" y="99.50"></text></g><g><title>brillig::field::add (1 opcodes, 0.08%)</title><rect x="94.5594%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1234" fg:w="1"/><text x="94.8094%" y="75.50"></text></g><g><title>field.nr:66:14::(b[254 - 1 - i] as Field) * x (1 opcodes, 0.08%)</title><rect x="94.6360%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1235" fg:w="1"/><text x="94.8860%" y="99.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="94.6360%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1235" fg:w="1"/><text x="94.8860%" y="75.50"></text></g><g><title>field.nr:66:15::b[254 - 1 - i] as Field (1 opcodes, 0.08%)</title><rect x="94.7126%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1236" fg:w="1"/><text x="94.9626%" y="99.50"></text></g><g><title>brillig::cast (1 opcodes, 0.08%)</title><rect x="94.7126%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1236" fg:w="1"/><text x="94.9626%" y="75.50"></text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="94.7893%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1237" fg:w="1"/><text x="95.0393%" y="75.50"></text></g><g><title>field.nr:66:15::b[254 - 1 - i] (3 opcodes, 0.23%)</title><rect x="94.7893%" y="85" width="0.2299%" height="23" fill="rgb(255,242,242)" fg:x="1237" fg:w="3"/><text x="95.0393%" y="99.50"></text></g><g><title>brillig::u32::add (2 opcodes, 0.15%)</title><rect x="94.8659%" y="61" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1238" fg:w="2"/><text x="95.1159%" y="75.50"></text></g><g><title>brillig::call (2 opcodes, 0.15%)</title><rect x="95.0192%" y="61" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1240" fg:w="2"/><text x="95.2692%" y="75.50"></text></g><g><title>brillig::jump_if (2 opcodes, 0.15%)</title><rect x="95.1724%" y="61" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1242" fg:w="2"/><text x="95.4224%" y="75.50"></text></g><g><title>brillig::u32::lt (1 opcodes, 0.08%)</title><rect x="95.3257%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1244" fg:w="1"/><text x="95.5757%" y="75.50"></text></g><g><title>brillig::u32::lte (1 opcodes, 0.08%)</title><rect x="95.4023%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1245" fg:w="1"/><text x="95.6523%" y="75.50"></text></g><g><title>field.nr:66:17::254 - 1 - i (7 opcodes, 0.54%)</title><rect x="95.0192%" y="85" width="0.5364%" height="23" fill="rgb(255,239,239)" fg:x="1240" fg:w="7"/><text x="95.2692%" y="99.50"></text></g><g><title>brillig::u32::sub (1 opcodes, 0.08%)</title><rect x="95.4789%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1246" fg:w="1"/><text x="95.7289%" y="75.50"></text></g><g><title>field.nr:66:47::1 - b[254 - 1 - i] as Field (1 opcodes, 0.08%)</title><rect x="95.5556%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1247" fg:w="1"/><text x="95.8056%" y="99.50"></text></g><g><title>brillig::field::sub (1 opcodes, 0.08%)</title><rect x="95.5556%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1247" fg:w="1"/><text x="95.8056%" y="75.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="95.6322%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1248" fg:w="1"/><text x="95.8822%" y="75.50"></text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="95.7088%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1249" fg:w="1"/><text x="95.9588%" y="75.50"></text></g><g><title>brillig::store (1 opcodes, 0.08%)</title><rect x="95.7854%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1250" fg:w="1"/><text x="96.0354%" y="75.50"></text></g><g><title>field.nr:102:17::pow(x, C3) (29 opcodes, 2.22%)</title><rect x="93.7165%" y="109" width="2.2222%" height="23" fill="rgb(255,227,227)" fg:x="1223" fg:w="29"/><text x="93.9665%" y="123.50">f..</text></g><g><title>field.nr:66:9::r *= (b[254 - 1 - i] as Field) * x + (1 - b[254 - 1 - i] as Field) (4 opcodes, 0.31%)</title><rect x="95.6322%" y="85" width="0.3065%" height="23" fill="rgb(255,241,241)" fg:x="1248" fg:w="4"/><text x="95.8822%" y="99.50"></text></g><g><title>brillig::u32::add (1 opcodes, 0.08%)</title><rect x="95.8621%" y="61" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1251" fg:w="1"/><text x="96.1121%" y="75.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="95.9387%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1252" fg:w="1"/><text x="96.1887%" y="99.50"></text></g><g><title>brillig::mov (1 opcodes, 0.08%)</title><rect x="96.0153%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1253" fg:w="1"/><text x="96.2653%" y="99.50"></text></g><g><title>brillig::store (1 opcodes, 0.08%)</title><rect x="96.0920%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1254" fg:w="1"/><text x="96.3420%" y="99.50"></text></g><g><title>field.nr:103:17::z * z * x (4 opcodes, 0.31%)</title><rect x="95.9387%" y="109" width="0.3065%" height="23" fill="rgb(255,241,241)" fg:x="1252" fg:w="4"/><text x="96.1887%" y="123.50"></text></g><g><title>brillig::u32::add (1 opcodes, 0.08%)</title><rect x="96.1686%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1255" fg:w="1"/><text x="96.4186%" y="99.50"></text></g><g><title>field.nr:103:17::z * z (1 opcodes, 0.08%)</title><rect x="96.2452%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1256" fg:w="1"/><text x="96.4952%" y="123.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="96.2452%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1256" fg:w="1"/><text x="96.4952%" y="99.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="96.3218%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1257" fg:w="1"/><text x="96.5718%" y="99.50"></text></g><g><title>brillig::mov (2 opcodes, 0.15%)</title><rect x="96.3985%" y="85" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1258" fg:w="2"/><text x="96.6485%" y="99.50"></text></g><g><title>brillig::store (3 opcodes, 0.23%)</title><rect x="96.5517%" y="85" width="0.2299%" height="23" fill="rgb(255,242,242)" fg:x="1260" fg:w="3"/><text x="96.8017%" y="99.50"></text></g><g><title>field.nr:104:5::z *= x (8 opcodes, 0.61%)</title><rect x="96.3218%" y="109" width="0.6130%" height="23" fill="rgb(255,238,238)" fg:x="1257" fg:w="8"/><text x="96.5718%" y="123.50"></text></g><g><title>brillig::u32::add (2 opcodes, 0.15%)</title><rect x="96.7816%" y="85" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1263" fg:w="2"/><text x="97.0316%" y="99.50"></text></g><g><title>field.nr:108:18::C1 - 1 (1 opcodes, 0.08%)</title><rect x="96.9349%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1265" fg:w="1"/><text x="97.1849%" y="123.50"></text></g><g><title>brillig::u32::lt (1 opcodes, 0.08%)</title><rect x="96.9349%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1265" fg:w="1"/><text x="97.1849%" y="99.50"></text></g><g><title>brillig::call (1 opcodes, 0.08%)</title><rect x="97.0115%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1266" fg:w="1"/><text x="97.2615%" y="99.50"></text></g><g><title>brillig::jump_if (1 opcodes, 0.08%)</title><rect x="97.0881%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1267" fg:w="1"/><text x="97.3381%" y="99.50"></text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="97.1648%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1268" fg:w="1"/><text x="97.4148%" y="99.50"></text></g><g><title>brillig::u32::lt (1 opcodes, 0.08%)</title><rect x="97.2414%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1269" fg:w="1"/><text x="97.4914%" y="99.50"></text></g><g><title>brillig::u32::lte (1 opcodes, 0.08%)</title><rect x="97.3180%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1270" fg:w="1"/><text x="97.5680%" y="99.50"></text></g><g><title>field.nr:109:23::C1 - i - 1 (6 opcodes, 0.46%)</title><rect x="97.0115%" y="109" width="0.4598%" height="23" fill="rgb(255,239,239)" fg:x="1266" fg:w="6"/><text x="97.2615%" y="123.50"></text></g><g><title>brillig::u32::sub (1 opcodes, 0.08%)</title><rect x="97.3946%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1271" fg:w="1"/><text x="97.6446%" y="99.50"></text></g><g><title>field.nr:109:23::C1 - i (1 opcodes, 0.08%)</title><rect x="97.4713%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1272" fg:w="1"/><text x="97.7213%" y="123.50"></text></g><g><title>brillig::u32::sub (1 opcodes, 0.08%)</title><rect x="97.4713%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1272" fg:w="1"/><text x="97.7213%" y="99.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="97.5479%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1273" fg:w="1"/><text x="97.7979%" y="99.50"></text></g><g><title>brillig::load (2 opcodes, 0.15%)</title><rect x="97.6245%" y="85" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1274" fg:w="2"/><text x="97.8745%" y="99.50"></text></g><g><title>brillig::store (1 opcodes, 0.08%)</title><rect x="97.7778%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1276" fg:w="1"/><text x="98.0278%" y="99.50"></text></g><g><title>field.nr:110:13::b *= b (5 opcodes, 0.38%)</title><rect x="97.5479%" y="109" width="0.3831%" height="23" fill="rgb(255,240,240)" fg:x="1273" fg:w="5"/><text x="97.7979%" y="123.50"></text></g><g><title>brillig::u32::add (1 opcodes, 0.08%)</title><rect x="97.8544%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1277" fg:w="1"/><text x="98.1044%" y="99.50"></text></g><g><title>brillig::field::eq (1 opcodes, 0.08%)</title><rect x="97.9310%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1278" fg:w="1"/><text x="98.1810%" y="99.50"></text></g><g><title>field.nr:113:17::b == 1 (2 opcodes, 0.15%)</title><rect x="97.9310%" y="109" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1278" fg:w="2"/><text x="98.1810%" y="123.50"></text></g><g><title>brillig::not (1 opcodes, 0.08%)</title><rect x="98.0077%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1279" fg:w="1"/><text x="98.2577%" y="99.50"></text></g><g><title>field.nr:113:26::1 (1 opcodes, 0.08%)</title><rect x="98.0843%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1280" fg:w="1"/><text x="98.3343%" y="123.50"></text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="98.0843%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1280" fg:w="1"/><text x="98.3343%" y="99.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="98.1609%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1281" fg:w="1"/><text x="98.4109%" y="99.50"></text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="98.2375%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1282" fg:w="1"/><text x="98.4875%" y="99.50"></text></g><g><title>field.nr:113:9::z *= if b == 1 { 1 } else { c } (3 opcodes, 0.23%)</title><rect x="98.1609%" y="109" width="0.2299%" height="23" fill="rgb(255,242,242)" fg:x="1281" fg:w="3"/><text x="98.4109%" y="123.50"></text></g><g><title>brillig::store (1 opcodes, 0.08%)</title><rect x="98.3142%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1283" fg:w="1"/><text x="98.5642%" y="99.50"></text></g><g><title>brillig::cast (2 opcodes, 0.15%)</title><rect x="98.3908%" y="85" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1284" fg:w="2"/><text x="98.6408%" y="99.50"></text></g><g><title>brillig::field::add (1 opcodes, 0.08%)</title><rect x="98.5441%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1286" fg:w="1"/><text x="98.7941%" y="99.50"></text></g><g><title>brillig::field::mul (2 opcodes, 0.15%)</title><rect x="98.6207%" y="85" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1287" fg:w="2"/><text x="98.8707%" y="99.50"></text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="98.7739%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1289" fg:w="1"/><text x="99.0239%" y="99.50"></text></g><g><title>field.nr:115:9::c *= c (7 opcodes, 0.54%)</title><rect x="98.3908%" y="109" width="0.5364%" height="23" fill="rgb(255,239,239)" fg:x="1284" fg:w="7"/><text x="98.6408%" y="123.50"></text></g><g><title>brillig::store (1 opcodes, 0.08%)</title><rect x="98.8506%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1290" fg:w="1"/><text x="99.1006%" y="99.50"></text></g><g><title>brillig::field::mul (1 opcodes, 0.08%)</title><rect x="98.9272%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1291" fg:w="1"/><text x="99.1772%" y="99.50"></text></g><g><title>brillig::load (1 opcodes, 0.08%)</title><rect x="99.0038%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1292" fg:w="1"/><text x="99.2538%" y="99.50"></text></g><g><title>brillig::store (2 opcodes, 0.15%)</title><rect x="99.0805%" y="85" width="0.1533%" height="23" fill="rgb(255,244,244)" fg:x="1293" fg:w="2"/><text x="99.3305%" y="99.50"></text></g><g><title>field.nr:146:24::tonelli_shanks_sqrt(demo_x_not_square) (73 opcodes, 5.59%)</title><rect x="93.7165%" y="133" width="5.5939%" height="23" fill="rgb(255,214,214)" fg:x="1223" fg:w="73"/><text x="93.9665%" y="147.50">field.n..</text></g><g><title>field.nr:117:9::t *= if b == 1 { 1 } else { c } (5 opcodes, 0.38%)</title><rect x="98.9272%" y="109" width="0.3831%" height="23" fill="rgb(255,240,240)" fg:x="1291" fg:w="5"/><text x="99.1772%" y="123.50"></text></g><g><title>brillig::u32::add (1 opcodes, 0.08%)</title><rect x="99.2337%" y="85" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1295" fg:w="1"/><text x="99.4837%" y="99.50"></text></g><g><title>brillig::const (1 opcodes, 0.08%)</title><rect x="99.3103%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1296" fg:w="1"/><text x="99.5603%" y="123.50"></text></g><g><title>brillig::iconst (1 opcodes, 0.08%)</title><rect x="99.3870%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1297" fg:w="1"/><text x="99.6370%" y="123.50"></text></g><g><title>brillig::jump_if (1 opcodes, 0.08%)</title><rect x="99.4636%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1298" fg:w="1"/><text x="99.7136%" y="123.50"></text></g><g><title>brillig::return (1 opcodes, 0.08%)</title><rect x="99.5402%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1299" fg:w="1"/><text x="99.7902%" y="123.50"></text></g><g><title>brillig::trap (1 opcodes, 0.08%)</title><rect x="99.6169%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1300" fg:w="1"/><text x="99.8669%" y="123.50"></text></g><g><title>procedure::CheckMaxStackDepth (6 opcodes, 0.46%)</title><rect x="99.3103%" y="133" width="0.4598%" height="23" fill="rgb(255,239,239)" fg:x="1296" fg:w="6"/><text x="99.5603%" y="147.50"></text></g><g><title>brillig::u32::lt (1 opcodes, 0.08%)</title><rect x="99.6935%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1301" fg:w="1"/><text x="99.9435%" y="123.50"></text></g><g><title>brillig::iconst (1 opcodes, 0.08%)</title><rect x="99.7701%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1302" fg:w="1"/><text x="100.0201%" y="123.50"></text></g><g><title>brillig::return (1 opcodes, 0.08%)</title><rect x="99.8467%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1303" fg:w="1"/><text x="100.0967%" y="123.50"></text></g><g><title>all (1,305 opcodes, 100%)</title><rect x="0.0000%" y="157" width="100.0000%" height="23" fill="rgb(255,100,100)" fg:x="0" fg:w="1305"/><text x="0.2500%" y="171.50"></text></g><g><title>procedure::ErrorWithString (3 opcodes, 0.23%)</title><rect x="99.7701%" y="133" width="0.2299%" height="23" fill="rgb(255,242,242)" fg:x="1302" fg:w="3"/><text x="100.0201%" y="147.50"></text></g><g><title>brillig::trap (1 opcodes, 0.08%)</title><rect x="99.9234%" y="109" width="0.0766%" height="23" fill="rgb(255,245,245)" fg:x="1304" fg:w="1"/><text x="100.1734%" y="123.50"></text></g></svg></svg>
