@@ -85,41 +85,32 @@ fn main(
     );
     assert(sell_price != 0, "Sell token price must not be zero");
 
-    // Consume sell-side lots FIFO with i64 PnL
-    let mut sell_lots_mut = sell_lots;
-    let mut sell_num = sell_num_lots;
+    // Consume sell-side lots FIFO, compact in one pass
+    let mut compacted_sell: [Lot; MAX_LOTS] = [Lot { amount: 0, cost_per_unit: 0 }; MAX_LOTS];
+    let mut write_idx: u32 = 0;
     let mut pnl: i64 = 0;
 
     let sell_price_i64: i64 = sell_price as i64;
     let mut remaining: i64 = amount_in as i64;
 
     for j in 0..MAX_LOTS {
-        let lot_amount: i64 = sell_lots_mut[j].amount as i64;
-        let lot_cost: i64 = sell_lots_mut[j].cost_per_unit as i64;
+        let mut lot_amount: i64 = sell_lots[j].amount as i64;
+        let lot_cost: i64 = sell_lots[j].cost_per_unit as i64;
 
         if (remaining != 0) & (lot_amount != 0) {
             let consumed: i64 = if remaining < lot_amount { remaining } else { lot_amount };
-
-            let proceeds = consumed * sell_price_i64;
-            let cost = consumed * lot_cost;
-            pnl += proceeds - cost;
-
-            sell_lots_mut[j].amount = (lot_amount - consumed) as u64 as Field;
+            pnl += consumed * (sell_price_i64 - lot_cost);
             remaining -= consumed;
+            lot_amount -= consumed;
         }
-    }
-    assert(remaining == 0, "Not enough lots to cover sell amount");
 
-    // Compact sell lots
-    let mut compacted_sell: [Lot; MAX_LOTS] = [Lot { amount: 0, cost_per_unit: 0 }; MAX_LOTS];
-    let mut write_idx: u32 = 0;
-    for j in 0..MAX_LOTS {
-        if sell_lots_mut[j].amount != 0 {
-            compacted_sell[write_idx] = sell_lots_mut[j];
+        if lot_amount != 0 {
+            compacted_sell[write_idx] = Lot { amount: lot_amount as u64 as Field, cost_per_unit: sell_lots[j].cost_per_unit };
             write_idx += 1;
         }
     }
-    sell_num = write_idx;
+    assert(remaining == 0, "Not enough lots to cover sell amount");
+    let sell_num = write_idx;
 
     // 6. Compute intermediate root (after sell update)
     let new_sell_hash = hash_lots(token_in, compacted_sell, sell_num);
