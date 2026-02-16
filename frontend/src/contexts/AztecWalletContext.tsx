@@ -7,17 +7,19 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { EmbeddedWallet } from "@/lib/embedded-wallet";
+import type { EmbeddedAuditableWallet } from "@/lib/embedded-wallet";
 
-export type WalletStatus = "disconnected" | "connecting" | "connected" | "error";
+export type WalletStatus = "disconnected" | "connecting" | "connected" | "no_account" | "creating" | "error";
 
 export interface AztecWalletContextValue {
-  wallet: EmbeddedWallet | null;
+  wallet: EmbeddedAuditableWallet | null;
   address: string | null;
   status: WalletStatus;
   error: string | null;
   connect: () => Promise<void>;
+  createAccount: () => Promise<void>;
   disconnect: () => void;
+  clearSavedAccount: () => void;
 }
 
 export const AztecWalletContext = createContext<AztecWalletContextValue | null>(
@@ -28,10 +30,18 @@ const NODE_URL =
   process.env.NEXT_PUBLIC_AZTEC_NODE_URL ?? "http://localhost:8080";
 
 export function AztecWalletProvider({ children }: { children: ReactNode }) {
-  const walletRef = useRef<EmbeddedWallet | null>(null);
+  const walletRef = useRef<EmbeddedAuditableWallet | null>(null);
   const [address, setAddress] = useState<string | null>(null);
   const [status, setStatus] = useState<WalletStatus>("disconnected");
   const [error, setError] = useState<string | null>(null);
+
+  const ensureWallet = useCallback(async () => {
+    const { EmbeddedAuditableWallet } = await import("@/lib/embedded-wallet");
+    if (!walletRef.current) {
+      walletRef.current = await EmbeddedAuditableWallet.initialize(NODE_URL);
+    }
+    return walletRef.current;
+  }, []);
 
   const connect = useCallback(async () => {
     if (status === "connecting") return;
@@ -39,33 +49,52 @@ export function AztecWalletProvider({ children }: { children: ReactNode }) {
     setError(null);
 
     try {
-      // Lazy-load the wallet module (pulls in PXE + WASM)
-      const { EmbeddedWallet } = await import("@/lib/embedded-wallet");
+      const wallet = await ensureWallet();
+      const connectedAddress = await wallet.connectExistingAccount();
 
-      // Initialize PXE on first connect
-      if (!walletRef.current) {
-        walletRef.current = await EmbeddedWallet.initialize(NODE_URL);
+      if (connectedAddress) {
+        setAddress(connectedAddress.toString());
+        setStatus("connected");
+      } else {
+        setStatus("no_account");
       }
-
-      const wallet = walletRef.current;
-
-      // Try restoring an existing account, otherwise create a new one
-      let connectedAddress =
-        (await wallet.connectExistingAccount()) ??
-        (await wallet.createAccountAndConnect());
-
-      setAddress(connectedAddress.toString());
-      setStatus("connected");
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Failed to connect wallet";
       setError(message);
       setStatus("error");
     }
-  }, [status]);
+  }, [status, ensureWallet]);
+
+  const createAccount = useCallback(async () => {
+    if (status === "creating") return;
+    setStatus("creating");
+    setError(null);
+
+    try {
+      const wallet = await ensureWallet();
+      const connectedAddress = await wallet.createAccountAndConnect();
+      setAddress(connectedAddress.toString());
+      setStatus("connected");
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to create account";
+      setError(message);
+      setStatus("error");
+    }
+  }, [status, ensureWallet]);
 
   const disconnect = useCallback(() => {
     walletRef.current?.disconnect();
+    walletRef.current = null;
+    setAddress(null);
+    setStatus("disconnected");
+    setError(null);
+  }, []);
+
+  const clearSavedAccount = useCallback(async () => {
+    const { EmbeddedAuditableWallet } = await import("@/lib/embedded-wallet");
+    EmbeddedAuditableWallet.clearSavedAccount();
     walletRef.current = null;
     setAddress(null);
     setStatus("disconnected");
@@ -80,7 +109,9 @@ export function AztecWalletProvider({ children }: { children: ReactNode }) {
         status,
         error,
         connect,
+        createAccount,
         disconnect,
+        clearSavedAccount,
       }}
     >
       {children}

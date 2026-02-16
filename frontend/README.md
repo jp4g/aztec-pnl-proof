@@ -29,8 +29,13 @@ To learn more about Next.js, take a look at the following resources:
 
 You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
-## Deploy on Vercel
+## Known Issues
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### Client-side proving disabled (`proverEnabled: false`)
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Client-side ClientIVC proving via `BBLazyPrivateKernelProver` is currently disabled. The BB WASM worker throws `ReferenceError: window is not defined` because Next.js webpack bundles modules into the Web Worker that reference `window` directly (Web Workers only have `self`/`globalThis`, not `window`).
+
+The sandbox accepts unproven transactions in dev mode, so this doesn't block development. To fix:
+- Investigate which module in the BB WASM worker bundle has an unguarded `window` reference
+- May need a webpack worker plugin or custom worker configuration to polyfill/stub `window` in the worker context
+- Alternatively, configure Barretenberg to use the non-worker WASM backend (`BackendType.Wasm`) which runs on the main thread

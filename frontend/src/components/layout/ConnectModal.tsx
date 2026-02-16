@@ -9,7 +9,7 @@ interface ConnectModalProps {
 }
 
 export default function ConnectModal({ onClose }: ConnectModalProps) {
-  const { status, address, error, connect, disconnect } = useAztecWallet();
+  const { status, address, error, connect, createAccount, disconnect, clearSavedAccount } = useAztecWallet();
   const [copied, setCopied] = useState(false);
 
   const handleBackdropClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -72,6 +72,32 @@ export default function ConnectModal({ onClose }: ConnectModalProps) {
           </div>
         )}
 
+        {/* No account found */}
+        {status === "no_account" && (
+          <div className="space-y-3">
+            <div className="p-3 rounded-lg bg-amber-50 border border-amber-100">
+              <p className="text-xs text-amber-700">No accounts found. Create one to get started.</p>
+            </div>
+            <button
+              onClick={createAccount}
+              className="w-full py-3 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium transition-colors cursor-pointer"
+            >
+              Create Account
+            </button>
+          </div>
+        )}
+
+        {/* Creating account */}
+        {status === "creating" && (
+          <div className="flex flex-col items-center gap-3 py-4">
+            <div className="w-8 h-8 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+            <p className="text-sm text-neutral-500">Creating account...</p>
+            <p className="text-xs text-neutral-400">
+              Deploying via sponsored FPC
+            </p>
+          </div>
+        )}
+
         {/* Connected state */}
         {status === "connected" && address && (
           <div className="space-y-4">
@@ -108,12 +134,20 @@ export default function ConnectModal({ onClose }: ConnectModalProps) {
 
         {/* Error state with retry */}
         {status === "error" && (
-          <button
-            onClick={connect}
-            className="w-full py-3 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium transition-colors cursor-pointer"
-          >
-            Retry Connection
-          </button>
+          <div className="space-y-2">
+            <button
+              onClick={connect}
+              className="w-full py-3 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium transition-colors cursor-pointer"
+            >
+              Retry Connection
+            </button>
+            <button
+              onClick={() => { clearSavedAccount(); }}
+              className="w-full py-2.5 rounded-xl border border-neutral-200 text-sm font-medium text-neutral-600 hover:bg-neutral-50 transition-colors cursor-pointer"
+            >
+              Clear Saved Account
+            </button>
+          </div>
         )}
       </div>
     </div>

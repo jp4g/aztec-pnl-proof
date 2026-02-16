@@ -13,6 +13,8 @@ const STATUS_DOT: Record<string, string> = {
   disconnected: "bg-neutral-400",
   connecting: "bg-orange-400 animate-pulse",
   connected: "bg-green-500",
+  no_account: "bg-amber-400",
+  creating: "bg-orange-400 animate-pulse",
   error: "bg-red-500",
 };
 
@@ -20,6 +22,8 @@ const STATUS_LABEL: Record<string, (addr: string | null) => string> = {
   disconnected: () => "Connect Wallet",
   connecting: () => "Connecting...",
   connected: (addr) => (addr ? truncateAddress(addr) : "Connected"),
+  no_account: () => "No Account",
+  creating: () => "Creating...",
   error: () => "Error",
 };
 

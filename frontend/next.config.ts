@@ -1,14 +1,32 @@
 import type { NextConfig } from "next";
 import { createRequire } from "module";
+import path from "path";
 
 const require = createRequire(import.meta.url);
 
+// Resolve note-collector sub-exports manually — webpack can't resolve
+// package.json "exports" for file:-symlinked packages
+const noteCollectorDest = path.resolve(
+  import.meta.dirname,
+  "../../aztec-packages/yarn-project/note-collector/dest/client"
+);
+
 const nextConfig: NextConfig = {
-  // Empty turbopack config to suppress the warning when using webpack
-  turbopack: {},
+  turbopack: {
+    // Extend root to include aztec-packages so Turbopack can resolve
+    // file:-linked dependencies outside the default project root
+    root: path.resolve(import.meta.dirname, "../.."),
+  },
   webpack: (config, { isServer, webpack }) => {
+    // Resolve note-collector sub-exports for both client and SSR builds
+    config.resolve = config.resolve ?? {};
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      "@aztec/note-collector/client/wallet": path.join(noteCollectorDest, "auditable_wallet.js"),
+      "@aztec/note-collector/client/browser": path.join(noteCollectorDest, "auditable_pxe_browser.js"),
+    };
+
     if (!isServer) {
-      config.resolve = config.resolve ?? {};
       config.resolve.fallback = {
         ...config.resolve.fallback,
         // Polyfilled

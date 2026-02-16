@@ -15,6 +15,7 @@
     "@aztec/entrypoints": "file:../../aztec-packages/yarn-project/entrypoints",
     "@aztec/foundation": "file:../../aztec-packages/yarn-project/foundation",
     "@aztec/noir-contracts.js": "file:../../aztec-packages/yarn-project/noir-contracts.js",
+    "@aztec/note-collector": "file:../../aztec-packages/yarn-project/note-collector",
     "@aztec/pxe": "file:../../aztec-packages/yarn-project/pxe",
     "@aztec/stdlib": "file:../../aztec-packages/yarn-project/stdlib",
     "@aztec/wallet-sdk": "file:../../aztec-packages/yarn-project/wallet-sdk",
