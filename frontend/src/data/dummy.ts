@@ -1,21 +1,44 @@
-import { Transaction, TreeNode, ProofState } from "@/types";
+import { Transaction, TreeNode, ProofState, Token } from "@/types";
 
 export const TOKENS = {
-  ETH: { symbol: "ETH", color: "bg-blue-100" },
   USDC: { symbol: "USDC", color: "bg-indigo-100" },
-  SOL: { symbol: "SOL", color: "bg-purple-100" },
-  BTC: { symbol: "BTC", color: "bg-orange-100" },
-  DAI: { symbol: "DAI", color: "bg-yellow-100" },
+  wETH: { symbol: "wETH", color: "bg-blue-100" },
+  wZEC: { symbol: "wZEC", color: "bg-amber-100" },
+  wAZTEC: { symbol: "wAZTEC", color: "bg-purple-100" },
 } as const;
+
+export type TokenSymbol = keyof typeof TOKENS;
+
+export const POOLS: [TokenSymbol, TokenSymbol][] = [
+  ["wETH", "USDC"],
+  ["wZEC", "USDC"],
+  ["wAZTEC", "USDC"],
+];
+
+export const MOCK_PRICES: Record<TokenSymbol, number> = {
+  USDC: 1,
+  wETH: 2800,
+  wZEC: 30,
+  wAZTEC: 0.1,
+};
+
+export function getSwappableTokens(sellSymbol: string): Token[] {
+  const reachable = new Set<string>();
+  for (const [a, b] of POOLS) {
+    if (a === sellSymbol) reachable.add(b);
+    if (b === sellSymbol) reachable.add(a);
+  }
+  return Object.values(TOKENS).filter((t) => reachable.has(t.symbol));
+}
 
 export const dummyTransactions: Transaction[] = [
   {
     id: "tx-1",
     status: "proven",
-    tokenOut: TOKENS.ETH,
+    tokenOut: TOKENS.wETH,
     amountOut: "1.50",
     tokenIn: TOKENS.USDC,
-    amountIn: "2,850.00",
+    amountIn: "4,200.00",
     date: "Oct 24, 14:30",
   },
   {
@@ -23,35 +46,35 @@ export const dummyTransactions: Transaction[] = [
     status: "proven",
     tokenOut: TOKENS.USDC,
     amountOut: "5,000.00",
-    tokenIn: TOKENS.SOL,
-    amountIn: "145.20",
+    tokenIn: TOKENS.wZEC,
+    amountIn: "166.67",
     date: "Oct 24, 12:15",
   },
   {
     id: "tx-3",
     status: "proven",
-    tokenOut: TOKENS.BTC,
-    amountOut: "0.05",
-    tokenIn: TOKENS.ETH,
-    amountIn: "0.82",
+    tokenOut: TOKENS.wAZTEC,
+    amountOut: "500.00",
+    tokenIn: TOKENS.USDC,
+    amountIn: "50.00",
     date: "Oct 23, 09:42",
   },
   {
     id: "tx-4",
     status: "proving",
-    tokenOut: TOKENS.DAI,
+    tokenOut: TOKENS.USDC,
     amountOut: "1,000.00",
-    tokenIn: TOKENS.USDC,
-    amountIn: "999.80",
+    tokenIn: TOKENS.wETH,
+    amountIn: "0.3571",
     date: "Oct 22, 18:20",
   },
   {
     id: "tx-5",
     status: "pending",
-    tokenOut: TOKENS.SOL,
+    tokenOut: TOKENS.wZEC,
     amountOut: "10.00",
     tokenIn: TOKENS.USDC,
-    amountIn: "240.50",
+    amountIn: "300.00",
     date: "Oct 21, 11:05",
   },
 ];

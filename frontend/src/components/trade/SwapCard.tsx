@@ -1,59 +1,115 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { Icon } from "@iconify/react";
-import { TOKENS, DUMMY_BALANCES } from "@/data/dummy";
+import {
+  TOKENS,
+  MOCK_PRICES,
+  getSwappableTokens,
+  type TokenSymbol,
+} from "@/data/dummy";
 import { Token } from "@/types";
 import TokenIcon from "@/components/ui/TokenIcon";
 import { useAztecWallet } from "@/hooks/useAztecWallet";
+import { useTokenBalances } from "@/hooks/useTokenBalances";
 import { useToast } from "@/hooks/useToast";
 
-type TokenSymbol = keyof typeof TOKENS;
 const tokenList = Object.values(TOKENS) as Token[];
 
-type SwapState = "idle" | "executing" | "done";
+function parseBalance(s: string): number {
+  return parseFloat(s.replace(/,/g, ""));
+}
+
+function isValidAmount(value: string): boolean {
+  return /^\d*\.?\d*$/.test(value);
+}
 
 export default function SwapCard() {
   const { status: walletStatus } = useAztecWallet();
+  const { getBalance, isLoading, fetchBalance, refreshAll } = useTokenBalances();
   const { showToast } = useToast();
 
-  const [tokenOut, setTokenOut] = useState<Token>(TOKENS.ETH);
-  const [tokenIn, setTokenIn] = useState<Token>(TOKENS.USDC);
-  const [amountOut, setAmountOut] = useState("");
-  const [amountIn, setAmountIn] = useState("");
-  const [swapState, setSwapState] = useState<SwapState>("idle");
+  const [sellToken, setSellToken] = useState<Token>(TOKENS.USDC);
+  const [buyToken, setBuyToken] = useState<Token>(TOKENS.wETH);
+  const [sellAmount, setSellAmount] = useState("");
 
   const connected = walletStatus === "connected";
 
-  const flipTokens = () => {
-    setTokenOut(tokenIn);
-    setTokenIn(tokenOut);
-    setAmountOut(amountIn);
-    setAmountIn(amountOut);
-  };
+  const buyOptions = useMemo(
+    () => getSwappableTokens(sellToken.symbol),
+    [sellToken.symbol]
+  );
 
-  const executeSwap = async () => {
-    setSwapState("executing");
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    const success = Math.random() > 0.3;
-    setSwapState("done");
-    if (success) {
-      showToast(
-        `Swapped ${amountOut} ${tokenOut.symbol} for ${amountIn || "?"} ${tokenIn.symbol}`,
-        "success"
-      );
-    } else {
-      showToast("Swap failed. Please try again.", "error");
+  const estimatedOutput = useMemo(() => {
+    const amt = parseFloat(sellAmount);
+    if (!amt || amt <= 0) return "";
+    const sellPrice = MOCK_PRICES[sellToken.symbol as TokenSymbol] ?? 0;
+    const buyPrice = MOCK_PRICES[buyToken.symbol as TokenSymbol] ?? 0;
+    if (!buyPrice) return "";
+    const result = amt * (sellPrice / buyPrice);
+    return result.toFixed(6).replace(/\.?0+$/, "");
+  }, [sellAmount, sellToken.symbol, buyToken.symbol]);
+
+  // Fetch balances when token selection changes
+  useEffect(() => {
+    if (connected) fetchBalance(sellToken.symbol);
+  }, [connected, sellToken.symbol, fetchBalance]);
+  useEffect(() => {
+    if (connected) fetchBalance(buyToken.symbol);
+  }, [connected, buyToken.symbol, fetchBalance]);
+
+  const sellBalance = connected ? (getBalance(sellToken.symbol) ?? "\u2026") : "\u2014";
+  const buyBalance = connected ? (getBalance(buyToken.symbol) ?? "\u2026") : "\u2014";
+
+  const handleSellTokenChange = useCallback(
+    (token: Token) => {
+      setSellToken(token);
+      const newBuyOptions = getSwappableTokens(token.symbol);
+      if (!newBuyOptions.find((t) => t.symbol === buyToken.symbol)) {
+        setBuyToken(newBuyOptions[0]);
+      }
+    },
+    [buyToken.symbol]
+  );
+
+  const handleBuyTokenChange = useCallback((token: Token) => {
+    setBuyToken(token);
+  }, []);
+
+  const handleAmountChange = useCallback((value: string) => {
+    if (value === "" || isValidAmount(value)) {
+      setSellAmount(value);
     }
-    // Reset after a brief moment
-    setTimeout(() => setSwapState("idle"), 500);
-  };
+  }, []);
 
-  const canExecute =
-    connected &&
-    swapState === "idle" &&
-    amountOut.length > 0 &&
-    parseFloat(amountOut) > 0;
+  const flipTokens = useCallback(() => {
+    const newSell = buyToken;
+    const newBuy = sellToken;
+    setSellToken(newSell);
+    setBuyToken(newBuy);
+    setSellAmount("");
+  }, [sellToken, buyToken]);
+
+  const amt = parseFloat(sellAmount);
+  const hasAmount = sellAmount.length > 0 && amt > 0;
+  const insufficientBalance = hasAmount && amt > parseBalance(sellBalance);
+
+  let buttonLabel = "Swap";
+  let buttonDisabled = false;
+  if (!connected) {
+    buttonLabel = "Connect Wallet";
+    buttonDisabled = true;
+  } else if (!hasAmount) {
+    buttonLabel = "Enter an amount";
+    buttonDisabled = true;
+  } else if (insufficientBalance) {
+    buttonLabel = "Insufficient balance";
+    buttonDisabled = true;
+  }
+
+  const handleSwap = () => {
+    showToast("Swap execution coming soon", "success");
+  };
 
   return (
     <div className="w-full max-w-md bg-white rounded-2xl border border-neutral-200 shadow-sm p-6">
@@ -62,11 +118,15 @@ export default function SwapCard() {
       {/* You Pay */}
       <TokenSection
         label="You Pay"
-        token={tokenOut}
-        onTokenChange={setTokenOut}
-        amount={amountOut}
-        onAmountChange={setAmountOut}
-        otherToken={tokenIn}
+        token={sellToken}
+        onTokenChange={handleSellTokenChange}
+        amount={sellAmount}
+        onAmountChange={handleAmountChange}
+        balance={sellBalance}
+        balanceLoading={isLoading(sellToken.symbol)}
+        onRefresh={connected ? refreshAll : undefined}
+        tokenOptions={tokenList}
+        readOnly={false}
       />
 
       {/* Flip button */}
@@ -85,32 +145,23 @@ export default function SwapCard() {
       {/* You Receive */}
       <TokenSection
         label="You Receive"
-        token={tokenIn}
-        onTokenChange={setTokenIn}
-        amount={amountIn}
-        onAmountChange={setAmountIn}
-        otherToken={tokenOut}
+        token={buyToken}
+        onTokenChange={handleBuyTokenChange}
+        amount={estimatedOutput}
+        onAmountChange={() => {}}
+        balance={buyBalance}
+        balanceLoading={isLoading(buyToken.symbol)}
+        tokenOptions={buyOptions}
+        readOnly={true}
       />
 
       {/* Swap button */}
       <button
-        onClick={executeSwap}
-        disabled={!canExecute}
+        onClick={handleSwap}
+        disabled={buttonDisabled}
         className="mt-5 w-full py-3 rounded-xl font-medium text-sm transition-colors flex items-center justify-center gap-2 disabled:bg-neutral-100 disabled:text-neutral-400 disabled:cursor-not-allowed bg-orange-500 text-white hover:bg-orange-600 active:bg-orange-700"
       >
-        {swapState === "executing" ? (
-          <>
-            <Icon
-              icon="lucide:loader-2"
-              className="w-4 h-4 animate-spin"
-            />
-            Swapping...
-          </>
-        ) : !connected ? (
-          "Connect Wallet"
-        ) : (
-          "Swap"
-        )}
+        {buttonLabel}
       </button>
     </div>
   );
@@ -124,26 +175,46 @@ function TokenSection({
   onTokenChange,
   amount,
   onAmountChange,
-  otherToken,
+  balance,
+  balanceLoading,
+  onRefresh,
+  tokenOptions,
+  readOnly,
 }: {
   label: string;
   token: Token;
   onTokenChange: (t: Token) => void;
   amount: string;
   onAmountChange: (v: string) => void;
-  otherToken: Token;
+  balance: string;
+  balanceLoading?: boolean;
+  onRefresh?: () => void;
+  tokenOptions: Token[];
+  readOnly: boolean;
 }) {
   const [open, setOpen] = useState(false);
-
-  const balance =
-    DUMMY_BALANCES[token.symbol as TokenSymbol] ?? "0.00";
 
   return (
     <div className="rounded-xl bg-neutral-50 border border-neutral-100 p-4 mb-1">
       <div className="flex items-center justify-between mb-2">
-        <span className="text-xs text-neutral-500 font-medium">{label}</span>
+        <div className="flex items-center gap-1">
+          <span className="text-xs text-neutral-500 font-medium">{label}</span>
+          {onRefresh && (
+            <button
+              onClick={onRefresh}
+              className="w-5 h-5 flex items-center justify-center rounded hover:bg-neutral-200 text-neutral-400 hover:text-neutral-600 transition-colors"
+            >
+              <Icon icon="lucide:refresh-cw" className="w-3 h-3" />
+            </button>
+          )}
+        </div>
         <span className="text-xs text-neutral-400 font-mono">
-          Balance: {balance}
+          Balance:{" "}
+          {balanceLoading ? (
+            <span className="inline-block w-3 h-3 border border-neutral-300 border-t-transparent rounded-full animate-spin align-middle" />
+          ) : (
+            balance
+          )}
         </span>
       </div>
 
@@ -166,25 +237,23 @@ function TokenSection({
 
           {open && (
             <div className="absolute top-full left-0 mt-1 w-36 bg-white border border-neutral-200 rounded-lg shadow-lg py-1 z-20">
-              {tokenList
-                .filter((t) => t.symbol !== otherToken.symbol)
-                .map((t) => (
-                  <button
-                    key={t.symbol}
-                    onClick={() => {
-                      onTokenChange(t);
-                      setOpen(false);
-                    }}
-                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-neutral-50 transition-colors ${
-                      t.symbol === token.symbol
-                        ? "text-orange-600 font-medium"
-                        : "text-neutral-700"
-                    }`}
-                  >
-                    <TokenIcon token={t} size="sm" />
-                    {t.symbol}
-                  </button>
-                ))}
+              {tokenOptions.map((t) => (
+                <button
+                  key={t.symbol}
+                  onClick={() => {
+                    onTokenChange(t);
+                    setOpen(false);
+                  }}
+                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-neutral-50 transition-colors ${
+                    t.symbol === token.symbol
+                      ? "text-orange-600 font-medium"
+                      : "text-neutral-700"
+                  }`}
+                >
+                  <TokenIcon token={t} size="sm" />
+                  {t.symbol}
+                </button>
+              ))}
             </div>
           )}
         </div>
@@ -196,7 +265,10 @@ function TokenSection({
           placeholder="0.00"
           value={amount}
           onChange={(e) => onAmountChange(e.target.value)}
-          className="flex-1 text-right text-xl font-mono bg-transparent outline-none placeholder:text-neutral-300 text-neutral-900"
+          readOnly={readOnly}
+          className={`flex-1 text-right text-xl font-mono bg-transparent outline-none placeholder:text-neutral-300 text-neutral-900 ${
+            readOnly ? "cursor-default" : ""
+          }`}
         />
       </div>
     </div>

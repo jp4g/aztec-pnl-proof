@@ -3,6 +3,8 @@ import { Inter, JetBrains_Mono } from "next/font/google";
 import Navbar from "@/components/layout/Navbar";
 import Footer from "@/components/layout/Footer";
 import { AztecWalletProvider } from "@/contexts/AztecWalletContext";
+import { TokenProvider } from "@/contexts/TokenContext";
+import { ToastProvider } from "@/contexts/ToastContext";
 import "./globals.css";
 
 const inter = Inter({
@@ -33,9 +35,13 @@ export default function RootLayout({
         className={`${inter.variable} ${jetbrainsMono.variable} font-sans bg-neutral-50 text-neutral-800 antialiased selection:bg-orange-100 selection:text-orange-600 min-h-screen flex flex-col`}
       >
         <AztecWalletProvider>
-          <Navbar />
-          {children}
-          <Footer />
+          <TokenProvider>
+            <ToastProvider>
+              <Navbar />
+              {children}
+              <Footer />
+            </ToastProvider>
+          </TokenProvider>
         </AztecWalletProvider>
       </body>
     </html>

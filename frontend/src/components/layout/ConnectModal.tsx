@@ -1,6 +1,8 @@
 "use client";
 
 import { useAztecWallet } from "@/hooks/useAztecWallet";
+import { useTokens } from "@/hooks/useTokens";
+import { useToast } from "@/hooks/useToast";
 import { Icon } from "@iconify/react";
 import { useState } from "react";
 
@@ -10,8 +12,22 @@ interface ConnectModalProps {
 
 export default function ConnectModal({ onClose }: ConnectModalProps) {
   const { status, address, accounts, error, connect, createAccount, switchAccount, removeAccount, disconnect, clearAllSavedAccounts } = useAztecWallet();
+  const { mintUsdc, hasMintedUsdc, isMinting } = useTokens();
+  const { showToast } = useToast();
   const [copied, setCopied] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+
+  const handleMint = async () => {
+    try {
+      await mintUsdc();
+      showToast("Minted 100,000 USDC", "success");
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : "Failed to mint USDC",
+        "error"
+      );
+    }
+  };
 
   const handleBackdropClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.target === e.currentTarget) onClose();
@@ -166,6 +182,27 @@ export default function ConnectModal({ onClose }: ConnectModalProps) {
                 );
               })}
             </div>
+
+            {/* Mint USDC */}
+            {!hasMintedUsdc && (
+              <button
+                onClick={handleMint}
+                disabled={isMinting}
+                className="w-full py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-600 disabled:bg-indigo-300 text-white text-sm font-medium transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                {isMinting ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    Minting...
+                  </>
+                ) : (
+                  <>
+                    <Icon icon="solar:wallet-money-linear" width={16} />
+                    Mint 100,000 USDC
+                  </>
+                )}
+              </button>
+            )}
 
             {/* Create new account */}
             <button

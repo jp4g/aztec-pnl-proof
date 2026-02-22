@@ -150,6 +150,7 @@ function saveRegisteredContracts(addresses: string[]) {
 export class EmbeddedAuditableWallet extends AuditableWallet {
   connectedAccount: AztecAddress | null = null;
   protected accounts: Map<string, Account> = new Map();
+  private internalAccounts = new Set<string>();
 
   protected async getAccountFromAddress(
     address: AztecAddress
@@ -168,10 +169,12 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
 
   getAccounts() {
     return Promise.resolve(
-      Array.from(this.accounts.values()).map((acc) => ({
-        alias: "",
-        item: acc.getAddress(),
-      }))
+      Array.from(this.accounts.values())
+        .filter((acc) => !this.internalAccounts.has(acc.getAddress().toString()))
+        .map((acc) => ({
+          alias: "",
+          item: acc.getAddress(),
+        }))
     );
   }
 
@@ -221,7 +224,8 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
     const base = await super.completeFeeOptions(from, feePayer, gasSettings);
     // Only inject sponsored FPC when the transaction doesn't already have a fee
     // payer (feePayer is set when the execution payload already embeds fee calls)
-    if (!base.walletFeePaymentMethod && !feePayer) {
+    // and the sender is not an internal account (e.g. admin pays its own gas)
+    if (!base.walletFeePaymentMethod && !feePayer && !this.internalAccounts.has(from.toString())) {
       base.walletFeePaymentMethod = await this.getSponsoredPaymentMethod();
     }
     return base;
@@ -331,7 +335,7 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
         validAddresses.push(accountManager.address);
         validEntries.push(entry);
       } catch (err) {
-        logger.warn("Failed to restore account, skipping", entry.address, err);
+        logger.warn(`Failed to restore account ${entry.address}, skipping: ${err}`);
       }
     }
 
@@ -383,8 +387,26 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
     }
   }
 
+  async registerAccountFromCredentials(
+    secret: Fr,
+    salt: Fr,
+    signingKey: GrumpkinScalar,
+  ): Promise<AztecAddress> {
+    const contract = new SchnorrAccountContract(signingKey);
+    const accountManager = await AccountManager.create(this, secret, contract, salt);
+    await this.registerAccount(accountManager);
+    this.accounts.set(
+      accountManager.address.toString(),
+      await accountManager.getAccount()
+    );
+    this.internalAccounts.add(accountManager.address.toString());
+    return accountManager.address;
+  }
+
   getAccountAddresses(): AztecAddress[] {
-    return Array.from(this.accounts.keys()).map(a => AztecAddress.fromString(a));
+    return Array.from(this.accounts.keys())
+      .filter(a => !this.internalAccounts.has(a))
+      .map(a => AztecAddress.fromString(a));
   }
 
   switchAccount(address: AztecAddress) {
