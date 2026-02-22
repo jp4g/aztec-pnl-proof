@@ -32,8 +32,6 @@ export function useTokenBalances() {
   const [balances, setBalances] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const pendingRef = useRef(new Set<string>());
-  // Serialize PXE calls to avoid concurrent IDB transactions invalidating each other
-  const queueRef = useRef(Promise.resolve());
 
   // Reset when address changes
   useEffect(() => {
@@ -55,8 +53,9 @@ export function useTokenBalances() {
 
       setLoading((prev) => ({ ...prev, [symbol]: true }));
 
-      // Chain onto queue so fetches run one at a time
-      queueRef.current = queueRef.current.then(async () => {
+      // Use the wallet's IDB queue so balance fetches don't overlap with
+      // contract registration or other PXE operations
+      wallet.enqueue(async () => {
         try {
           const { AztecAddress } = await import("@aztec/aztec.js/addresses");
           const { Contract } = await import("@aztec/aztec.js/contracts");

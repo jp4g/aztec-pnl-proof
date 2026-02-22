@@ -55,8 +55,18 @@ export function AztecWalletProvider({ children }: { children: ReactNode }) {
     try {
       const wallet = await ensureWallet();
 
-      // Connect accounts first so the UI is responsive immediately
-      const { active, all } = await wallet.connectAllAccounts();
+      // Run account connection and contract registration concurrently.
+      // Network fetches overlap, IDB writes serialize through the wallet queue.
+      // State is only set after BOTH complete so balance fetches can't fire
+      // before contracts are registered.
+      const [accountResult] = await Promise.all([
+        wallet.connectAllAccounts(),
+        wallet.registerDeployedContracts().catch((err) =>
+          console.warn("Contract registration failed:", err)
+        ),
+      ]);
+
+      const { active, all } = accountResult!;
       setAccounts(all.map(a => a.toString()));
 
       if (active) {
@@ -65,12 +75,6 @@ export function AztecWalletProvider({ children }: { children: ReactNode }) {
       } else {
         setStatus("no_account");
       }
-
-      // Register deployed contracts in the background (fetches in parallel,
-      // serializes IDB writes internally)
-      wallet.registerDeployedContracts().catch((err) =>
-        console.warn("Contract registration failed:", err)
-      );
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Failed to connect wallet";

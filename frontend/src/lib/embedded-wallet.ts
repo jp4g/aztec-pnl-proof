@@ -137,6 +137,15 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
   connectedAccount: AztecAddress | null = null;
   protected accounts: Map<string, Account> = new Map();
   private internalAccounts = new Set<string>();
+  /** Serializes all PXE/IDB operations to avoid TransactionInactiveError */
+  private idbQueue: Promise<unknown> = Promise.resolve();
+
+  /** Queue a PXE operation that touches IDB so it doesn't overlap with others */
+  enqueue<T>(fn: () => Promise<T>): Promise<T> {
+    const p = this.idbQueue.then(fn, fn);
+    this.idbQueue = p.catch(() => {});
+    return p;
+  }
 
   protected async getAccountFromAddress(
     address: AztecAddress
@@ -308,7 +317,7 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
           Fr.fromString(entry.salt)
         );
 
-        await this.registerAccount(accountManager);
+        await this.enqueue(() => this.registerAccount(accountManager));
         this.accounts.set(
           accountManager.address.toString(),
           await accountManager.getAccount()
@@ -347,7 +356,7 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
   async registerDeployedContracts(): Promise<void> {
     const entries = CONTRACT_REGISTRY.filter((e) => !!e.address);
 
-    // Fetch all on-chain instances + artifacts in parallel
+    // Fetch all on-chain instances + artifacts in parallel (no IDB)
     const resolved = await Promise.all(
       entries.map(async (entry) => {
         try {
@@ -368,16 +377,21 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
       })
     );
 
-    // Serialize registerContract calls to avoid IDB conflicts
-    for (const item of resolved) {
-      if (!item) continue;
-      try {
-        await this.registerContract(item.instance, item.artifact);
-        logger.info(`[register] registered ${item.label} at ${item.address}`);
-      } catch (err) {
-        logger.warn(`[register] failed ${item.label}:`, err);
+    // Register all contracts in a single queue item so balance fetches
+    // can't interleave between them
+    const items = resolved.filter((r): r is NonNullable<typeof r> => r !== null);
+    if (items.length === 0) return;
+
+    await this.enqueue(async () => {
+      for (const item of items) {
+        try {
+          await this.registerContract(item.instance, item.artifact);
+          logger.info(`[register] registered ${item.label} at ${item.address}`);
+        } catch (err) {
+          logger.warn(`[register] failed ${item.label}:`, err);
+        }
       }
-    }
+    });
   }
 
   async registerAccountFromCredentials(
