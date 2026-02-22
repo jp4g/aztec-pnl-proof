@@ -16,6 +16,7 @@ import { retrieveEncryptedEvents } from '../src/event-reader';
 import { SwapProver } from '../src/swap-prover';
 import { SwapProofTree } from '../src/swap-proof-tree';
 import { LotStateTree } from '../src/lot-state-tree';
+import { TaxProver } from '../src/tax-prover';
 import { rebalancePools, type PoolState } from '../src/rebalance';
 
 import individualSwapCircuit from '../circuits/individual_swap/target/individual_swap.json' with { type: 'json' };
@@ -428,7 +429,38 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", () => {
         expect(result.publicInputs.root).toBe(expectedRoot.toString());
         console.log(`  Merkle root matches!`);
 
-        console.log("\n  All assertions passed!");
+        // ========================================
+        // Generate capital gains tax wrapper proof
+        // ========================================
+        console.log("\n=== Generate capital gains tax proof ===");
+
+        const taxProver = new TaxProver(bb, swapSummaryTreeCircuit as CompiledCircuit);
+        const taxResult = await taxProver.prove(result);
+
+        console.log(`\n=== TAX PROOF RESULT ===`);
+        console.log(`  root: ${taxResult.publicInputs.root}`);
+        console.log(`  pnl: ${taxResult.publicInputs.pnl}`);
+        console.log(`  tax: ${taxResult.publicInputs.tax}`);
+        console.log(`  remainingLotStateRoot: ${taxResult.publicInputs.remainingLotStateRoot}`);
+        console.log(`  initialLotStateRoot: ${taxResult.publicInputs.initialLotStateRoot}`);
+        console.log(`  price_feed_address: ${taxResult.publicInputs.priceFeedAddress}`);
+        console.log(`  block_number: ${taxResult.publicInputs.blockNumber}`);
+
+        // Verify tax computation
+        const expectedTax = expectedPnl > 0n ? expectedPnl / 5n : 0n;
+        console.log(`  Expected tax: ${expectedTax}`);
+        console.log(`  Actual tax:   ${taxResult.publicInputs.tax}`);
+        expect(taxResult.publicInputs.tax).toBe(expectedTax);
+
+        // Verify forwarded fields match summary result
+        expect(taxResult.publicInputs.pnl).toBe(result.publicInputs.pnl);
+        expect(taxResult.publicInputs.root).toBe(result.publicInputs.root);
+        expect(taxResult.publicInputs.priceFeedAddress).toBe(result.publicInputs.priceFeedAddress);
+        expect(taxResult.publicInputs.blockNumber).toBe(result.publicInputs.blockNumber);
+        expect(taxResult.publicInputs.remainingLotStateRoot).toBe(result.publicInputs.remainingLotStateRoot);
+        expect(taxResult.publicInputs.initialLotStateRoot).toBe(result.publicInputs.initialLotStateRoot);
+
+        console.log("\n  All assertions passed (including tax)!");
     });
 
 });

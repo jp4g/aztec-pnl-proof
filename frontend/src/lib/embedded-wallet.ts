@@ -20,7 +20,132 @@ import { type FeeOptions } from "@aztec/wallet-sdk/base-wallet";
 import { GasSettings } from "@aztec/stdlib/gas";
 
 const logger = createLogger("privdex:wallet");
-const LOCAL_STORAGE_KEY = "privdex-aztec-account";
+const ACCOUNTS_KEY = "privdex-aztec-accounts";
+const ACTIVE_ACCOUNT_KEY = "privdex-aztec-active-account";
+const LEGACY_KEY = "privdex-aztec-account";
+const REGISTERED_CONTRACTS_KEY = "privdex-registered-contracts";
+
+interface ContractRegistryEntry {
+  label: string;
+  address: string | undefined;
+  loadArtifact: () => Promise<import("@aztec/aztec.js/abi").ContractArtifact>;
+}
+
+// Next.js requires static process.env.NEXT_PUBLIC_* access for build-time replacement
+const CONTRACT_REGISTRY: ContractRegistryEntry[] = [
+  {
+    label: "Token (USDC)",
+    address: process.env.NEXT_PUBLIC_TOKEN_USDC,
+    loadArtifact: () => import("../artifacts/Token").then((m) => m.TokenContractArtifact),
+  },
+  {
+    label: "Token (wETH)",
+    address: process.env.NEXT_PUBLIC_TOKEN_WETH,
+    loadArtifact: () => import("../artifacts/Token").then((m) => m.TokenContractArtifact),
+  },
+  {
+    label: "Token (wZEC)",
+    address: process.env.NEXT_PUBLIC_TOKEN_WZEC,
+    loadArtifact: () => import("../artifacts/Token").then((m) => m.TokenContractArtifact),
+  },
+  {
+    label: "Token (wAZTEC)",
+    address: process.env.NEXT_PUBLIC_TOKEN_WAZTEC,
+    loadArtifact: () => import("../artifacts/Token").then((m) => m.TokenContractArtifact),
+  },
+  {
+    label: "PriceFeed",
+    address: process.env.NEXT_PUBLIC_PRICE_FEED,
+    loadArtifact: () => import("@aztec/noir-contracts.js/PriceFeed").then((m) => m.PriceFeedContractArtifact),
+  },
+  {
+    label: "AMM (ETH/USDC)",
+    address: process.env.NEXT_PUBLIC_AMM_ETH_USDC,
+    loadArtifact: () => import("../artifacts/AMM").then((m) => m.AMMContractArtifact),
+  },
+  {
+    label: "AMM (ZEC/USDC)",
+    address: process.env.NEXT_PUBLIC_AMM_ZEC_USDC,
+    loadArtifact: () => import("../artifacts/AMM").then((m) => m.AMMContractArtifact),
+  },
+  {
+    label: "AMM (AZTEC/USDC)",
+    address: process.env.NEXT_PUBLIC_AMM_AZTEC_USDC,
+    loadArtifact: () => import("../artifacts/AMM").then((m) => m.AMMContractArtifact),
+  },
+  {
+    label: "LP (ETH/USDC)",
+    address: process.env.NEXT_PUBLIC_LP_ETH_USDC,
+    loadArtifact: () => import("../artifacts/Token").then((m) => m.TokenContractArtifact),
+  },
+  {
+    label: "LP (ZEC/USDC)",
+    address: process.env.NEXT_PUBLIC_LP_ZEC_USDC,
+    loadArtifact: () => import("../artifacts/Token").then((m) => m.TokenContractArtifact),
+  },
+  {
+    label: "LP (AZTEC/USDC)",
+    address: process.env.NEXT_PUBLIC_LP_AZTEC_USDC,
+    loadArtifact: () => import("../artifacts/Token").then((m) => m.TokenContractArtifact),
+  },
+];
+
+interface StoredAccount {
+  address: string;
+  signingKey: string;
+  secretKey: string;
+  salt: string;
+}
+
+function loadStoredAccounts(): StoredAccount[] {
+  // Migrate legacy single-account key if present
+  const legacy = localStorage.getItem(LEGACY_KEY);
+  if (legacy) {
+    try {
+      const parsed = JSON.parse(legacy) as StoredAccount;
+      const arr = [parsed];
+      localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(arr));
+      localStorage.setItem(ACTIVE_ACCOUNT_KEY, parsed.address);
+      localStorage.removeItem(LEGACY_KEY);
+      return arr;
+    } catch {
+      localStorage.removeItem(LEGACY_KEY);
+    }
+  }
+  const raw = localStorage.getItem(ACCOUNTS_KEY);
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw) as StoredAccount[];
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredAccounts(accounts: StoredAccount[]) {
+  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
+}
+
+function getStoredActiveAddress(): string | null {
+  return localStorage.getItem(ACTIVE_ACCOUNT_KEY);
+}
+
+function setStoredActiveAddress(address: string) {
+  localStorage.setItem(ACTIVE_ACCOUNT_KEY, address);
+}
+
+function loadRegisteredContracts(): string[] {
+  const raw = localStorage.getItem(REGISTERED_CONTRACTS_KEY);
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw) as string[];
+  } catch {
+    return [];
+  }
+}
+
+function saveRegisteredContracts(addresses: string[]) {
+  localStorage.setItem(REGISTERED_CONTRACTS_KEY, JSON.stringify(addresses));
+}
 
 export class EmbeddedAuditableWallet extends AuditableWallet {
   connectedAccount: AztecAddress | null = null;
@@ -155,68 +280,148 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
     const receipt = await deployMethod.send(deployOpts).wait({ timeout: 120 });
     logger.info("Account deployed", receipt);
 
-    localStorage.setItem(
-      LOCAL_STORAGE_KEY,
-      JSON.stringify({
-        address: accountManager.address.toString(),
-        signingKey: signingKey.toString(),
-        secretKey: secretKey.toString(),
-        salt: salt.toString(),
-      })
-    );
+    const newEntry: StoredAccount = {
+      address: accountManager.address.toString(),
+      signingKey: signingKey.toString(),
+      secretKey: secretKey.toString(),
+      salt: salt.toString(),
+    };
+    const existing = loadStoredAccounts();
+    existing.push(newEntry);
+    saveStoredAccounts(existing);
+    setStoredActiveAddress(newEntry.address);
 
     this.connectedAccount = accountManager.address;
     return this.connectedAccount;
   }
 
-  async connectExistingAccount() {
-    const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (!stored) return null;
+  async connectAllAccounts(): Promise<{ active: AztecAddress | null; all: AztecAddress[] }> {
+    const stored = loadStoredAccounts();
+    if (stored.length === 0) return { active: null, all: [] };
 
-    try {
-      const parsed = JSON.parse(stored);
-      const contract = new SchnorrAccountContract(
-        GrumpkinScalar.fromString(parsed.signingKey)
-      );
-      const accountManager = await AccountManager.create(
-        this,
-        Fr.fromString(parsed.secretKey),
-        contract,
-        Fr.fromString(parsed.salt)
-      );
+    const validAddresses: AztecAddress[] = [];
+    const validEntries: StoredAccount[] = [];
 
-      // Register the account early — wallet methods (createAuthWit, sendTx)
-      // call getAccountFromAddress() which needs the account in the map
-      await this.registerAccount(accountManager);
-      this.accounts.set(
-        accountManager.address.toString(),
-        await accountManager.getAccount()
-      );
+    for (const entry of stored) {
+      try {
+        const contract = new SchnorrAccountContract(
+          GrumpkinScalar.fromString(entry.signingKey)
+        );
+        const accountManager = await AccountManager.create(
+          this,
+          Fr.fromString(entry.secretKey),
+          contract,
+          Fr.fromString(entry.salt)
+        );
 
-      // Check if the account actually exists on-chain (sandbox may have restarted)
-      const metadata = await this.getContractMetadata(accountManager.address);
-      if (!metadata.isContractInitialized) {
-        logger.warn("Saved account not found on-chain, clearing stale credentials");
-        this.accounts.delete(accountManager.address.toString());
-        localStorage.removeItem(LOCAL_STORAGE_KEY);
-        return null;
+        await this.registerAccount(accountManager);
+        this.accounts.set(
+          accountManager.address.toString(),
+          await accountManager.getAccount()
+        );
+
+        // Check if the account actually exists on-chain (sandbox may have restarted)
+        const metadata = await this.getContractMetadata(accountManager.address);
+        if (!metadata.isContractInitialized) {
+          logger.warn("Account not found on-chain, removing stale entry", entry.address);
+          this.accounts.delete(accountManager.address.toString());
+          continue;
+        }
+
+        validAddresses.push(accountManager.address);
+        validEntries.push(entry);
+      } catch (err) {
+        logger.warn("Failed to restore account, skipping", entry.address, err);
+      }
+    }
+
+    // Persist only valid entries
+    saveStoredAccounts(validEntries);
+
+    // Determine active account
+    const storedActive = getStoredActiveAddress();
+    const activeAddr = validAddresses.find(a => a.toString() === storedActive) ?? validAddresses[0] ?? null;
+
+    if (activeAddr) {
+      this.connectedAccount = activeAddr;
+      setStoredActiveAddress(activeAddr.toString());
+    }
+
+    return { active: activeAddr, all: validAddresses };
+  }
+
+  async registerDeployedContracts(): Promise<void> {
+    const registeredSet = new Set(loadRegisteredContracts());
+
+    for (const entry of CONTRACT_REGISTRY) {
+      const addrStr = entry.address;
+      if (!addrStr) {
+        logger.info(`[register] skip ${entry.label}: no env var`);
+        continue;
+      }
+      if (registeredSet.has(addrStr)) {
+        logger.info(`[register] skip ${entry.label}: already registered`);
+        continue;
       }
 
-      this.connectedAccount = accountManager.address;
-      return this.connectedAccount;
-    } catch (err) {
-      logger.warn("Failed to restore saved account, clearing", err);
-      localStorage.removeItem(LOCAL_STORAGE_KEY);
-      return null;
+      try {
+        const address = AztecAddress.fromString(addrStr);
+        const instance = await this.aztecNode.getContract(address);
+        if (!instance) {
+          logger.info(`[register] skip ${entry.label}: not found on-chain`);
+          continue;
+        }
+
+        const artifact = await entry.loadArtifact();
+        await this.registerContract(instance, artifact);
+        registeredSet.add(addrStr);
+        saveRegisteredContracts([...registeredSet]);
+        logger.info(`[register] registered ${entry.label} at ${addrStr}`);
+      } catch (err) {
+        logger.warn(`[register] failed ${entry.label}:`, err);
+      }
     }
+  }
+
+  getAccountAddresses(): AztecAddress[] {
+    return Array.from(this.accounts.keys()).map(a => AztecAddress.fromString(a));
+  }
+
+  switchAccount(address: AztecAddress) {
+    const key = address.toString();
+    if (!this.accounts.has(key)) {
+      throw new Error(`Account not found: ${key}`);
+    }
+    this.connectedAccount = address;
+    setStoredActiveAddress(key);
   }
 
   disconnect() {
     this.connectedAccount = null;
-    localStorage.removeItem(LOCAL_STORAGE_KEY);
   }
 
-  static clearSavedAccount() {
-    localStorage.removeItem(LOCAL_STORAGE_KEY);
+  removeAccount(address: AztecAddress) {
+    const key = address.toString();
+    this.accounts.delete(key);
+
+    const stored = loadStoredAccounts().filter(e => e.address !== key);
+    saveStoredAccounts(stored);
+
+    if (this.connectedAccount?.toString() === key) {
+      const next = stored.length > 0 ? AztecAddress.fromString(stored[0].address) : null;
+      this.connectedAccount = next;
+      if (next) {
+        setStoredActiveAddress(next.toString());
+      } else {
+        localStorage.removeItem(ACTIVE_ACCOUNT_KEY);
+      }
+    }
+  }
+
+  static clearAllSavedAccounts() {
+    localStorage.removeItem(ACCOUNTS_KEY);
+    localStorage.removeItem(ACTIVE_ACCOUNT_KEY);
+    localStorage.removeItem(LEGACY_KEY);
+    localStorage.removeItem(REGISTERED_CONTRACTS_KEY);
   }
 }

@@ -7,7 +7,7 @@ import type { SwapProver, SwapProofResult, SwapData } from './swap-prover';
 import { LotStateTree } from './lot-state-tree';
 
 /** Parse a potentially negative hex string like "-0x1a" into a BigInt */
-function parseSignedHex(s: string): bigint {
+export function parseSignedHex(s: string): bigint {
     if (s.startsWith('-0x') || s.startsWith('-0X')) {
         return -BigInt(s.slice(1));
     }
@@ -15,7 +15,7 @@ function parseSignedHex(s: string): bigint {
 }
 
 /** Encode a signed i64 bigint as its two's complement u64 Field string */
-function i64ToField(val: bigint): string {
+export function i64ToField(val: bigint): string {
     if (val < 0n) {
         return ((1n << 64n) + val).toString();
     }
@@ -23,15 +23,7 @@ function i64ToField(val: bigint): string {
 }
 
 /** Decode a two's complement u64 Field value back to signed i64 */
-function fieldToI64(val: bigint): bigint {
-    if (val >= (1n << 63n)) {
-        return val - (1n << 64n);
-    }
-    return val;
-}
-
-/** Decode a two's complement u64 Field value back to signed i64 */
-function fieldToI64(val: bigint): bigint {
+export function fieldToI64(val: bigint): bigint {
     if (val >= (1n << 63n)) {
         return val - (1n << 64n);
     }

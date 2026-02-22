@@ -9,18 +9,23 @@ interface ConnectModalProps {
 }
 
 export default function ConnectModal({ onClose }: ConnectModalProps) {
-  const { status, address, error, connect, createAccount, disconnect, clearSavedAccount } = useAztecWallet();
-  const [copied, setCopied] = useState(false);
+  const { status, address, accounts, error, connect, createAccount, switchAccount, removeAccount, disconnect, clearAllSavedAccounts } = useAztecWallet();
+  const [copied, setCopied] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
 
   const handleBackdropClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.target === e.currentTarget) onClose();
   };
 
-  const copyAddress = async () => {
-    if (!address) return;
-    await navigator.clipboard.writeText(address);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const copyAddress = async (addr: string) => {
+    await navigator.clipboard.writeText(addr);
+    setCopied(addr);
+    setTimeout(() => setCopied(null), 2000);
+  };
+
+  const truncateAddress = (addr: string) => {
+    if (addr.length <= 16) return addr;
+    return `${addr.slice(0, 8)}...${addr.slice(-6)}`;
   };
 
   return (
@@ -98,28 +103,80 @@ export default function ConnectModal({ onClose }: ConnectModalProps) {
           </div>
         )}
 
-        {/* Connected state */}
+        {/* Connected state — account list */}
         {status === "connected" && address && (
           <div className="space-y-4">
-            <div className="flex items-center gap-2 p-3 rounded-lg bg-neutral-50 border border-neutral-200">
-              <div className="w-2 h-2 bg-green-500 rounded-full shrink-0" />
-              <span className="text-xs font-mono text-neutral-600 break-all flex-1">
-                {address}
-              </span>
-              <button
-                onClick={copyAddress}
-                className="shrink-0 w-7 h-7 flex items-center justify-center rounded-md hover:bg-neutral-200 text-neutral-400 hover:text-neutral-600 transition-colors"
-              >
-                <Icon
-                  icon={
-                    copied
-                      ? "solar:check-circle-linear"
-                      : "solar:copy-linear"
-                  }
-                  width={16}
-                />
-              </button>
+            {/* Account list */}
+            <div className="rounded-lg border border-neutral-200 divide-y divide-neutral-100">
+              {accounts.map((acc) => {
+                const isActive = acc === address;
+                return (
+                  <div
+                    key={acc}
+                    onClick={() => {
+                      if (!isActive) switchAccount(acc);
+                    }}
+                    className={`w-full flex items-center gap-2 p-3 text-left transition-colors ${
+                      isActive
+                        ? "bg-neutral-50"
+                        : "hover:bg-neutral-50 cursor-pointer"
+                    }`}
+                  >
+                    <div
+                      className={`w-2 h-2 rounded-full shrink-0 ${
+                        isActive ? "bg-green-500" : "bg-neutral-300"
+                      }`}
+                    />
+                    <span className="text-xs font-mono text-neutral-600 flex-1 truncate">
+                      {truncateAddress(acc)}
+                    </span>
+                    {isActive && (
+                      <Icon
+                        icon="solar:check-circle-linear"
+                        width={16}
+                        className="text-green-500 shrink-0"
+                      />
+                    )}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        copyAddress(acc);
+                      }}
+                      className="shrink-0 w-7 h-7 flex items-center justify-center rounded-md hover:bg-neutral-200 text-neutral-400 hover:text-neutral-600 transition-colors"
+                    >
+                      <Icon
+                        icon={
+                          copied === acc
+                            ? "solar:check-circle-linear"
+                            : "solar:copy-linear"
+                        }
+                        width={14}
+                      />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConfirmRemove(acc);
+                      }}
+                      className="shrink-0 w-7 h-7 flex items-center justify-center rounded-md hover:bg-red-100 text-neutral-400 hover:text-red-500 transition-colors"
+                    >
+                      <Icon icon="solar:trash-bin-minimalistic-linear" width={14} />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
+
+            {/* Create new account */}
+            <button
+              onClick={createAccount}
+              className="w-full py-2.5 rounded-xl border border-dashed border-neutral-300 text-sm font-medium text-neutral-500 hover:text-neutral-700 hover:border-neutral-400 hover:bg-neutral-50 transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+            >
+              <Icon icon="solar:add-circle-linear" width={16} />
+              Create New Account
+            </button>
+
+            {/* Disconnect */}
             <button
               onClick={() => {
                 disconnect();
@@ -142,14 +199,48 @@ export default function ConnectModal({ onClose }: ConnectModalProps) {
               Retry Connection
             </button>
             <button
-              onClick={() => { clearSavedAccount(); }}
+              onClick={() => { clearAllSavedAccounts(); }}
               className="w-full py-2.5 rounded-xl border border-neutral-200 text-sm font-medium text-neutral-600 hover:bg-neutral-50 transition-colors cursor-pointer"
             >
-              Clear Saved Account
+              Clear Saved Accounts
             </button>
           </div>
         )}
       </div>
+
+      {/* Remove account confirmation modal */}
+      {confirmRemove && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-xs mx-4 p-6">
+            <h3 className="text-base font-semibold text-neutral-900 mb-2">
+              Remove Account
+            </h3>
+            <p className="text-sm text-neutral-500 mb-1">
+              Are you sure you want to remove this account?
+            </p>
+            <p className="text-xs font-mono text-neutral-400 mb-6 break-all">
+              {truncateAddress(confirmRemove)}
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmRemove(null)}
+                className="flex-1 py-2.5 rounded-xl border border-neutral-200 text-sm font-medium text-neutral-600 hover:bg-neutral-50 transition-colors cursor-pointer"
+              >
+                No
+              </button>
+              <button
+                onClick={() => {
+                  removeAccount(confirmRemove);
+                  setConfirmRemove(null);
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-red-500 hover:bg-red-600 text-white text-sm font-medium transition-colors cursor-pointer"
+              >
+                Yes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

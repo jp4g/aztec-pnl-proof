@@ -14,12 +14,15 @@ export type WalletStatus = "disconnected" | "connecting" | "connected" | "no_acc
 export interface AztecWalletContextValue {
   wallet: EmbeddedAuditableWallet | null;
   address: string | null;
+  accounts: string[];
   status: WalletStatus;
   error: string | null;
   connect: () => Promise<void>;
   createAccount: () => Promise<void>;
+  switchAccount: (address: string) => Promise<void>;
+  removeAccount: (address: string) => Promise<void>;
   disconnect: () => void;
-  clearSavedAccount: () => void;
+  clearAllSavedAccounts: () => void;
 }
 
 export const AztecWalletContext = createContext<AztecWalletContextValue | null>(
@@ -32,6 +35,7 @@ const NODE_URL =
 export function AztecWalletProvider({ children }: { children: ReactNode }) {
   const walletRef = useRef<EmbeddedAuditableWallet | null>(null);
   const [address, setAddress] = useState<string | null>(null);
+  const [accounts, setAccounts] = useState<string[]>([]);
   const [status, setStatus] = useState<WalletStatus>("disconnected");
   const [error, setError] = useState<string | null>(null);
 
@@ -50,10 +54,15 @@ export function AztecWalletProvider({ children }: { children: ReactNode }) {
 
     try {
       const wallet = await ensureWallet();
-      const connectedAddress = await wallet.connectExistingAccount();
+      // Fire and forget — don't block account connection
+      wallet.registerDeployedContracts().catch((err) =>
+        console.warn("Background contract registration failed:", err)
+      );
+      const { active, all } = await wallet.connectAllAccounts();
+      setAccounts(all.map(a => a.toString()));
 
-      if (connectedAddress) {
-        setAddress(connectedAddress.toString());
+      if (active) {
+        setAddress(active.toString());
         setStatus("connected");
       } else {
         setStatus("no_account");
@@ -74,7 +83,9 @@ export function AztecWalletProvider({ children }: { children: ReactNode }) {
     try {
       const wallet = await ensureWallet();
       const connectedAddress = await wallet.createAccountAndConnect();
-      setAddress(connectedAddress.toString());
+      const addrStr = connectedAddress.toString();
+      setAddress(addrStr);
+      setAccounts(prev => [...prev, addrStr]);
       setStatus("connected");
     } catch (err) {
       const message =
@@ -84,19 +95,43 @@ export function AztecWalletProvider({ children }: { children: ReactNode }) {
     }
   }, [status, ensureWallet]);
 
+  const switchAccount = useCallback(async (addr: string) => {
+    if (!walletRef.current) return;
+    const { AztecAddress } = await import("@aztec/aztec.js/addresses");
+    walletRef.current.switchAccount(AztecAddress.fromString(addr));
+    setAddress(addr);
+  }, []);
+
+  const removeAccount = useCallback(async (addr: string) => {
+    if (!walletRef.current) return;
+    const { AztecAddress } = await import("@aztec/aztec.js/addresses");
+    walletRef.current.removeAccount(AztecAddress.fromString(addr));
+    const remaining = walletRef.current.getAccountAddresses();
+    setAccounts(remaining.map(a => a.toString()));
+    const connected = walletRef.current.getConnectedAccount();
+    if (connected) {
+      setAddress(connected.toString());
+    } else {
+      setAddress(null);
+      setStatus("no_account");
+    }
+  }, []);
+
   const disconnect = useCallback(() => {
     walletRef.current?.disconnect();
     walletRef.current = null;
     setAddress(null);
+    setAccounts([]);
     setStatus("disconnected");
     setError(null);
   }, []);
 
-  const clearSavedAccount = useCallback(async () => {
+  const clearAllSavedAccounts = useCallback(async () => {
     const { EmbeddedAuditableWallet } = await import("@/lib/embedded-wallet");
-    EmbeddedAuditableWallet.clearSavedAccount();
+    EmbeddedAuditableWallet.clearAllSavedAccounts();
     walletRef.current = null;
     setAddress(null);
+    setAccounts([]);
     setStatus("disconnected");
     setError(null);
   }, []);
@@ -106,12 +141,15 @@ export function AztecWalletProvider({ children }: { children: ReactNode }) {
       value={{
         wallet: walletRef.current,
         address,
+        accounts,
         status,
         error,
         connect,
         createAccount,
+        switchAccount,
+        removeAccount,
         disconnect,
-        clearSavedAccount,
+        clearAllSavedAccounts,
       }}
     >
       {children}
