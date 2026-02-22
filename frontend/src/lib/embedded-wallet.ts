@@ -23,8 +23,6 @@ const logger = createLogger("privdex:wallet");
 const ACCOUNTS_KEY = "privdex-aztec-accounts";
 const ACTIVE_ACCOUNT_KEY = "privdex-aztec-active-account";
 const LEGACY_KEY = "privdex-aztec-account";
-const REGISTERED_CONTRACTS_KEY = "privdex-registered-contracts";
-
 interface ContractRegistryEntry {
   label: string;
   address: string | undefined;
@@ -133,19 +131,6 @@ function setStoredActiveAddress(address: string) {
   localStorage.setItem(ACTIVE_ACCOUNT_KEY, address);
 }
 
-function loadRegisteredContracts(): string[] {
-  const raw = localStorage.getItem(REGISTERED_CONTRACTS_KEY);
-  if (!raw) return [];
-  try {
-    return JSON.parse(raw) as string[];
-  } catch {
-    return [];
-  }
-}
-
-function saveRegisteredContracts(addresses: string[]) {
-  localStorage.setItem(REGISTERED_CONTRACTS_KEY, JSON.stringify(addresses));
-}
 
 
 export class EmbeddedAuditableWallet extends AuditableWallet {
@@ -360,51 +345,39 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
   }
 
   async registerDeployedContracts(): Promise<void> {
-    // Check if cached registrations match the current env addresses.
-    // If they don't (new deployment), wipe the cache and re-register everything.
-    const expectedAddrs = CONTRACT_REGISTRY
-      .map((e) => e.address)
-      .filter((a): a is string => !!a)
-      .sort();
-    const cachedAddrs = loadRegisteredContracts().sort();
-    const cacheValid =
-      expectedAddrs.length === cachedAddrs.length &&
-      expectedAddrs.every((a, i) => a === cachedAddrs[i]);
+    const entries = CONTRACT_REGISTRY.filter((e) => !!e.address);
 
-    if (cacheValid) {
-      logger.info("[register] cache matches env, skipping registration");
-      return;
-    }
-
-    // Cache is stale or empty — wipe and re-register
-    saveRegisteredContracts([]);
-    const registeredSet = new Set<string>();
-
-    for (const entry of CONTRACT_REGISTRY) {
-      const addrStr = entry.address;
-      if (!addrStr) {
-        logger.info(`[register] skip ${entry.label}: no env var`);
-        continue;
-      }
-
-      try {
-        const address = AztecAddress.fromString(addrStr);
-        const instance = await this.aztecNode.getContract(address);
-        if (!instance) {
-          logger.info(`[register] skip ${entry.label}: not found on-chain`);
-          continue;
+    // Fetch all on-chain instances + artifacts in parallel
+    const resolved = await Promise.all(
+      entries.map(async (entry) => {
+        try {
+          const address = AztecAddress.fromString(entry.address!);
+          const [instance, artifact] = await Promise.all([
+            this.aztecNode.getContract(address),
+            entry.loadArtifact(),
+          ]);
+          if (!instance) {
+            logger.info(`[register] skip ${entry.label}: not found on-chain`);
+            return null;
+          }
+          return { label: entry.label, address: entry.address!, instance, artifact };
+        } catch (err) {
+          logger.warn(`[register] failed to fetch ${entry.label}:`, err);
+          return null;
         }
+      })
+    );
 
-        const artifact = await entry.loadArtifact();
-        await this.registerContract(instance, artifact);
-        registeredSet.add(addrStr);
-        logger.info(`[register] registered ${entry.label} at ${addrStr}`);
+    // Serialize registerContract calls to avoid IDB conflicts
+    for (const item of resolved) {
+      if (!item) continue;
+      try {
+        await this.registerContract(item.instance, item.artifact);
+        logger.info(`[register] registered ${item.label} at ${item.address}`);
       } catch (err) {
-        logger.warn(`[register] failed ${entry.label}:`, err);
+        logger.warn(`[register] failed ${item.label}:`, err);
       }
     }
-
-    saveRegisteredContracts([...registeredSet]);
   }
 
   async registerAccountFromCredentials(
@@ -464,6 +437,5 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
     localStorage.removeItem(ACCOUNTS_KEY);
     localStorage.removeItem(ACTIVE_ACCOUNT_KEY);
     localStorage.removeItem(LEGACY_KEY);
-    localStorage.removeItem(REGISTERED_CONTRACTS_KEY);
   }
 }
