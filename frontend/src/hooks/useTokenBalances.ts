@@ -4,21 +4,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useAztecWallet } from "@/hooks/useAztecWallet";
 
 // Next.js requires static process.env access for build-time replacement
-const TOKEN_ADDRESSES: Record<string, string | undefined> = {
+export const TOKEN_ADDRESSES: Record<string, string | undefined> = {
   USDC: process.env.NEXT_PUBLIC_TOKEN_USDC,
   wETH: process.env.NEXT_PUBLIC_TOKEN_WETH,
   wZEC: process.env.NEXT_PUBLIC_TOKEN_WZEC,
   wAZTEC: process.env.NEXT_PUBLIC_TOKEN_WAZTEC,
 };
 
-const TOKEN_DECIMALS: Record<string, number> = {
+export const TOKEN_DECIMALS: Record<string, number> = {
   USDC: 6,
   wETH: 18,
   wZEC: 18,
   wAZTEC: 18,
 };
 
-function formatTokenBalance(raw: bigint, decimals: number): string {
+export function formatTokenBalance(raw: bigint, decimals: number): string {
   const value = Number(raw) / 10 ** decimals;
   const displayDecimals = decimals <= 6 ? 2 : 4;
   return value.toLocaleString("en-US", {
@@ -32,6 +32,8 @@ export function useTokenBalances() {
   const [balances, setBalances] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const pendingRef = useRef(new Set<string>());
+  // Serialize PXE calls to avoid concurrent IDB transactions invalidating each other
+  const queueRef = useRef(Promise.resolve());
 
   // Reset when address changes
   useEffect(() => {
@@ -41,7 +43,7 @@ export function useTokenBalances() {
   }, [address]);
 
   const fetchBalance = useCallback(
-    async (symbol: string) => {
+    (symbol: string) => {
       if (!wallet || !address) return;
       // Build a per-address key so we don't skip fetches after address change
       const key = `${address}:${symbol}`;
@@ -52,29 +54,33 @@ export function useTokenBalances() {
       if (!tokenAddr) return;
 
       setLoading((prev) => ({ ...prev, [symbol]: true }));
-      try {
-        const { AztecAddress } = await import("@aztec/aztec.js/addresses");
-        const { Contract } = await import("@aztec/aztec.js/contracts");
-        const { TokenContractArtifact } = await import("@/artifacts/Token");
 
-        const token = await Contract.at(
-          AztecAddress.fromString(tokenAddr),
-          TokenContractArtifact,
-          wallet
-        );
-        const owner = AztecAddress.fromString(address);
-        const result = await token.methods.balance_of_private(owner).simulate({ from: owner });
-        const raw =
-          typeof result === "bigint" ? result : BigInt(result.toString());
-        const decimals = TOKEN_DECIMALS[symbol] ?? 18;
-        const formatted = formatTokenBalance(raw, decimals);
-        setBalances((prev) => ({ ...prev, [symbol]: formatted }));
-      } catch (err) {
-        console.warn(`Failed to fetch ${symbol} balance:`, err);
-        setBalances((prev) => ({ ...prev, [symbol]: "0" }));
-      } finally {
-        setLoading((prev) => ({ ...prev, [symbol]: false }));
-      }
+      // Chain onto queue so fetches run one at a time
+      queueRef.current = queueRef.current.then(async () => {
+        try {
+          const { AztecAddress } = await import("@aztec/aztec.js/addresses");
+          const { Contract } = await import("@aztec/aztec.js/contracts");
+          const { TokenContractArtifact } = await import("@/artifacts/Token");
+
+          const token = await Contract.at(
+            AztecAddress.fromString(tokenAddr),
+            TokenContractArtifact,
+            wallet
+          );
+          const owner = AztecAddress.fromString(address);
+          const result = await token.methods.balance_of_private(owner).simulate({ from: owner });
+          const raw =
+            typeof result === "bigint" ? result : BigInt(result.toString());
+          const decimals = TOKEN_DECIMALS[symbol] ?? 18;
+          const formatted = formatTokenBalance(raw, decimals);
+          setBalances((prev) => ({ ...prev, [symbol]: formatted }));
+        } catch (err) {
+          console.warn(`Failed to fetch ${symbol} balance:`, err);
+          setBalances((prev) => ({ ...prev, [symbol]: "0" }));
+        } finally {
+          setLoading((prev) => ({ ...prev, [symbol]: false }));
+        }
+      });
     },
     [wallet, address]
   );
@@ -94,11 +100,15 @@ export function useTokenBalances() {
     [loading]
   );
 
+  const setBalance = useCallback((symbol: string, formatted: string) => {
+    setBalances((prev) => ({ ...prev, [symbol]: formatted }));
+  }, []);
+
   const refreshAll = useCallback(() => {
     pendingRef.current.clear();
     setBalances({});
     setLoading({});
   }, []);
 
-  return { getBalance, isLoading, fetchBalance, refreshAll };
+  return { getBalance, isLoading, fetchBalance, refreshAll, setBalance };
 }

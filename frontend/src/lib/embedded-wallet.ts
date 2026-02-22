@@ -147,6 +147,7 @@ function saveRegisteredContracts(addresses: string[]) {
   localStorage.setItem(REGISTERED_CONTRACTS_KEY, JSON.stringify(addresses));
 }
 
+
 export class EmbeddedAuditableWallet extends AuditableWallet {
   connectedAccount: AztecAddress | null = null;
   protected accounts: Map<string, Account> = new Map();
@@ -227,6 +228,10 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
     // and the sender is not an internal account (e.g. admin pays its own gas)
     if (!base.walletFeePaymentMethod && !feePayer && !this.internalAccounts.has(from.toString())) {
       base.walletFeePaymentMethod = await this.getSponsoredPaymentMethod();
+      // Tell the account entrypoint that fees are handled externally (by the FPC),
+      // so it doesn't also try to set up fee juice payment itself.
+      // AccountFeePaymentMethodOptions.EXTERNAL = 0
+      base.accountFeePaymentMethodOptions = 0;
     }
     return base;
   }
@@ -355,16 +360,30 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
   }
 
   async registerDeployedContracts(): Promise<void> {
-    const registeredSet = new Set(loadRegisteredContracts());
+    // Check if cached registrations match the current env addresses.
+    // If they don't (new deployment), wipe the cache and re-register everything.
+    const expectedAddrs = CONTRACT_REGISTRY
+      .map((e) => e.address)
+      .filter((a): a is string => !!a)
+      .sort();
+    const cachedAddrs = loadRegisteredContracts().sort();
+    const cacheValid =
+      expectedAddrs.length === cachedAddrs.length &&
+      expectedAddrs.every((a, i) => a === cachedAddrs[i]);
+
+    if (cacheValid) {
+      logger.info("[register] cache matches env, skipping registration");
+      return;
+    }
+
+    // Cache is stale or empty — wipe and re-register
+    saveRegisteredContracts([]);
+    const registeredSet = new Set<string>();
 
     for (const entry of CONTRACT_REGISTRY) {
       const addrStr = entry.address;
       if (!addrStr) {
         logger.info(`[register] skip ${entry.label}: no env var`);
-        continue;
-      }
-      if (registeredSet.has(addrStr)) {
-        logger.info(`[register] skip ${entry.label}: already registered`);
         continue;
       }
 
@@ -379,12 +398,13 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
         const artifact = await entry.loadArtifact();
         await this.registerContract(instance, artifact);
         registeredSet.add(addrStr);
-        saveRegisteredContracts([...registeredSet]);
         logger.info(`[register] registered ${entry.label} at ${addrStr}`);
       } catch (err) {
         logger.warn(`[register] failed ${entry.label}:`, err);
       }
     }
+
+    saveRegisteredContracts([...registeredSet]);
   }
 
   async registerAccountFromCredentials(

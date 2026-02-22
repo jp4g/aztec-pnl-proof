@@ -54,9 +54,10 @@ export function AztecWalletProvider({ children }: { children: ReactNode }) {
 
     try {
       const wallet = await ensureWallet();
-      // Fire and forget — don't block account connection
-      wallet.registerDeployedContracts().catch((err) =>
-        console.warn("Background contract registration failed:", err)
+      // Must await — concurrent IDB writes from registerContract and
+      // connectAllAccounts cause TransactionInactiveError
+      await wallet.registerDeployedContracts().catch((err) =>
+        console.warn("Contract registration failed:", err)
       );
       const { active, all } = await wallet.connectAllAccounts();
       setAccounts(all.map(a => a.toString()));
