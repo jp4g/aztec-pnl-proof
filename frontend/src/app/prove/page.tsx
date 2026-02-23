@@ -5,6 +5,7 @@ import ProofGenerationCard from "@/components/prove/ProofGenerationCard";
 import MerkleTree from "@/components/prove/MerkleTree";
 import TransactionTable from "@/components/prove/TransactionTable";
 import { useProofGeneration } from "@/hooks/useProofGeneration";
+import RequireWallet from "@/components/layout/RequireWallet";
 import {
   dummyTransactions,
   dummyTreeLeaves,
@@ -17,26 +18,28 @@ export default function ProvePage() {
   const { proofState, startProofGeneration } = useProofGeneration();
 
   return (
-    <main className="flex-grow max-w-6xl mx-auto px-6 py-12 w-full">
-      {/* Header & PnL Summary */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-12">
-        <PnlSummaryCard proofState={proofState} />
-        <ProofGenerationCard
-          proofState={proofState}
-          onGenerate={startProofGeneration}
+    <RequireWallet>
+      <main className="flex-grow max-w-6xl mx-auto px-6 py-12 w-full">
+        {/* Header & PnL Summary */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-12">
+          <PnlSummaryCard proofState={proofState} />
+          <ProofGenerationCard
+            proofState={proofState}
+            onGenerate={startProofGeneration}
+          />
+        </div>
+
+        {/* Merkle Tree Visualizer */}
+        <MerkleTree
+          leaves={dummyTreeLeaves}
+          intermediatesL1={dummyTreeIntermediatesL1}
+          intermediatesL2={dummyTreeIntermediatesL2}
+          root={dummyTreeRoot}
         />
-      </div>
 
-      {/* Merkle Tree Visualizer */}
-      <MerkleTree
-        leaves={dummyTreeLeaves}
-        intermediatesL1={dummyTreeIntermediatesL1}
-        intermediatesL2={dummyTreeIntermediatesL2}
-        root={dummyTreeRoot}
-      />
-
-      {/* Transaction History */}
-      <TransactionTable transactions={dummyTransactions} />
-    </main>
+        {/* Transaction History */}
+        <TransactionTable transactions={dummyTransactions} />
+      </main>
+    </RequireWallet>
   );
 }

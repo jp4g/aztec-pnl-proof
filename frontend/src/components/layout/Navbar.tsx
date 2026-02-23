@@ -7,6 +7,7 @@ import WalletButton from "./WalletButton";
 
 const NAV_LINKS = [
   { href: "/trade", label: "Trade" },
+  { href: "/price", label: "Price" },
   { href: "/prove", label: "Prove PnL" },
 ] as const;
 
