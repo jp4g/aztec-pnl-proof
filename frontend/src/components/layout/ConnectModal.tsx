@@ -192,7 +192,7 @@ export default function ConnectModal({ onClose }: ConnectModalProps) {
             </div>
 
             {/* Mint USDC */}
-            {!hasMintedUsdc && (
+            {!hasMintedUsdc && !isDemoAccount(address!) && (
               <button
                 onClick={handleMint}
                 disabled={isMinting}

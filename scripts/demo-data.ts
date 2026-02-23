@@ -4,7 +4,6 @@
  * to prove against.
  *
  * Reads deployment.json for contract addresses and initial oracle prices.
- * Writes demo account credentials to deployment.json and frontend/.env.local.
  *
  * Env vars:
  *   AZTEC_NODE_URL       (default: http://localhost:8080)
@@ -20,7 +19,7 @@ import { PriceFeedContract, PriceFeedContractArtifact } from '@aztec/noir-contra
 import { TokenContract, TokenContractArtifact } from '../src/artifacts/Token';
 import { AMMContract, AMMContractArtifact } from '../src/artifacts/AMM';
 import { AuditableTestWallet } from '@aztec/note-collector';
-import { writeFile, readFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { join } from 'path';
 import type { PoolState } from '../src/rebalance';
 
@@ -44,12 +43,6 @@ interface DeployedInfra {
     };
     prices: { USDC: number; wETH: number; wZEC: number; wAZTEC: number };
     oraclePrices: { USDC: string; wETH: string; wZEC: string; wAZTEC: string };
-    demoAccount?: {
-        address: string;
-        secretKey: string;
-        signingKey: string;
-        salt: string;
-    };
 }
 
 // Price multipliers per swap phase
@@ -314,49 +307,6 @@ async function demoData() {
             ps.reserve0 -= amountOutBigInt;
         }
     }
-
-    // --- Write demo account credentials ---
-    console.log('\n\n--- Writing demo account credentials ---');
-
-    const demoAccount = {
-        address: demoUser.toString(),
-        secretKey: demoAccountData.secret.toString(),
-        signingKey: demoAccountData.signingKey.toString(),
-        salt: demoAccountData.salt.toString(),
-    };
-
-    // Update deployment.json
-    infra.demoAccount = demoAccount;
-    await writeFile(deployPath, JSON.stringify(infra, null, 2));
-    console.log(`  Updated deployment.json with demo account`);
-
-    // Update frontend/.env.local
-    const envPath = join(process.cwd(), 'frontend', '.env.local');
-    const demoVars: Record<string, string> = {
-        NEXT_PUBLIC_DEMO_ADDRESS: demoAccount.address,
-        NEXT_PUBLIC_DEMO_SECRET_KEY: demoAccount.secretKey,
-        NEXT_PUBLIC_DEMO_SIGNING_KEY: demoAccount.signingKey,
-        NEXT_PUBLIC_DEMO_SALT: demoAccount.salt,
-    };
-
-    let existing = '';
-    try { existing = await readFile(envPath, 'utf-8'); } catch {}
-    const lines = existing.split('\n');
-    const keysToSet = new Set(Object.keys(demoVars));
-    const updated = lines.map(line => {
-        const match = line.match(/^([A-Z_][A-Z0-9_]*)=/);
-        if (match && keysToSet.has(match[1])) {
-            keysToSet.delete(match[1]);
-            return `${match[1]}=${demoVars[match[1]]}`;
-        }
-        return line;
-    });
-    for (const key of keysToSet) {
-        updated.push(`${key}=${demoVars[key]}`);
-    }
-    const result = updated.filter((l, i, a) => i < a.length - 1 || l !== '').join('\n') + '\n';
-    await writeFile(envPath, result);
-    console.log(`  Updated frontend/.env.local with demo env vars`);
 
     console.log('\n=== Demo data complete! ===');
     console.log(`Demo user address: ${demoUser}`);

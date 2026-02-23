@@ -96,14 +96,14 @@ interface StoredAccount {
   isDemo?: boolean;
 }
 
-function getDemoAccountEntry(): StoredAccount | null {
-  const addr = process.env.NEXT_PUBLIC_DEMO_ADDRESS;
-  const secret = process.env.NEXT_PUBLIC_DEMO_SECRET_KEY;
-  const signing = process.env.NEXT_PUBLIC_DEMO_SIGNING_KEY;
-  const salt = process.env.NEXT_PUBLIC_DEMO_SALT;
-  if (!addr || !secret || !signing || !salt) return null;
-  return { address: addr, secretKey: secret, signingKey: signing, salt, isDemo: true };
-}
+// 3rd initial test account — deterministic, never changes
+const DEMO_ACCOUNT: StoredAccount = {
+  address: "0x08cad1e03676948f661bc00df74eadac619fc961aa8bf9ee7ca9e9b64291485c",
+  secretKey: "0x0f6addf0da06c33293df974a565b03d1ab096090d907d98055a8b7f4954e120c",
+  signingKey: "0x1a13d68e8713f34653bd523832a5d7041f5721f06e6dfa99061fe91a08e66a66",
+  salt: "0x0000000000000000000000000000000000000000000000000000000000000000",
+  isDemo: true,
+};
 
 function loadStoredAccounts(): StoredAccount[] {
   // Migrate legacy single-account key if present
@@ -315,7 +315,7 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
 
   async connectAllAccounts(): Promise<{ active: AztecAddress | null; all: AztecAddress[] }> {
     const stored = loadStoredAccounts();
-    const demo = getDemoAccountEntry();
+    const demo = DEMO_ACCOUNT;
     if (demo && !stored.some(e => e.address === demo.address)) {
       stored.push(demo);
     }
@@ -454,7 +454,7 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
   }
 
   isDemoAccount(address: string): boolean {
-    const demo = getDemoAccountEntry();
+    const demo = DEMO_ACCOUNT;
     return demo !== null && demo.address === address;
   }
 
@@ -464,7 +464,7 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
 
   removeAccount(address: AztecAddress) {
     const key = address.toString();
-    const demo = getDemoAccountEntry();
+    const demo = DEMO_ACCOUNT;
     if (demo && demo.address === key) return; // Cannot delete demo account
 
     this.accounts.delete(key);
