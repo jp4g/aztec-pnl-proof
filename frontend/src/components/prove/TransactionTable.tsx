@@ -1,15 +1,30 @@
 "use client";
 
 import { Icon } from "@iconify/react";
-import { Transaction } from "@/types";
+import type { DecodedSwap, ProveFlowStatus, Token } from "@/types";
 import StatusBadge from "@/components/ui/StatusBadge";
 import TokenIcon from "@/components/ui/TokenIcon";
 
 interface TransactionTableProps {
-  transactions: Transaction[];
+  swaps: DecodedSwap[];
+  status: ProveFlowStatus;
+  currentSwap: number;
+  resolveToken: (address: string) => Token;
+  formatAmount: (amount: bigint, decimals?: number) => string;
 }
 
-function getRowStyles(status: Transaction["status"]) {
+function getRowStatus(
+  index: number,
+  currentSwap: number,
+  flowStatus: ProveFlowStatus,
+): "proven" | "proving" | "pending" {
+  if (flowStatus === "complete") return "proven";
+  if (flowStatus === "proving" && index < currentSwap - 1) return "proven";
+  if (flowStatus === "proving" && index === currentSwap - 1) return "proving";
+  return "pending";
+}
+
+function getRowStyles(status: "proven" | "proving" | "pending") {
   switch (status) {
     case "proving":
       return "bg-blue-50/30";
@@ -21,18 +36,44 @@ function getRowStyles(status: Transaction["status"]) {
 }
 
 export default function TransactionTable({
-  transactions,
+  swaps,
+  status,
+  currentSwap,
+  resolveToken,
+  formatAmount,
 }: TransactionTableProps) {
+  if (swaps.length === 0 && status === "idle") {
+    return (
+      <section>
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-semibold text-neutral-900 tracking-tight">
+            Included Transactions
+          </h2>
+        </div>
+        <div className="bg-white border border-neutral-200 rounded-2xl shadow-sm p-12 text-center">
+          <Icon
+            icon="solar:inbox-linear"
+            width={48}
+            className="text-neutral-300 mx-auto mb-4"
+          />
+          <p className="text-neutral-500 text-sm">
+            No swap events discovered yet. Click &quot;Generate ZK Proof&quot; to
+            scan for encrypted swap transactions.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section>
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-semibold text-neutral-900 tracking-tight">
           Included Transactions
         </h2>
-        <button className="text-sm text-orange-600 font-medium hover:text-orange-700 flex items-center gap-1">
-          Export CSV
-          <Icon icon="solar:export-linear" width={16} />
-        </button>
+        <span className="text-sm text-neutral-500">
+          {swaps.length} swap{swaps.length !== 1 ? "s" : ""}
+        </span>
       </div>
 
       <div className="bg-white border border-neutral-200 rounded-2xl shadow-sm overflow-hidden">
@@ -44,55 +85,60 @@ export default function TransactionTable({
                   Status
                 </th>
                 <th className="py-4 px-6 text-xs font-medium text-neutral-500 uppercase tracking-wider">
-                  Token Out
+                  Sell
                 </th>
                 <th className="py-4 px-6 text-xs font-medium text-neutral-500 uppercase tracking-wider text-right">
-                  Amount Out
+                  Amount
                 </th>
                 <th className="py-4 px-6 text-xs font-medium text-neutral-500 uppercase tracking-wider text-center" />
                 <th className="py-4 px-6 text-xs font-medium text-neutral-500 uppercase tracking-wider">
-                  Token In
+                  Buy
                 </th>
                 <th className="py-4 px-6 text-xs font-medium text-neutral-500 uppercase tracking-wider text-right">
-                  Amount In
+                  Amount
                 </th>
                 <th className="py-4 px-6 text-xs font-medium text-neutral-500 uppercase tracking-wider text-right">
-                  Date
+                  Block
                 </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-100 text-sm">
-              {transactions.map((tx) => (
-                <tr key={tx.id} className={getRowStyles(tx.status)}>
-                  <td className="py-4 px-6">
-                    <StatusBadge status={tx.status} />
-                  </td>
-                  <td className="py-4 px-6 font-medium text-neutral-900">
-                    <div className="flex items-center gap-2">
-                      <TokenIcon token={tx.tokenOut} />
-                      {tx.tokenOut.symbol}
-                    </div>
-                  </td>
-                  <td className="py-4 px-6 text-neutral-600 font-mono text-right">
-                    {tx.amountOut}
-                  </td>
-                  <td className="py-4 px-6 text-center text-neutral-300">
-                    <Icon icon="solar:arrow-right-linear" width={16} />
-                  </td>
-                  <td className="py-4 px-6 font-medium text-neutral-900">
-                    <div className="flex items-center gap-2">
-                      <TokenIcon token={tx.tokenIn} />
-                      {tx.tokenIn.symbol}
-                    </div>
-                  </td>
-                  <td className="py-4 px-6 text-neutral-600 font-mono text-right">
-                    {tx.amountIn}
-                  </td>
-                  <td className="py-4 px-6 text-neutral-500 text-right">
-                    {tx.date}
-                  </td>
-                </tr>
-              ))}
+              {swaps.map((swap, i) => {
+                const rowStatus = getRowStatus(i, currentSwap, status);
+                const tokenIn = resolveToken(swap.tokenIn);
+                const tokenOut = resolveToken(swap.tokenOut);
+                return (
+                  <tr key={i} className={getRowStyles(rowStatus)}>
+                    <td className="py-4 px-6">
+                      <StatusBadge status={rowStatus} />
+                    </td>
+                    <td className="py-4 px-6 font-medium text-neutral-900">
+                      <div className="flex items-center gap-2">
+                        <TokenIcon token={tokenIn} />
+                        {tokenIn.symbol}
+                      </div>
+                    </td>
+                    <td className="py-4 px-6 text-neutral-600 font-mono text-right">
+                      {formatAmount(swap.amountIn)}
+                    </td>
+                    <td className="py-4 px-6 text-center text-neutral-300">
+                      <Icon icon="solar:arrow-right-linear" width={16} />
+                    </td>
+                    <td className="py-4 px-6 font-medium text-neutral-900">
+                      <div className="flex items-center gap-2">
+                        <TokenIcon token={tokenOut} />
+                        {tokenOut.symbol}
+                      </div>
+                    </td>
+                    <td className="py-4 px-6 text-neutral-600 font-mono text-right">
+                      {formatAmount(swap.amountOut)}
+                    </td>
+                    <td className="py-4 px-6 text-neutral-500 text-right font-mono">
+                      #{swap.blockNumber.toString()}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

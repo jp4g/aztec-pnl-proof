@@ -4,41 +4,42 @@ import PnlSummaryCard from "@/components/prove/PnlSummaryCard";
 import ProofGenerationCard from "@/components/prove/ProofGenerationCard";
 import MerkleTree from "@/components/prove/MerkleTree";
 import TransactionTable from "@/components/prove/TransactionTable";
-import { useProofGeneration } from "@/hooks/useProofGeneration";
+import { useProveFlow } from "@/hooks/useProveFlow";
 import RequireWallet from "@/components/layout/RequireWallet";
-import {
-  dummyTransactions,
-  dummyTreeLeaves,
-  dummyTreeIntermediatesL1,
-  dummyTreeIntermediatesL2,
-  dummyTreeRoot,
-} from "@/data/dummy";
 
 export default function ProvePage() {
-  const { proofState, startProofGeneration } = useProofGeneration();
+  const { state, startProving, reset, resolveToken, formatAmount, formatPnl } =
+    useProveFlow();
 
   return (
     <RequireWallet>
       <main className="flex-grow max-w-6xl mx-auto px-6 py-12 w-full">
         {/* Header & PnL Summary */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-12">
-          <PnlSummaryCard proofState={proofState} />
+          <PnlSummaryCard state={state} formatPnl={formatPnl} />
           <ProofGenerationCard
-            proofState={proofState}
-            onGenerate={startProofGeneration}
+            state={state}
+            onGenerate={startProving}
+            onReset={reset}
           />
         </div>
 
         {/* Merkle Tree Visualizer */}
         <MerkleTree
-          leaves={dummyTreeLeaves}
-          intermediatesL1={dummyTreeIntermediatesL1}
-          intermediatesL2={dummyTreeIntermediatesL2}
-          root={dummyTreeRoot}
+          leaves={state.treeLeaves}
+          intermediatesL1={state.treeIntermediatesL1}
+          intermediatesL2={state.treeIntermediatesL2}
+          root={state.treeRoot}
         />
 
         {/* Transaction History */}
-        <TransactionTable transactions={dummyTransactions} />
+        <TransactionTable
+          swaps={state.swaps}
+          status={state.status}
+          currentSwap={state.currentSwap}
+          resolveToken={resolveToken}
+          formatAmount={formatAmount}
+        />
       </main>
     </RequireWallet>
   );

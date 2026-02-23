@@ -128,6 +128,7 @@ export class SwapProofTree {
         lotStateTree: LotStateTree,
         priceFeedAddress: Fr,
         priceFeedAssetsSlot: Fr,
+        onProgress?: (step: string, current: number, total: number) => void,
     ): Promise<SwapProofTreeResult> {
         await this.initialize();
 
@@ -141,6 +142,7 @@ export class SwapProofTree {
 
         for (let i = 0; i < events.length; i++) {
             console.log(`\n--- Proving swap ${i + 1}/${events.length} ---`);
+            onProgress?.('swap', i + 1, events.length);
 
             const result = await this.config.swapProver.prove(
                 events[i],
@@ -184,7 +186,8 @@ export class SwapProofTree {
         console.log(`\nIndividual proofs generated: ${swapArtifacts.length}`);
 
         // Step 2: Build recursive tree from individual proofs
-        const finalProof = await this.buildTree(swapArtifacts);
+        onProgress?.('aggregate', 0, 1);
+        const finalProof = await this.buildTree(swapArtifacts, onProgress);
         console.log(`\nFinal proof generated!`);
 
         const [root, pnlStr, remainingLotStateRoot, initialLotStateRoot, priceFeedAddr, blockNum] =
@@ -233,7 +236,7 @@ export class SwapProofTree {
     /**
      * Build the tree by recursively combining proofs
      */
-    private async buildTree(proofs: ProofArtifact[]): Promise<ProofArtifact> {
+    private async buildTree(proofs: ProofArtifact[], onProgress?: (step: string, current: number, total: number) => void): Promise<ProofArtifact> {
         let currentLevel = proofs;
         let level = 0;
 
@@ -241,6 +244,7 @@ export class SwapProofTree {
             console.log(
                 `\n=== Building level ${level + 1} (${currentLevel.length} proofs -> ${Math.ceil(currentLevel.length / 2)}) ===`,
             );
+            onProgress?.('aggregate', level + 1, level + Math.ceil(Math.log2(proofs.length)));
 
             const nextLevel: ProofArtifact[] = [];
 

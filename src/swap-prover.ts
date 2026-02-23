@@ -144,7 +144,7 @@ export class SwapProver {
         const buyIndex = lotStateTree.assignSlot(tokenOut);
 
         // Get block header for public data tree root
-        const header = await this.config.node.getBlockHeader(Number(event.blockNumber));
+        const header = await this.config.node.getBlockHeader(Number(event.blockNumber) as any);
         if (!header) throw new Error(`Block header not found for block ${event.blockNumber}`);
         const publicDataTreeRoot = header.state.partial.publicDataTree.root;
 
@@ -201,7 +201,7 @@ export class SwapProver {
 
         // Execute circuit
         console.log('  Generating witness...');
-        const { witness: circuitWitness, returnValue } = await this.noir!.execute(circuitInputs);
+        const { witness: circuitWitness, returnValue } = await this.noir!.execute(circuitInputs as any);
         const [leaf, pnlStr, remainingRoot, initRoot, provenPriceFeed, provenBlockNumber] =
             returnValue as [string, string, string, string, string, string];
 
@@ -371,7 +371,7 @@ export class SwapProver {
             GENERATOR_INDEX__PUBLIC_LEAF_INDEX,
         );
         const witness = await this.config.node.getPublicDataWitness(
-            Number(blockNumber), treeIndex,
+            Number(blockNumber) as any, treeIndex,
         );
         if (!witness) throw new Error(`Failed to get price witness for token ${tokenAddress}`);
         return witness;
@@ -399,7 +399,7 @@ export class SwapProver {
         this.backend = new UltraHonkBackend(this.config.circuit.bytecode, this.config.bb);
 
         const preaddress = await this.config.recipientCompleteAddress.getPreaddress();
-        this.addressSecret = await computeAddressSecret(preaddress, this.config.ivskM);
+        this.addressSecret = await computeAddressSecret(preaddress, this.config.ivskM as any) as any;
 
         console.log('SwapProver initialized');
     }

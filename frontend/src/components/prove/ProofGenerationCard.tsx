@@ -1,24 +1,31 @@
 "use client";
 
 import { Icon } from "@iconify/react";
-import { ProofState } from "@/types";
+import type { ProveFlowState } from "@/types";
 import ProgressBar from "@/components/ui/ProgressBar";
 
 interface ProofGenerationCardProps {
-  proofState: ProofState;
+  state: ProveFlowState;
   onGenerate: () => void;
+  onReset: () => void;
 }
 
 export default function ProofGenerationCard({
-  proofState,
+  state,
   onGenerate,
+  onReset,
 }: ProofGenerationCardProps) {
-  const statusText =
-    proofState.status === "generating" && proofState.currentLeaf
-      ? `Computing Leaf ${proofState.currentLeaf}...`
-      : proofState.status === "complete"
-        ? "Proof Complete"
-        : "Ready to Generate";
+  const isRunning =
+    state.status !== "idle" &&
+    state.status !== "complete" &&
+    state.status !== "error";
+
+  const statusColor =
+    state.status === "complete"
+      ? "text-green-600"
+      : state.status === "error"
+        ? "text-red-600"
+        : "text-orange-600";
 
   return (
     <div className="flex flex-col justify-center gap-4 bg-orange-50/50 rounded-2xl border border-orange-100 p-8">
@@ -28,28 +35,68 @@ export default function ProofGenerationCard({
         </h3>
         <p className="text-sm text-neutral-500 mt-1">
           Status:{" "}
-          <span className="text-orange-600 font-medium">{statusText}</span>
+          <span className={`font-medium ${statusColor}`}>
+            {state.statusText}
+          </span>
         </p>
       </div>
 
-      <ProgressBar progress={proofState.progress} />
+      <ProgressBar progress={state.progress} />
 
       <div className="flex items-center justify-between text-xs text-neutral-500 font-mono mt-1">
-        <span>Block #{proofState.blockNumber}</span>
-        <span>Est. Time: {proofState.estimatedTime}</span>
+        <span>
+          {state.blockNumber
+            ? `Block #${state.blockNumber}`
+            : "Block #--"}
+        </span>
+        <span>
+          {state.totalSwaps > 0
+            ? `${state.currentSwap}/${state.totalSwaps} swaps`
+            : "--"}
+        </span>
       </div>
 
-      <button
-        onClick={onGenerate}
-        className="mt-4 w-full bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium py-3 px-4 rounded-xl shadow-sm shadow-orange-200 transition-all flex items-center justify-center gap-2 group"
-      >
-        <Icon
-          icon="solar:magic-stick-3-linear"
-          width={18}
-          className="group-hover:rotate-12 transition-transform"
-        />
-        Generate ZK Proof
-      </button>
+      {state.error && (
+        <div className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2 mt-1">
+          {state.error}
+        </div>
+      )}
+
+      <div className="flex gap-2 mt-4">
+        <button
+          onClick={onGenerate}
+          disabled={isRunning}
+          className="flex-1 bg-orange-600 hover:bg-orange-700 disabled:bg-neutral-300 disabled:cursor-not-allowed text-white text-sm font-medium py-3 px-4 rounded-xl shadow-sm shadow-orange-200 transition-all flex items-center justify-center gap-2 group"
+        >
+          {isRunning ? (
+            <>
+              <Icon
+                icon="solar:refresh-linear"
+                width={18}
+                className="animate-spin"
+              />
+              Generating...
+            </>
+          ) : (
+            <>
+              <Icon
+                icon="solar:magic-stick-3-linear"
+                width={18}
+                className="group-hover:rotate-12 transition-transform"
+              />
+              {state.status === "complete" ? "Re-generate" : "Generate ZK Proof"}
+            </>
+          )}
+        </button>
+        {(state.status === "complete" || state.status === "error") && (
+          <button
+            onClick={onReset}
+            className="px-4 py-3 text-sm font-medium text-neutral-600 bg-white border border-neutral-200 rounded-xl hover:bg-neutral-50 transition-colors"
+          >
+            Reset
+          </button>
+        )}
+      </div>
     </div>
   );
 }

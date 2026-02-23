@@ -4,8 +4,6 @@ import type { CompiledCircuit } from '@aztec/noir-types';
 import { parseSignedHex, fieldToI64, i64ToField } from './swap-proof-tree';
 import type { SwapProofTreeResult } from './swap-proof-tree';
 
-import capitalGainsTaxCircuit from '../circuits/capital_gains_tax/target/capital_gains_tax.json' with { type: 'json' };
-
 /** Number of public inputs from the summary tree proof */
 const SUMMARY_PUBLIC_INPUTS = 6;
 
@@ -24,22 +22,31 @@ export interface TaxProofResult {
 
 export class TaxProver {
     private bb: Barretenberg;
+    private taxCircuit: CompiledCircuit;
     private noir: Noir | null = null;
     private backend: UltraHonkBackend | null = null;
     private summaryBackend: UltraHonkBackend | null = null;
 
-    constructor(bb: Barretenberg, private summaryCircuit: CompiledCircuit) {
+    constructor(bb: Barretenberg, private summaryCircuit: CompiledCircuit, taxCircuit?: CompiledCircuit) {
         this.bb = bb;
+        this.taxCircuit = taxCircuit ?? summaryCircuit; // placeholder, overridden by initWithCircuit
+    }
+
+    /** Initialize with an externally-loaded tax circuit (for browser use) */
+    static create(bb: Barretenberg, summaryCircuit: CompiledCircuit, taxCircuit: CompiledCircuit): TaxProver {
+        const prover = new TaxProver(bb, summaryCircuit);
+        prover.taxCircuit = taxCircuit;
+        return prover;
     }
 
     private async initialize(): Promise<void> {
         if (this.noir) return;
 
         console.log('Initializing TaxProver...');
-        this.noir = new Noir(capitalGainsTaxCircuit as CompiledCircuit);
+        this.noir = new Noir(this.taxCircuit);
         await this.noir.init();
         this.backend = new UltraHonkBackend(
-            (capitalGainsTaxCircuit as CompiledCircuit).bytecode,
+            this.taxCircuit.bytecode,
             this.bb,
         );
         this.summaryBackend = new UltraHonkBackend(

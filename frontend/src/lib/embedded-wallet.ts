@@ -234,6 +234,11 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
     return this.connectedAccount;
   }
 
+  /** Public accessor for the Aztec node client */
+  getNode() {
+    return this.aztecNode;
+  }
+
   private async registerAccount(accountManager: AccountManager) {
     const instance = await accountManager.getInstance();
     const artifact = await accountManager
@@ -423,6 +428,15 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
     }
     this.connectedAccount = address;
     setStoredActiveAddress(key);
+  }
+
+  async getAuditProofInputs(account: AztecAddress, poolAddresses: AztecAddress[]) {
+    const secrets = await this.exportTaggingSecrets(account, poolAddresses, [account]);
+    const pxeAny = this.pxe as any;
+    const ivskM = await pxeAny.keyStore.getMasterIncomingViewingSecretKey(account);
+    const registeredAccounts = await pxeAny.getRegisteredAccounts();
+    const completeAddress = registeredAccounts.find((a: any) => a.address.equals(account));
+    return { secrets, ivskM, completeAddress };
   }
 
   disconnect() {

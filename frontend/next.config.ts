@@ -24,6 +24,7 @@ const nextConfig: NextConfig = {
       ...config.resolve.alias,
       "@aztec/note-collector/client/wallet": path.join(noteCollectorDest, "auditable_wallet.js"),
       "@aztec/note-collector/client/browser": path.join(noteCollectorDest, "auditable_pxe_browser.js"),
+      "@proof": path.resolve(import.meta.dirname, "../src"),
     };
 
     if (!isServer) {

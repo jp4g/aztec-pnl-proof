@@ -81,26 +81,6 @@ function NodeIcon({
   }
 }
 
-// --- Line Color Logic ---
-
-type LineStatus = "verified" | "proving" | "pending";
-
-function getLineProps(status: LineStatus) {
-  switch (status) {
-    case "verified":
-      return { stroke: "#22c55e", strokeWidth: 1.5 };
-    case "proving":
-      return {
-        stroke: "#3b82f6",
-        strokeWidth: 1.5,
-        strokeDasharray: "4 4",
-        className: "animate-pulse",
-      };
-    case "pending":
-      return { stroke: "#e5e5e5", strokeWidth: 1.5 };
-  }
-}
-
 // --- Legend ---
 
 function TreeLegend() {
@@ -141,6 +121,29 @@ export default function MerkleTree({
   intermediatesL1,
   root,
 }: MerkleTreeProps) {
+  if (leaves.length === 0) {
+    return (
+      <section className="mb-12">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-semibold text-neutral-900 tracking-tight">
+            Merkle Aggregation
+          </h2>
+          <TreeLegend />
+        </div>
+        <div className="bg-white rounded-2xl border border-neutral-200 p-12 shadow-sm text-center">
+          <Icon
+            icon="solar:tree-linear"
+            width={48}
+            className="text-neutral-300 mx-auto mb-4"
+          />
+          <p className="text-neutral-500 text-sm">
+            Proof tree will appear here during generation.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="mb-12">
       <div className="flex items-center justify-between mb-6">
@@ -151,40 +154,6 @@ export default function MerkleTree({
       </div>
 
       <div className="bg-white rounded-2xl border border-neutral-200 p-8 md:p-12 relative shadow-sm overflow-hidden min-h-[400px] flex flex-col justify-between items-center select-none">
-        {/* SVG Connection Lines */}
-        <svg
-          className="absolute inset-0 w-full h-full pointer-events-none z-0"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          {/* Root to L1 */}
-          <path d="M50% 60 L 30% 160" fill="none" {...getLineProps("pending")} />
-          <path d="M50% 60 L 70% 160" fill="none" {...getLineProps("pending")} />
-
-          {/* L1 to L2 (Left - Finished) */}
-          <path d="M30% 160 L 15% 260" fill="none" {...getLineProps("verified")} />
-          <path d="M30% 160 L 45% 260" fill="none" {...getLineProps("verified")} />
-
-          {/* L1 to L2 (Right - Waiting/Unused) */}
-          <path d="M70% 160 L 55% 260" fill="none" {...getLineProps("pending")} />
-          <path d="M70% 160 L 85% 260" fill="none" {...getLineProps("pending")} />
-
-          {/* L2 to Leaves (Left Group - Finished) */}
-          <path d="M15% 260 L 8% 360" fill="none" {...getLineProps("verified")} />
-          <path d="M15% 260 L 22% 360" fill="none" {...getLineProps("verified")} />
-
-          {/* L2 to Leaves (Mid-Left Group - Mixed) */}
-          <path d="M45% 260 L 38% 360" fill="none" {...getLineProps("verified")} />
-          <path d="M45% 260 L 52% 360" fill="none" {...getLineProps("proving")} />
-
-          {/* L2 to Leaves (Mid-Right Group - Pending/Unused) */}
-          <path d="M55% 260 L 48% 360" fill="none" {...getLineProps("pending")} />
-          <path d="M55% 260 L 62% 360" fill="none" {...getLineProps("pending")} />
-
-          {/* L2 to Leaves (Right Group - Unused) */}
-          <path d="M85% 260 L 78% 360" fill="none" {...getLineProps("pending")} />
-          <path d="M85% 260 L 92% 360" fill="none" {...getLineProps("pending")} />
-        </svg>
-
         {/* Tree Nodes */}
         <div
           className="relative z-10 w-full h-full flex flex-col justify-between"
