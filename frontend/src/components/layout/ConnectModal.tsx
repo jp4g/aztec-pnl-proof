@@ -11,7 +11,7 @@ interface ConnectModalProps {
 }
 
 export default function ConnectModal({ onClose }: ConnectModalProps) {
-  const { status, address, accounts, error, connect, createAccount, switchAccount, removeAccount, disconnect, clearAllSavedAccounts } = useAztecWallet();
+  const { status, address, accounts, error, connect, createAccount, switchAccount, removeAccount, disconnect, clearAllSavedAccounts, isDemoAccount } = useAztecWallet();
   const { mintUsdc, hasMintedUsdc, isMinting } = useTokens();
   const { showToast } = useToast();
   const [copied, setCopied] = useState<string | null>(null);
@@ -126,6 +126,7 @@ export default function ConnectModal({ onClose }: ConnectModalProps) {
             <div className="rounded-lg border border-neutral-200 divide-y divide-neutral-100">
               {accounts.map((acc) => {
                 const isActive = acc === address;
+                const isDemo = isDemoAccount(acc);
                 return (
                   <div
                     key={acc}
@@ -133,9 +134,9 @@ export default function ConnectModal({ onClose }: ConnectModalProps) {
                       if (!isActive) switchAccount(acc);
                     }}
                     className={`w-full flex items-center gap-2 p-3 text-left transition-colors ${
-                      isActive
-                        ? "bg-neutral-50"
-                        : "hover:bg-neutral-50 cursor-pointer"
+                      isDemo
+                        ? isActive ? "bg-amber-50/50" : "bg-amber-50/30 hover:bg-amber-50/50 cursor-pointer"
+                        : isActive ? "bg-neutral-50" : "hover:bg-neutral-50 cursor-pointer"
                     }`}
                   >
                     <div
@@ -146,6 +147,11 @@ export default function ConnectModal({ onClose }: ConnectModalProps) {
                     <span className="text-xs font-mono text-neutral-600 flex-1 truncate">
                       {truncateAddress(acc)}
                     </span>
+                    {isDemo && (
+                      <span className="text-[10px] font-medium text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded-full shrink-0">
+                        Demo
+                      </span>
+                    )}
                     {isActive && (
                       <Icon
                         icon="solar:check-circle-linear"
@@ -169,15 +175,17 @@ export default function ConnectModal({ onClose }: ConnectModalProps) {
                         width={14}
                       />
                     </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setConfirmRemove(acc);
-                      }}
-                      className="shrink-0 w-7 h-7 flex items-center justify-center rounded-md hover:bg-red-100 text-neutral-400 hover:text-red-500 transition-colors"
-                    >
-                      <Icon icon="solar:trash-bin-minimalistic-linear" width={14} />
-                    </button>
+                    {!isDemo && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setConfirmRemove(acc);
+                        }}
+                        className="shrink-0 w-7 h-7 flex items-center justify-center rounded-md hover:bg-red-100 text-neutral-400 hover:text-red-500 transition-colors"
+                      >
+                        <Icon icon="solar:trash-bin-minimalistic-linear" width={14} />
+                      </button>
+                    )}
                   </div>
                 );
               })}

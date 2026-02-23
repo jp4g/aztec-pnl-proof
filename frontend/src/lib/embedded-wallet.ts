@@ -93,6 +93,16 @@ interface StoredAccount {
   signingKey: string;
   secretKey: string;
   salt: string;
+  isDemo?: boolean;
+}
+
+function getDemoAccountEntry(): StoredAccount | null {
+  const addr = process.env.NEXT_PUBLIC_DEMO_ADDRESS;
+  const secret = process.env.NEXT_PUBLIC_DEMO_SECRET_KEY;
+  const signing = process.env.NEXT_PUBLIC_DEMO_SIGNING_KEY;
+  const salt = process.env.NEXT_PUBLIC_DEMO_SALT;
+  if (!addr || !secret || !signing || !salt) return null;
+  return { address: addr, secretKey: secret, signingKey: signing, salt, isDemo: true };
 }
 
 function loadStoredAccounts(): StoredAccount[] {
@@ -305,6 +315,10 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
 
   async connectAllAccounts(): Promise<{ active: AztecAddress | null; all: AztecAddress[] }> {
     const stored = loadStoredAccounts();
+    const demo = getDemoAccountEntry();
+    if (demo && !stored.some(e => e.address === demo.address)) {
+      stored.push(demo);
+    }
     if (stored.length === 0) return { active: null, all: [] };
 
     const validAddresses: AztecAddress[] = [];
@@ -439,12 +453,20 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
     return { secrets, ivskM, completeAddress };
   }
 
+  isDemoAccount(address: string): boolean {
+    const demo = getDemoAccountEntry();
+    return demo !== null && demo.address === address;
+  }
+
   disconnect() {
     this.connectedAccount = null;
   }
 
   removeAccount(address: AztecAddress) {
     const key = address.toString();
+    const demo = getDemoAccountEntry();
+    if (demo && demo.address === key) return; // Cannot delete demo account
+
     this.accounts.delete(key);
 
     const stored = loadStoredAccounts().filter(e => e.address !== key);

@@ -23,6 +23,7 @@ export interface AztecWalletContextValue {
   removeAccount: (address: string) => Promise<void>;
   disconnect: () => void;
   clearAllSavedAccounts: () => void;
+  isDemoAccount: (address: string) => boolean;
 }
 
 export const AztecWalletContext = createContext<AztecWalletContextValue | null>(
@@ -134,6 +135,10 @@ export function AztecWalletProvider({ children }: { children: ReactNode }) {
     setError(null);
   }, []);
 
+  const isDemoAccount = useCallback((addr: string) => {
+    return walletRef.current?.isDemoAccount(addr) ?? false;
+  }, []);
+
   const clearAllSavedAccounts = useCallback(async () => {
     const { EmbeddedAuditableWallet } = await import("@/lib/embedded-wallet");
     EmbeddedAuditableWallet.clearAllSavedAccounts();
@@ -158,6 +163,7 @@ export function AztecWalletProvider({ children }: { children: ReactNode }) {
         removeAccount,
         disconnect,
         clearAllSavedAccounts,
+        isDemoAccount,
       }}
     >
       {children}

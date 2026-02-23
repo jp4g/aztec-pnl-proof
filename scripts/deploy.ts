@@ -15,7 +15,7 @@
  *   AZTEC_NODE_URL       (default: http://localhost:8080)
  *   COINGECKO_API_KEY    (required for price fetch)
  *
- * Usage: bun scripts/setup.ts
+ * Usage: bun scripts/deploy.ts
  */
 
 import { getInitialTestAccountsData } from '@aztec/accounts/testing';
