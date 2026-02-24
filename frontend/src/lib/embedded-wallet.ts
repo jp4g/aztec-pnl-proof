@@ -96,14 +96,25 @@ interface StoredAccount {
   isDemo?: boolean;
 }
 
-// 3rd initial test account — deterministic, never changes
-const DEMO_ACCOUNT: StoredAccount = {
-  address: "0x08cad1e03676948f661bc00df74eadac619fc961aa8bf9ee7ca9e9b64291485c",
-  secretKey: "0x0f6addf0da06c33293df974a565b03d1ab096090d907d98055a8b7f4954e120c",
-  signingKey: "0x1a13d68e8713f34653bd523832a5d7041f5721f06e6dfa99061fe91a08e66a66",
-  salt: "0x0000000000000000000000000000000000000000000000000000000000000000",
-  isDemo: true,
-};
+// Deterministic test accounts used as non-deletable demos
+const DEMO_ACCOUNTS: StoredAccount[] = [
+  {
+    // accounts[2] — "winner" demo account (6 profitable swaps)
+    address: "0x08cad1e03676948f661bc00df74eadac619fc961aa8bf9ee7ca9e9b64291485c",
+    secretKey: "0x0f6addf0da06c33293df974a565b03d1ab096090d907d98055a8b7f4954e120c",
+    signingKey: "0x1a13d68e8713f34653bd523832a5d7041f5721f06e6dfa99061fe91a08e66a66",
+    salt: "0x0000000000000000000000000000000000000000000000000000000000000000",
+    isDemo: true,
+  },
+  {
+    // accounts[1] — "loser" demo account (12 losing swaps)
+    address: "0x0c28d3544b8c71648627c230b8e10ff7bdafb364957867473dbcf3c4f483b064",
+    secretKey: "0x0aebd1b4be76efa44f5ee655c20bf9ea60f7ae44b9a7fd1fd9f189c7a0b0cdae",
+    signingKey: "0x014296867376e488f9e6673f1c36f3ba366e8cbf857b956325106e365a518531",
+    salt: "0x0000000000000000000000000000000000000000000000000000000000000000",
+    isDemo: true,
+  },
+];
 
 function loadStoredAccounts(): StoredAccount[] {
   // Migrate legacy single-account key if present
@@ -315,9 +326,10 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
 
   async connectAllAccounts(): Promise<{ active: AztecAddress | null; all: AztecAddress[] }> {
     const stored = loadStoredAccounts();
-    const demo = DEMO_ACCOUNT;
-    if (demo && !stored.some(e => e.address === demo.address)) {
-      stored.push(demo);
+    for (const demo of DEMO_ACCOUNTS) {
+      if (!stored.some(e => e.address === demo.address)) {
+        stored.push(demo);
+      }
     }
     if (stored.length === 0) return { active: null, all: [] };
 
@@ -454,8 +466,7 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
   }
 
   isDemoAccount(address: string): boolean {
-    const demo = DEMO_ACCOUNT;
-    return demo !== null && demo.address === address;
+    return DEMO_ACCOUNTS.some(d => d.address === address);
   }
 
   disconnect() {
@@ -464,8 +475,7 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
 
   removeAccount(address: AztecAddress) {
     const key = address.toString();
-    const demo = DEMO_ACCOUNT;
-    if (demo && demo.address === key) return; // Cannot delete demo account
+    if (DEMO_ACCOUNTS.some(d => d.address === key)) return; // Cannot delete demo accounts
 
     this.accounts.delete(key);
 

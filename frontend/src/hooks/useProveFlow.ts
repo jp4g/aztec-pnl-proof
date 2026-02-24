@@ -12,18 +12,19 @@ import type {
 } from "@/types";
 import { TOKENS } from "@/data/dummy";
 
-/** Map token contract addresses to symbols for display */
+/** Map token contract addresses to symbols for display.
+ *  Next.js requires literal `process.env.NEXT_PUBLIC_*` for static replacement —
+ *  bracket notation like `process.env[varName]` silently returns undefined. */
 const TOKEN_ADDRESS_MAP: Record<string, { symbol: string; color: string }> = {};
 
 function initTokenAddressMap() {
-  const envMap: Record<string, keyof typeof TOKENS> = {
-    NEXT_PUBLIC_TOKEN_USDC: "USDC",
-    NEXT_PUBLIC_TOKEN_WETH: "wETH",
-    NEXT_PUBLIC_TOKEN_WZEC: "wZEC",
-    NEXT_PUBLIC_TOKEN_WAZTEC: "wAZTEC",
-  };
-  for (const [envKey, symbol] of Object.entries(envMap)) {
-    const addr = process.env[envKey];
+  const entries: [string | undefined, keyof typeof TOKENS][] = [
+    [process.env.NEXT_PUBLIC_TOKEN_USDC, "USDC"],
+    [process.env.NEXT_PUBLIC_TOKEN_WETH, "wETH"],
+    [process.env.NEXT_PUBLIC_TOKEN_WZEC, "wZEC"],
+    [process.env.NEXT_PUBLIC_TOKEN_WAZTEC, "wAZTEC"],
+  ];
+  for (const [addr, symbol] of entries) {
     if (addr) {
       TOKEN_ADDRESS_MAP[addr.toLowerCase()] = TOKENS[symbol];
     }
@@ -44,11 +45,16 @@ function formatAmount(amount: bigint, decimals = 6): string {
   return fracStr ? `${whole}.${fracStr}` : whole.toString();
 }
 
+// PnL raw units = token_amount (TOKEN_DECIMALS=9) * oracle_price_diff (PRICE_PRECISION=10)
+// Divide by 10^(9+1) = 10^10 to get USD
+const PNL_DIVISOR = 10n ** 10n;
+
 function formatPnl(pnl: bigint): string {
   const sign = pnl >= 0n ? "+" : "-";
   const abs = pnl < 0n ? -pnl : pnl;
-  // PnL is in raw units (amount * price), display as integer
-  return `${sign}${abs.toLocaleString()}`;
+  const whole = abs / PNL_DIVISOR;
+  const frac = (abs % PNL_DIVISOR).toString().padStart(10, "0").slice(0, 2);
+  return `${sign}$${whole.toLocaleString()}.${frac}`;
 }
 
 const INITIAL_TREE_ROOT: TreeNode = { id: "root", status: "pending", label: "Root" };

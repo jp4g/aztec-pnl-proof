@@ -308,9 +308,163 @@ async function demoData() {
         }
     }
 
+    console.log('\n=== Account 1 (winner) complete: 6 swaps ===\n');
+
+    // =====================================================================
+    // Phase 2: Account 2 (loser = accounts[1]) — 12 swaps that lose money
+    // Buys tokens, prices crash, sells at loss. Repeats.
+    // =====================================================================
+    console.log('=== Phase 2: Loser account (accounts[1]) — 12 losing swaps ===\n');
+
+    const loserUser = addresses[1];
+
+    // --- Deploy account 2 on-chain if needed ---
+    console.log('--- Deploying loser account on-chain ---');
+    const loserAccountData = accounts[1];
+    const loserSchnorr = new SchnorrAccountContract(loserAccountData.signingKey);
+    const loserAccountManager = await AccountManager.create(
+        wallet, loserAccountData.secret, loserSchnorr, loserAccountData.salt,
+    );
+    const loserMeta = await wallet.getContractMetadata(loserAccountManager.address);
+    if (loserMeta.isContractInitialized) {
+        console.log(`  Loser account already deployed at ${loserAccountManager.address}\n`);
+    } else {
+        const loserDeploy = await loserAccountManager.getDeployMethod();
+        await loserDeploy.send({ from: admin, skipClassPublication: true, skipInstancePublication: true }).wait();
+        console.log(`  Loser account deployed at ${loserAccountManager.address}\n`);
+    }
+
+    // --- Mint 100,000 USDC to loser ---
+    console.log('--- Minting 100,000 USDC to loser ---');
+    await usdc_token.methods.mint_to_private(loserUser, usdc(100_000)).send({ from: admin }).wait();
+    console.log(`  Minted ${usdc(100_000)} USDC (100,000 with 6 decimals)\n`);
+
+    // Price multipliers for the loser's 12 swaps.
+    // Starts at account 1's final oracle state (ETH=0.95x, ZEC=1.25x, AZTEC=1.80x).
+    // Buys at those prices, then prices crash, sells at loss. Repeats with a second crash.
+    const LOSER_PRICE_MULTIPLIERS: { USDC: number; wETH: number; wZEC: number; wAZTEC: number }[] = [
+        // Round 1 buys: at account 1's final prices
+        { USDC: 1.0, wETH: 0.95, wZEC: 1.25, wAZTEC: 1.80 },  // Swap 1: buy wETH
+        { USDC: 1.0, wETH: 0.95, wZEC: 1.25, wAZTEC: 1.80 },  // Swap 2: buy wZEC
+        { USDC: 1.0, wETH: 0.95, wZEC: 1.25, wAZTEC: 1.80 },  // Swap 3: buy wAZTEC
+        // Round 1 sells: prices crash
+        { USDC: 1.0, wETH: 0.70, wZEC: 0.85, wAZTEC: 0.90 },  // Swap 4: sell wETH at loss
+        { USDC: 1.0, wETH: 0.70, wZEC: 0.85, wAZTEC: 0.90 },  // Swap 5: sell wZEC at loss
+        { USDC: 1.0, wETH: 0.70, wZEC: 0.85, wAZTEC: 0.90 },  // Swap 6: sell wAZTEC at loss
+        // Round 2 buys: "buying the dip" at crashed prices
+        { USDC: 1.0, wETH: 0.70, wZEC: 0.85, wAZTEC: 0.90 },  // Swap 7: buy wETH
+        { USDC: 1.0, wETH: 0.70, wZEC: 0.85, wAZTEC: 0.90 },  // Swap 8: buy wZEC
+        { USDC: 1.0, wETH: 0.70, wZEC: 0.85, wAZTEC: 0.90 },  // Swap 9: buy wAZTEC
+        // Round 2 sells: double crash
+        { USDC: 1.0, wETH: 0.50, wZEC: 0.60, wAZTEC: 0.40 },  // Swap 10: sell wETH at bigger loss
+        { USDC: 1.0, wETH: 0.50, wZEC: 0.60, wAZTEC: 0.40 },  // Swap 11: sell wZEC at bigger loss
+        { USDC: 1.0, wETH: 0.50, wZEC: 0.60, wAZTEC: 0.40 },  // Swap 12: sell wAZTEC at bigger loss
+    ];
+
+    const LOSER_SWAP_DEFS: SwapDef[] = [
+        // Round 1: buy tokens
+        { inKey: 'USDC',   outKey: 'wETH',   pool: 'wETH/USDC',   amountIn: usdc(8_000),  amountInDesc: '8,000 USDC'  },
+        { inKey: 'USDC',   outKey: 'wZEC',   pool: 'wZEC/USDC',   amountIn: usdc(10_000), amountInDesc: '10,000 USDC' },
+        { inKey: 'USDC',   outKey: 'wAZTEC', pool: 'wAZTEC/USDC', amountIn: usdc(12_000), amountInDesc: '12,000 USDC' },
+        // Round 1: sell everything at loss
+        { inKey: 'wETH',   outKey: 'USDC',   pool: 'wETH/USDC',   amountIn: 0n,           amountInDesc: 'all wETH'    },
+        { inKey: 'wZEC',   outKey: 'USDC',   pool: 'wZEC/USDC',   amountIn: 0n,           amountInDesc: 'all wZEC'    },
+        { inKey: 'wAZTEC', outKey: 'USDC',   pool: 'wAZTEC/USDC', amountIn: 0n,           amountInDesc: 'all wAZTEC'  },
+        // Round 2: buy the dip
+        { inKey: 'USDC',   outKey: 'wETH',   pool: 'wETH/USDC',   amountIn: usdc(6_000),  amountInDesc: '6,000 USDC'  },
+        { inKey: 'USDC',   outKey: 'wZEC',   pool: 'wZEC/USDC',   amountIn: usdc(8_000),  amountInDesc: '8,000 USDC'  },
+        { inKey: 'USDC',   outKey: 'wAZTEC', pool: 'wAZTEC/USDC', amountIn: usdc(5_000),  amountInDesc: '5,000 USDC'  },
+        // Round 2: sell everything at bigger loss
+        { inKey: 'wETH',   outKey: 'USDC',   pool: 'wETH/USDC',   amountIn: 0n,           amountInDesc: 'all wETH'    },
+        { inKey: 'wZEC',   outKey: 'USDC',   pool: 'wZEC/USDC',   amountIn: 0n,           amountInDesc: 'all wZEC'    },
+        { inKey: 'wAZTEC', outKey: 'USDC',   pool: 'wAZTEC/USDC', amountIn: 0n,           amountInDesc: 'all wAZTEC'  },
+    ];
+
+    // Track token balances for "sell all" swaps
+    const loserHoldings: Record<string, bigint> = {};
+
+    console.log('--- Executing 12 swaps for loser account ---');
+    for (let i = 0; i < 12; i++) {
+        const def = LOSER_SWAP_DEFS[i];
+        const mult = LOSER_PRICE_MULTIPLIERS[i];
+
+        // Update oracle prices when multipliers change
+        if (i > 0) {
+            const prevMult = LOSER_PRICE_MULTIPLIERS[i - 1];
+            const changed = mult.wETH !== prevMult.wETH || mult.wZEC !== prevMult.wZEC || mult.wAZTEC !== prevMult.wAZTEC;
+            if (changed) {
+                console.log(`\n  Updating oracle prices (ETH:${mult.wETH}x, ZEC:${mult.wZEC}x, AZTEC:${mult.wAZTEC}x)`);
+                const newPrices: [typeof weth, bigint][] = [
+                    [usdc_token, BigInt(Math.round(Number(baseOraclePrices.USDC) * mult.USDC))],
+                    [weth,       BigInt(Math.round(Number(baseOraclePrices.wETH) * mult.wETH))],
+                    [wzec,       BigInt(Math.round(Number(baseOraclePrices.wZEC) * mult.wZEC))],
+                    [waztec,     BigInt(Math.round(Number(baseOraclePrices.wAZTEC) * mult.wAZTEC))],
+                ];
+                for (const [token, price] of newPrices) {
+                    await priceFeed.methods.set_price(token.address.toField(), price)
+                        .send({ from: admin }).wait();
+                }
+            }
+        }
+
+        // Resolve amountIn for "sell all" swaps
+        let amountIn = def.amountIn;
+        if (amountIn === 0n) {
+            amountIn = loserHoldings[def.inKey]!;
+            if (!amountIn) throw new Error(`No tracked holdings for ${def.inKey} at swap ${i + 1}`);
+        }
+
+        const tokenIn = tokenMap[def.inKey];
+        const tokenOut = tokenMap[def.outKey];
+        const pool = poolMap[def.pool];
+        const ps = poolStates[def.pool];
+
+        const sellingToken0 = tokenIn.address.equals(ps.token0.address);
+        const reserveIn = sellingToken0 ? ps.reserve0 : ps.reserve1;
+        const reserveOut = sellingToken0 ? ps.reserve1 : ps.reserve0;
+
+        const nonce = Fr.random();
+        const authwit = await wallet.createAuthWit(loserUser, {
+            caller: pool.address,
+            action: tokenIn.methods.transfer_to_public(loserUser, pool.address, amountIn, nonce),
+        });
+
+        const amountOut = await pool.methods
+            .get_amount_out_for_exact_in(reserveIn, reserveOut, amountIn)
+            .simulate({ from: loserUser });
+
+        console.log(`\n  Swap ${i + 1}/12: ${def.amountInDesc} ${def.inKey} -> ${def.outKey}`);
+        console.log(`    amountIn: ${amountIn}, amountOut: ${amountOut}`);
+
+        await pool.methods
+            .swap_exact_tokens_for_tokens(tokenIn.address, tokenOut.address, amountIn, amountOut, nonce)
+            .with({ authWitnesses: [authwit] })
+            .send({ from: loserUser })
+            .wait();
+        console.log(`    Swap ${i + 1} executed!`);
+
+        const amountOutBigInt = BigInt(amountOut);
+
+        // Track holdings: accumulate on buy, clear on sell
+        if (def.inKey === 'USDC') {
+            loserHoldings[def.outKey] = (loserHoldings[def.outKey] || 0n) + amountOutBigInt;
+        } else {
+            delete loserHoldings[def.inKey];
+        }
+
+        // Update tracked reserves
+        if (sellingToken0) {
+            ps.reserve0 += amountIn;
+            ps.reserve1 -= amountOutBigInt;
+        } else {
+            ps.reserve1 += amountIn;
+            ps.reserve0 -= amountOutBigInt;
+        }
+    }
+
     console.log('\n=== Demo data complete! ===');
-    console.log(`Demo user address: ${demoUser}`);
-    console.log('6 swaps executed. Run the frontend to see demo account with swap history.');
+    console.log(`Winner (accounts[2]): ${demoUser} — 6 swaps, net profit`);
+    console.log(`Loser  (accounts[1]): ${loserUser} — 12 swaps, net loss`);
 }
 
 demoData().catch((err) => {
