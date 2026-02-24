@@ -12,6 +12,29 @@ import type {
 } from "@/types";
 import { TOKENS } from "@/data/dummy";
 
+// --- DEBUG: Set to "verify_one" or "verify_two" to test recursive verification isolation ---
+// Set to null for normal SwapProofTree flow
+const DEBUG_CIRCUIT: "verify_one" | "verify_two" | null = null;
+
+/** Convert raw proof bytes to array of 32-byte hex field strings */
+function proofBytesToFields(proofBytes: Uint8Array): string[] {
+  const fields: string[] = [];
+  for (let i = 0; i < proofBytes.length; i += 32) {
+    const chunk = proofBytes.slice(i, i + 32);
+    const hex = "0x" + Buffer.from(chunk).toString("hex");
+    fields.push(hex);
+  }
+  return fields;
+}
+
+/** Encode signed i64 as unsigned field via two's complement */
+function i64ToField(val: bigint): string {
+  if (val < 0n) {
+    return ((1n << 64n) + val).toString();
+  }
+  return val.toString();
+}
+
 /** Map token contract addresses to symbols for display */
 const TOKEN_ADDRESS_MAP: Record<string, { symbol: string; color: string }> = {};
 
@@ -305,7 +328,9 @@ export function useProveFlow() {
       console.log("[prove] Step 4a: importing bb.js...");
       const { Barretenberg } = await import("@aztec/bb.js");
       console.log("[prove] Step 4b: creating Barretenberg...");
-      const bb = await Barretenberg.new({ threads: 1 });
+      const numThreads = navigator.hardwareConcurrency || 1;
+      console.log(`[prove] Step 4b: threads: ${numThreads}`);
+      const bb = await Barretenberg.new({ threads: numThreads });
       console.log("[prove] Step 4c: loading larger CRS...");
       // Summary circuit (recursive proof verification) needs > 2^20 CRS points
       await bb.initSRSChonk(2 ** 21);
@@ -314,9 +339,7 @@ export function useProveFlow() {
       // --- Step 5: Create provers ---
       console.log("[prove] Step 5: Creating provers...");
       const { SwapProver } = await import("@proof/swap-prover");
-      const { SwapProofTree } = await import("@proof/swap-proof-tree");
       const { LotStateTree } = await import("@proof/lot-state-tree");
-      const { TaxProver } = await import("@proof/tax-prover");
       const { Fr } = await import("@aztec/aztec.js/fields");
       const { PriceFeedContract } = await import(
         "@aztec/noir-contracts.js/PriceFeed"
@@ -330,19 +353,11 @@ export function useProveFlow() {
         node: wallet.getNode(),
       });
 
-      const proofTree = new SwapProofTree({
-        bb,
-        summaryCircuit: swapSummaryTreeJson,
-        swapProver: prover,
-        vkeys: vkeysJson,
-      });
-
       // Initialize lot state tree with USDC lot from initial mint
       const lotStateTree = new LotStateTree();
       const usdcAddr = process.env.NEXT_PUBLIC_TOKEN_USDC;
       if (usdcAddr) {
         const usdcField = Fr.fromString(usdcAddr);
-        // Initial USDC balance: 100,000 with 6 decimals
         await lotStateTree.setLots(
           usdcField,
           [{ amount: 100_000n * 10n ** 6n, costPerUnit: 10n }],
@@ -365,98 +380,251 @@ export function useProveFlow() {
         blockNumber: BigInt(e.blockNumber),
       }));
 
-      // --- Step 7: Run proof pipeline ---
-      console.log("[prove] Step 7: Starting proof pipeline...");
-      setState((prev) => ({
-        ...prev,
-        status: "proving",
-        statusText: `Proving swap 1/${totalSwaps}...`,
-        progress: 25,
-      }));
+      if (DEBUG_CIRCUIT) {
+        // ===== DEBUG PATH: Prove swaps individually, then test dummy verify circuit =====
+        console.log(`[prove] DEBUG MODE: Will test ${DEBUG_CIRCUIT} after individual proofs`);
 
-      const result = await proofTree.prove(
-        swapEvents,
-        lotStateTree,
-        priceFeedAddress,
-        priceFeedAssetsSlot,
-        (step, current, total) => {
+        // --- Step 7a: Prove individual swaps ---
+        setState((prev) => ({
+          ...prev,
+          status: "proving",
+          statusText: `Proving swap 1/${totalSwaps}...`,
+          progress: 25,
+        }));
+
+        type LeafArtifact = {
+          proof: Uint8Array;
+          proofAsFields: string[];
+          publicInputs: string[];
+        };
+        const leafArtifacts: LeafArtifact[] = [];
+        let previousBlockNumber = 0n;
+
+        for (let i = 0; i < swapEvents.length; i++) {
           if (abortRef.current) return;
-          if (step === "swap") {
-            const swapProgress = 25 + (current / total) * 45;
-            const treeViz = buildTreeNodes(totalSwaps, current - 1, current - 1);
-            setState((prev) => ({
-              ...prev,
-              status: "proving",
-              currentSwap: current,
-              statusText: `Proving swap ${current}/${total}...`,
-              progress: Math.round(swapProgress),
-              ...treeViz,
-            }));
-          } else if (step === "aggregate") {
-            const aggProgress = 70 + (current / Math.max(total, 1)) * 15;
-            const treeViz = buildTreeNodes(totalSwaps, totalSwaps, null, current);
-            setState((prev) => ({
-              ...prev,
-              status: "aggregating",
-              statusText: `Aggregating proofs (level ${current}/${total})...`,
-              progress: Math.round(aggProgress),
-              ...treeViz,
-            }));
-          }
+
+          const swapProgress = 25 + ((i + 1) / totalSwaps) * 45;
+          const treeViz = buildTreeNodes(totalSwaps, i, i);
+          setState((prev) => ({
+            ...prev,
+            status: "proving",
+            currentSwap: i + 1,
+            statusText: `Proving swap ${i + 1}/${totalSwaps}...`,
+            progress: Math.round(swapProgress),
+            ...treeViz,
+          }));
+
+          console.log(`[prove]   Swap ${i + 1}/${totalSwaps}...`);
+          const result = await prover.prove(
+            swapEvents[i],
+            lotStateTree,
+            priceFeedAddress,
+            priceFeedAssetsSlot,
+            previousBlockNumber,
+          );
+
+          const proofFields = proofBytesToFields(result.proof);
+          const pubInputs = [
+            result.publicInputs.leaf,
+            i64ToField(result.publicInputs.pnl),
+            result.publicInputs.remainingLotStateRoot,
+            result.publicInputs.initialLotStateRoot,
+            result.publicInputs.priceFeedAddress,
+            result.publicInputs.blockNumber.toString(),
+          ];
+
+          leafArtifacts.push({
+            proof: result.proof,
+            proofAsFields: proofFields,
+            publicInputs: pubInputs,
+          });
+
+          previousBlockNumber = swapEvents[i].blockNumber;
         }
-      );
 
-      if (abortRef.current) return;
+        // Mark all leaves as verified
+        const allLeavesViz = buildTreeNodes(totalSwaps, totalSwaps, null);
+        setState((prev) => ({
+          ...prev,
+          ...allLeavesViz,
+          progress: 70,
+          statusText: "Individual proofs complete.",
+        }));
 
-      // --- Step 8: Tax proof ---
-      // All aggregation levels done, root is now being proven (tax wraps it)
-      const treeVizTax = buildTreeNodes(totalSwaps, totalSwaps, null, 3);
-      setState((prev) => ({
-        ...prev,
-        status: "taxing",
-        statusText: "Computing capital gains tax...",
-        progress: 88,
-        ...treeVizTax,
-        treeRoot: { ...treeVizTax.treeRoot, status: "proving" },
-      }));
+        console.log(`[prove] All ${leafArtifacts.length} individual proofs done.`);
 
-      const taxProver = new TaxProver(
-        bb,
-        capitalGainsTaxJson,
-        vkeysJson.summary
-      );
-      const taxResult = await taxProver.prove(result);
+        // --- Step 7b: Test the debug circuit ---
+        console.log(`[prove] DEBUG: Loading ${DEBUG_CIRCUIT} circuit...`);
+        setState((prev) => ({
+          ...prev,
+          status: "aggregating",
+          statusText: `DEBUG: Loading ${DEBUG_CIRCUIT} circuit...`,
+          progress: 75,
+        }));
 
-      if (abortRef.current) return;
+        const debugCircuitJson = await fetch(`/circuits/${DEBUG_CIRCUIT}.json`).then((r) => r.json());
+        console.log(`[prove] DEBUG: ${DEBUG_CIRCUIT} circuit loaded`);
 
-      // Final tree: everything verified (aggregation level 3 = all done)
-      const finalTreeViz = buildTreeNodes(totalSwaps, totalSwaps, null, 3);
+        const { Noir } = await import("@aztec/noir-noir_js");
+        const { UltraHonkBackend } = await import("@aztec/bb.js");
 
-      setState((prev) => ({
-        ...prev,
-        status: "complete",
-        currentSwap: totalSwaps,
-        statusText: "Proof complete!",
-        progress: 100,
-        pnl: taxResult.publicInputs.pnl,
-        tax: taxResult.publicInputs.tax,
-        merkleRoot: taxResult.publicInputs.root,
-        blockNumber: taxResult.publicInputs.blockNumber,
-        proof: taxResult.proof,
-        ...finalTreeViz,
-        error: null,
-      }));
+        const debugNoir = new Noir(debugCircuitJson);
+        await debugNoir.init();
+        const debugBackend = new UltraHonkBackend(debugCircuitJson.bytecode, bb);
 
-      // Cleanup
-      bb.destroy();
+        const leafVk = vkeysJson.leaf;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let debugInputs: any;
+        if (DEBUG_CIRCUIT === "verify_one") {
+          debugInputs = {
+            verification_key: leafVk.vkAsFields,
+            vkey_hash: leafVk.vkHash,
+            proof: leafArtifacts[0].proofAsFields,
+            public_inputs: leafArtifacts[0].publicInputs,
+          };
+        } else {
+          // verify_two: use first two proofs (or same proof twice if only one swap)
+          const proofA = leafArtifacts[0];
+          const proofB = leafArtifacts.length > 1 ? leafArtifacts[1] : leafArtifacts[0];
+          debugInputs = {
+            verification_key: leafVk.vkAsFields,
+            vkey_hash: leafVk.vkHash,
+            proof_a: proofA.proofAsFields,
+            public_inputs_a: proofA.publicInputs,
+            proof_b: proofB.proofAsFields,
+            public_inputs_b: proofB.publicInputs,
+          };
+        }
+
+        console.log(`[prove] DEBUG: inputs:`, JSON.stringify(debugInputs));
+        console.log(`[prove] DEBUG: Executing ${DEBUG_CIRCUIT} circuit...`);
+        setState((prev) => ({
+          ...prev,
+          statusText: `DEBUG: Executing ${DEBUG_CIRCUIT} witness...`,
+          progress: 80,
+        }));
+
+        const { witness } = await debugNoir.execute(debugInputs);
+        // witness is a Map<number, string> — serialize it
+        const witnessObj = Object.fromEntries(witness.entries());
+        console.log(`[prove] DEBUG: witness:`, JSON.stringify(witnessObj));
+        console.log(`[prove] DEBUG: Witness computed. Generating proof...`);
+
+        setState((prev) => ({
+          ...prev,
+          statusText: `DEBUG: Generating ${DEBUG_CIRCUIT} proof (this may stack overflow)...`,
+          progress: 85,
+        }));
+
+        const debugProof = await debugBackend.generateProof(witness);
+        console.log(`[prove] DEBUG: ${DEBUG_CIRCUIT} proof generated successfully!`);
+        console.log(`[prove] DEBUG: Proof size: ${debugProof.proof.length} bytes`);
+
+        setState((prev) => ({
+          ...prev,
+          status: "complete",
+          statusText: `DEBUG: ${DEBUG_CIRCUIT} proof succeeded!`,
+          progress: 100,
+          ...buildTreeNodes(totalSwaps, totalSwaps, null, 3),
+          error: null,
+        }));
+
+        bb.destroy();
+      } else {
+        // ===== NORMAL PATH: Full SwapProofTree + Tax =====
+        console.log("[prove] Step 7: Starting proof pipeline...");
+        setState((prev) => ({
+          ...prev,
+          status: "proving",
+          statusText: `Proving swap 1/${totalSwaps}...`,
+          progress: 25,
+        }));
+
+        const { SwapProofTree } = await import("@proof/swap-proof-tree");
+        const { TaxProver } = await import("@proof/tax-prover");
+
+        const proofTree = new SwapProofTree({
+          bb,
+          summaryCircuit: swapSummaryTreeJson,
+          swapProver: prover,
+          vkeys: vkeysJson,
+        });
+
+        const result = await proofTree.prove(
+          swapEvents,
+          lotStateTree,
+          priceFeedAddress,
+          priceFeedAssetsSlot,
+          (step, current, total) => {
+            if (abortRef.current) return;
+            if (step === "swap") {
+              const swapProgress = 25 + (current / total) * 45;
+              const treeViz = buildTreeNodes(totalSwaps, current - 1, current - 1);
+              setState((prev) => ({
+                ...prev,
+                status: "proving",
+                currentSwap: current,
+                statusText: `Proving swap ${current}/${total}...`,
+                progress: Math.round(swapProgress),
+                ...treeViz,
+              }));
+            } else if (step === "aggregate") {
+              const aggProgress = 70 + (current / Math.max(total, 1)) * 15;
+              const treeViz = buildTreeNodes(totalSwaps, totalSwaps, null, current);
+              setState((prev) => ({
+                ...prev,
+                status: "aggregating",
+                statusText: `Aggregating proofs (level ${current}/${total})...`,
+                progress: Math.round(aggProgress),
+                ...treeViz,
+              }));
+            }
+          }
+        );
+
+        if (abortRef.current) return;
+
+        // --- Tax proof ---
+        const treeVizTax = buildTreeNodes(totalSwaps, totalSwaps, null, 3);
+        setState((prev) => ({
+          ...prev,
+          status: "taxing",
+          statusText: "Computing capital gains tax...",
+          progress: 88,
+          ...treeVizTax,
+          treeRoot: { ...treeVizTax.treeRoot, status: "proving" },
+        }));
+
+        const taxProver = new TaxProver(
+          bb,
+          capitalGainsTaxJson,
+          vkeysJson.summary
+        );
+        const taxResult = await taxProver.prove(result);
+
+        if (abortRef.current) return;
+
+        const finalTreeViz = buildTreeNodes(totalSwaps, totalSwaps, null, 3);
+        setState((prev) => ({
+          ...prev,
+          status: "complete",
+          currentSwap: totalSwaps,
+          statusText: "Proof complete!",
+          progress: 100,
+          pnl: taxResult.publicInputs.pnl,
+          tax: taxResult.publicInputs.tax,
+          merkleRoot: taxResult.publicInputs.root,
+          blockNumber: taxResult.publicInputs.blockNumber,
+          proof: taxResult.proof,
+          ...finalTreeViz,
+          error: null,
+        }));
+
+        bb.destroy();
+      }
     } catch (err: any) {
-      console.error("Prove flow error:", err);
-      setState((prev) => ({
-        ...prev,
-        status: "error",
-        statusText: "Proof generation failed",
-        error: err.message ?? "Unknown error",
-      }));
+      throw err;
     }
   }, [wallet, address]);
 
