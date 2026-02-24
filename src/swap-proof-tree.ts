@@ -353,13 +353,10 @@ export class SwapProofTree {
             summary_vkey_hash: this.config.vkeys.summary.vkHash,
         };
 
-        console.log(`[swap-proof-tree] summary inputs:`, JSON.stringify(summaryInputs));
-
         const { witness, returnValue } = await this.summaryNoir!.execute(summaryInputs);
         const [root, pnlStr, remainingLotStateRoot, initialLotStateRoot, priceFeedAddr, blockNum] =
             returnValue as [string, string, string, string, string, string];
 
-        console.trace('[swap-proof-tree] pre-generateProof');
         const proof = await this.summaryBackend!.generateProof(witness, {
             verifierTarget: 'noir-recursive',
         });

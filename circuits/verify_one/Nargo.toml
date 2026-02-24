@@ -1,7 +1,0 @@
-[package]
-name = "verify_one"
-type = "bin"
-authors = [""]
-
-[dependencies]
-bb_proof_verification = { path = "../../../aztec-packages/barretenberg/noir/bb_proof_verification" }
