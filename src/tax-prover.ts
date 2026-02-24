@@ -2,10 +2,7 @@ import { Noir } from '@aztec/noir-noir_js';
 import { Barretenberg, UltraHonkBackend } from '@aztec/bb.js';
 import type { CompiledCircuit } from '@aztec/noir-types';
 import { parseSignedHex, fieldToI64, i64ToField } from './swap-proof-tree';
-import type { SwapProofTreeResult } from './swap-proof-tree';
-
-/** Number of public inputs from the summary tree proof */
-const SUMMARY_PUBLIC_INPUTS = 6;
+import type { SwapProofTreeResult, VkeyArtifacts } from './swap-proof-tree';
 
 export interface TaxProofResult {
     proof: Uint8Array;
@@ -23,20 +20,14 @@ export interface TaxProofResult {
 export class TaxProver {
     private bb: Barretenberg;
     private taxCircuit: CompiledCircuit;
+    private summaryVkey: VkeyArtifacts;
     private noir: Noir | null = null;
     private backend: UltraHonkBackend | null = null;
-    private summaryBackend: UltraHonkBackend | null = null;
 
-    constructor(bb: Barretenberg, private summaryCircuit: CompiledCircuit, taxCircuit?: CompiledCircuit) {
+    constructor(bb: Barretenberg, taxCircuit: CompiledCircuit, summaryVkey: VkeyArtifacts) {
         this.bb = bb;
-        this.taxCircuit = taxCircuit ?? summaryCircuit; // placeholder, overridden by initWithCircuit
-    }
-
-    /** Initialize with an externally-loaded tax circuit (for browser use) */
-    static create(bb: Barretenberg, summaryCircuit: CompiledCircuit, taxCircuit: CompiledCircuit): TaxProver {
-        const prover = new TaxProver(bb, summaryCircuit);
-        prover.taxCircuit = taxCircuit;
-        return prover;
+        this.taxCircuit = taxCircuit;
+        this.summaryVkey = summaryVkey;
     }
 
     private async initialize(): Promise<void> {
@@ -49,10 +40,6 @@ export class TaxProver {
             this.taxCircuit.bytecode,
             this.bb,
         );
-        this.summaryBackend = new UltraHonkBackend(
-            this.summaryCircuit.bytecode,
-            this.bb,
-        );
         console.log('TaxProver initialized');
     }
 
@@ -61,16 +48,8 @@ export class TaxProver {
 
         console.log('\n=== TaxProver: Computing capital gains tax ===');
 
-        // Get summary vkey artifacts
-        const summaryArtifacts = await this.summaryBackend!.generateRecursiveProofArtifacts(
-            summaryResult.proof,
-            SUMMARY_PUBLIC_INPUTS,
-        );
-
-        // Convert proof bytes to field array
         const proofAsFields = this.proofBytesToFields(summaryResult.proof);
 
-        // Build public inputs array (6 fields, with PnL as two's complement)
         const publicInputs = [
             summaryResult.publicInputs.root,
             i64ToField(summaryResult.publicInputs.pnl),
@@ -81,11 +60,11 @@ export class TaxProver {
         ];
 
         const circuitInputs = {
-            verification_key: summaryArtifacts.vkAsFields,
-            vkey_hash: summaryArtifacts.vkHash,
+            verification_key: this.summaryVkey.vkAsFields,
+            vkey_hash: this.summaryVkey.vkHash,
             proof: proofAsFields,
             public_inputs: publicInputs,
-            summary_vkey_hash: summaryArtifacts.vkHash,
+            summary_vkey_hash: this.summaryVkey.vkHash,
         };
 
         console.log('  Executing tax circuit...');

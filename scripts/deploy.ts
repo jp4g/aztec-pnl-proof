@@ -44,7 +44,7 @@ const PRICE_PRECISION = 10;
 // Pool seed: $100k USDC per pool
 const POOL_USDC_AMOUNT = 100_000n;
 const USDC_DECIMALS = 6;
-const TOKEN_DECIMALS = 18;
+const TOKEN_DECIMALS = 9;
 
 // CoinGecko IDs — no listed AZTEC token, use fallback
 const COINGECKO_IDS = {

@@ -5,6 +5,7 @@ import type { CompiledCircuit } from '@aztec/noir-types';
 import { getZeroHashes } from './imt';
 import type { SwapProver, SwapProofResult, SwapData } from './swap-prover';
 import { LotStateTree } from './lot-state-tree';
+import { writeFileSync } from 'fs';
 
 /** Parse a potentially negative hex string like "-0x1a" into a BigInt */
 export function parseSignedHex(s: string): bigint {
@@ -30,8 +31,11 @@ export function fieldToI64(val: bigint): bigint {
     return val;
 }
 
-/** Number of public inputs per child proof (6 values) */
-const NUM_PUBLIC_INPUTS = 6;
+/** Precomputed verification key artifacts */
+export interface VkeyArtifacts {
+    vkAsFields: string[];
+    vkHash: string;
+}
 
 /**
  * Configuration for SwapProofTree
@@ -39,12 +43,40 @@ const NUM_PUBLIC_INPUTS = 6;
 export interface SwapProofTreeConfig {
     /** Barretenberg instance */
     bb: Barretenberg;
-    /** Compiled individual_swap circuit (for vkey extraction) */
-    leafCircuit: CompiledCircuit;
     /** Compiled swap_summary_tree circuit */
     summaryCircuit: CompiledCircuit;
     /** SwapProver instance (for generating individual swap proofs) */
     swapProver: SwapProver;
+    /** Precomputed verification keys */
+    vkeys: {
+        leaf: VkeyArtifacts;
+        summary: VkeyArtifacts;
+    };
+    /** If set, save debug data (inputs/witnesses/proofs) to this path after each combineProofs call */
+    debugOutputPath?: string;
+}
+
+/** Debug snapshot of a single combineProofs call */
+export interface DebugCombineCall {
+    level: number;
+    isLeafLevel: boolean;
+    hasRight: boolean;
+    summaryInputs: Record<string, unknown>;
+    witness: string; // hex-encoded
+    proof: string;   // hex-encoded
+    publicInputs: string[];
+}
+
+/** Debug snapshot of the full proof tree run */
+export interface DebugProofTreeData {
+    vkeys: { leaf: VkeyArtifacts; summary: VkeyArtifacts };
+    leafProofs: Array<{
+        index: number;
+        proof: string;       // hex-encoded
+        proofAsFields: string[];
+        publicInputs: string[];
+    }>;
+    combineCalls: DebugCombineCall[];
 }
 
 /**
@@ -96,19 +128,30 @@ interface ProofArtifact {
 export class SwapProofTree {
     private config: SwapProofTreeConfig;
 
-    private leafBackend: UltraHonkBackend | null = null;
     private summaryNoir: Noir | null = null;
     private summaryBackend: UltraHonkBackend | null = null;
     private zeroHashes: Fr[] | null = null;
 
-    // VKey artifacts (computed once)
-    private leafVkAsFields: string[] | null = null;
-    private leafVkHash: string | null = null;
-    private summaryVkAsFields: string[] | null = null;
-    private summaryVkHash: string | null = null;
+    /** Accumulated debug data (only when debugOutputPath is set) */
+    private debugData: DebugProofTreeData | null = null;
 
     constructor(config: SwapProofTreeConfig) {
         this.config = config;
+    }
+
+    private initDebug(): void {
+        if (!this.config.debugOutputPath) return;
+        this.debugData = {
+            vkeys: this.config.vkeys,
+            leafProofs: [],
+            combineCalls: [],
+        };
+    }
+
+    private saveDebug(): void {
+        if (!this.debugData || !this.config.debugOutputPath) return;
+        writeFileSync(this.config.debugOutputPath, JSON.stringify(this.debugData, null, 2));
+        console.log(`[debug] Saved proof tree data to ${this.config.debugOutputPath}`);
     }
 
     /**
@@ -131,6 +174,7 @@ export class SwapProofTree {
         onProgress?: (step: string, current: number, total: number) => void,
     ): Promise<SwapProofTreeResult> {
         await this.initialize();
+        this.initDebug();
 
         console.log(`\n=== SwapProofTree: Aggregating ${events.length} swap proofs ===`);
 
@@ -152,32 +196,34 @@ export class SwapProofTree {
                 previousBlockNumber,
             );
 
-            // Extract leaf vkey artifacts from the first proof
-            if (!this.leafVkAsFields) {
-                const artifacts = await this.leafBackend!.generateRecursiveProofArtifacts(
-                    result.proof,
-                    NUM_PUBLIC_INPUTS,
-                );
-                this.leafVkAsFields = artifacts.vkAsFields;
-                this.leafVkHash = artifacts.vkHash;
-                console.log(`  Leaf vkey hash: ${this.leafVkHash}`);
-            }
-
             const proofAsFields = this.proofBytesToFields(result.proof);
+
+            const pubInputs = [
+                result.publicInputs.leaf,
+                i64ToField(result.publicInputs.pnl),
+                result.publicInputs.remainingLotStateRoot,
+                result.publicInputs.initialLotStateRoot,
+                result.publicInputs.priceFeedAddress,
+                result.publicInputs.blockNumber.toString(),
+            ];
 
             swapResults.push(result);
             swapArtifacts.push({
                 proof: result.proof,
                 proofAsFields,
-                publicInputs: [
-                    result.publicInputs.leaf,
-                    i64ToField(result.publicInputs.pnl),
-                    result.publicInputs.remainingLotStateRoot,
-                    result.publicInputs.initialLotStateRoot,
-                    result.publicInputs.priceFeedAddress,
-                    result.publicInputs.blockNumber.toString(),
-                ],
+                publicInputs: pubInputs,
             });
+
+            // Save leaf proof debug data
+            if (this.debugData) {
+                this.debugData.leafProofs.push({
+                    index: i,
+                    proof: Buffer.from(result.proof).toString('hex'),
+                    proofAsFields,
+                    publicInputs: pubInputs,
+                });
+                this.saveDebug();
+            }
 
             // Chain block number to next proof
             previousBlockNumber = events[i].blockNumber;
@@ -215,11 +261,6 @@ export class SwapProofTree {
 
         console.log('Initializing SwapProofTree...');
 
-        this.leafBackend = new UltraHonkBackend(
-            this.config.leafCircuit.bytecode,
-            this.config.bb,
-        );
-
         this.summaryNoir = new Noir(this.config.summaryCircuit);
         await this.summaryNoir.init();
 
@@ -230,6 +271,8 @@ export class SwapProofTree {
 
         this.zeroHashes = await getZeroHashes(20);
 
+        console.log(`  Leaf vkey hash: ${this.config.vkeys.leaf.vkHash}`);
+        console.log(`  Summary vkey hash: ${this.config.vkeys.summary.vkHash}`);
         console.log('SwapProofTree initialized');
     }
 
@@ -282,33 +325,16 @@ export class SwapProofTree {
         level: number,
     ): Promise<ProofArtifact> {
         const isLeafLevel = level === 0;
-        let vkAsFields: string[];
-        let vkHash: string;
-
-        if (isLeafLevel) {
-            vkAsFields = this.leafVkAsFields!;
-            vkHash = this.leafVkHash!;
-        } else {
-            if (!this.summaryVkAsFields) {
-                throw new Error('Summary vkey not yet computed');
-            }
-            vkAsFields = this.summaryVkAsFields;
-            vkHash = this.summaryVkHash!;
-        }
+        const vk = isLeafLevel ? this.config.vkeys.leaf : this.config.vkeys.summary;
 
         const hasRight = right !== null;
         const emptyProof = new Array(left.proofAsFields.length).fill('0x0');
         const emptyPublicInputs = ['0x0', '0x0', '0x0', '0x0', '0x0', '0x0'];
         const zeroLeafForLevel = this.zeroHashes![level];
 
-        // Pre-compute summary vkey hash if needed
-        if (!this.summaryVkHash) {
-            await this.precomputeSummaryVkHash(left, vkAsFields, vkHash);
-        }
-
         const summaryInputs = {
-            verification_key: vkAsFields,
-            vkey_hash: vkHash,
+            verification_key: vk.vkAsFields,
+            vkey_hash: vk.vkHash,
             proof_left: left.proofAsFields,
             proof_right: {
                 _is_some: hasRight,
@@ -323,8 +349,8 @@ export class SwapProofTree {
                 _is_some: !hasRight,
                 _value: hasRight ? '0x0' : zeroLeafForLevel.toString(),
             },
-            leaf_vkey_hash: this.leafVkHash!,
-            summary_vkey_hash: this.summaryVkHash!,
+            leaf_vkey_hash: this.config.vkeys.leaf.vkHash,
+            summary_vkey_hash: this.config.vkeys.summary.vkHash,
         };
 
         const { witness, returnValue } = await this.summaryNoir!.execute(summaryInputs);
@@ -341,16 +367,6 @@ export class SwapProofTree {
             throw new Error('Invalid summary proof');
         }
 
-        // Get summary vkey artifacts (only once, after first summary proof)
-        if (!this.summaryVkAsFields) {
-            const artifacts = await this.summaryBackend!.generateRecursiveProofArtifacts(
-                proof.proof,
-                NUM_PUBLIC_INPUTS,
-            );
-            this.summaryVkAsFields = artifacts.vkAsFields;
-            this.summaryVkHash = artifacts.vkHash;
-        }
-
         const proofAsFields = this.proofBytesToFields(proof.proof);
         const pnl = parseSignedHex(pnlStr);
 
@@ -358,10 +374,26 @@ export class SwapProofTree {
         console.log(`  PnL so far: ${pnl}`);
         console.log(`  Proof: valid`);
 
+        const combinedPublicInputs = [root, i64ToField(pnl), remainingLotStateRoot, initialLotStateRoot, priceFeedAddr, blockNum];
+
+        // Save debug data for this combine call
+        if (this.debugData) {
+            this.debugData.combineCalls.push({
+                level,
+                isLeafLevel,
+                hasRight,
+                summaryInputs,
+                witness: Buffer.from(witness).toString('hex'),
+                proof: Buffer.from(proof.proof).toString('hex'),
+                publicInputs: combinedPublicInputs,
+            });
+            await this.saveDebug();
+        }
+
         return {
             proof: proof.proof,
             proofAsFields,
-            publicInputs: [root, i64ToField(pnl), remainingLotStateRoot, initialLotStateRoot, priceFeedAddr, blockNum],
+            publicInputs: combinedPublicInputs,
         };
     }
 
@@ -378,52 +410,4 @@ export class SwapProofTree {
         return fields;
     }
 
-    /**
-     * Pre-compute summary vkey hash by generating a throwaway proof.
-     */
-    private async precomputeSummaryVkHash(
-        sampleProof: ProofArtifact,
-        vkAsFields: string[],
-        vkHash: string,
-    ): Promise<void> {
-        console.log('  Pre-computing summary vkey hash...');
-
-        const emptyProof = new Array(sampleProof.proofAsFields.length).fill('0x0');
-        const emptyPublicInputs = ['0x0', '0x0', '0x0', '0x0', '0x0', '0x0'];
-
-        const throwawayInputs = {
-            verification_key: vkAsFields,
-            vkey_hash: vkHash,
-            proof_left: sampleProof.proofAsFields,
-            proof_right: {
-                _is_some: false,
-                _value: emptyProof,
-            },
-            public_inputs_left: sampleProof.publicInputs,
-            public_inputs_right: {
-                _is_some: false,
-                _value: emptyPublicInputs,
-            },
-            zero_leaf_hint: {
-                _is_some: true,
-                _value: this.zeroHashes![0].toString(),
-            },
-            leaf_vkey_hash: vkHash,
-            summary_vkey_hash: '0x0', // Placeholder - not checked at level 0
-        };
-
-        const { witness } = await this.summaryNoir!.execute(throwawayInputs);
-        const proof = await this.summaryBackend!.generateProof(witness, {
-            verifierTarget: 'noir-recursive',
-        });
-
-        const artifacts = await this.summaryBackend!.generateRecursiveProofArtifacts(
-            proof.proof,
-            NUM_PUBLIC_INPUTS,
-        );
-        this.summaryVkAsFields = artifacts.vkAsFields;
-        this.summaryVkHash = artifacts.vkHash;
-
-        console.log(`  Summary vkey hash: ${this.summaryVkHash}`);
-    }
 }

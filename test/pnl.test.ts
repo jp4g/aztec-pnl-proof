@@ -22,6 +22,7 @@ import { rebalancePools, type PoolState } from '../src/rebalance';
 import individualSwapCircuit from '../circuits/individual_swap/target/individual_swap.json' with { type: 'json' };
 import swapSummaryTreeCircuit from '../circuits/swap_summary_tree/target/swap_summary_tree.json' with { type: 'json' };
 import capitalGainsTaxCircuit from '../circuits/capital_gains_tax/target/capital_gains_tax.json' with { type: 'json' };
+import vkeys from '../circuits/vkeys/vkeys.json' with { type: 'json' };
 
 const { AZTEC_NODE_URL = "http://localhost:8080" } = process.env;
 
@@ -334,9 +335,10 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", () => {
 
         const proofTree = new SwapProofTree({
             bb,
-            leafCircuit: individualSwapCircuit as CompiledCircuit,
             summaryCircuit: swapSummaryTreeCircuit as CompiledCircuit,
             swapProver: prover,
+            vkeys,
+            debugOutputPath: 'test/debug-proof-tree-data.json',
         });
 
         const priceFeedAssetsSlot = PriceFeedContract.storage.assets.slot;
@@ -435,7 +437,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", () => {
         // ========================================
         console.log("\n=== Generate capital gains tax proof ===");
 
-        const taxProver = TaxProver.create(bb, swapSummaryTreeCircuit as CompiledCircuit, capitalGainsTaxCircuit as CompiledCircuit);
+        const taxProver = new TaxProver(bb, capitalGainsTaxCircuit as CompiledCircuit, vkeys.summary);
         const taxResult = await taxProver.prove(result);
 
         console.log(`\n=== TAX PROOF RESULT ===`);
