@@ -80,15 +80,17 @@ function makeInitialState(): ProveFlowState {
  * @param totalLeaves - number of real swap leaves
  * @param provenCount - how many leaf proofs are done
  * @param currentProving - index of leaf currently being proven (null if not proving a leaf)
- * @param aggregationLevel - how far aggregation has progressed:
- *   0 = no aggregation yet (only leaves), 1 = L2 intermediates done,
- *   2 = L1 intermediates done, 3 = root done
+ * @param aggregation - aggregation progress:
+ *   number: how many viz levels are fully done (0 = none, 3 = all including root)
+ *   object: granular per-node progress { level, nodeIndex } where level is the
+ *     viz level being built (0=L2, 1=L1, 2=root) and nodeIndex is the node
+ *     currently being proven at that level
  */
 function buildTreeNodes(
   totalLeaves: number,
   provenCount: number,
   currentProving: number | null,
-  aggregationLevel = 0,
+  aggregation: number | { level: number; nodeIndex: number } = 0,
 ): {
   treeLeaves: TreeNode[];
   treeIntermediatesL2: TreeNode[];
@@ -97,6 +99,21 @@ function buildTreeNodes(
 } {
   // Pad to next power of 2, min 8
   const padded = Math.max(8, Math.pow(2, Math.ceil(Math.log2(Math.max(totalLeaves, 1)))));
+
+  // Determine intermediate node status based on aggregation progress
+  function intermediateStatus(vizLevel: number, nodeIndex: number, isUnused: boolean): TreeNodeStatus {
+    if (isUnused) return "unused";
+    if (typeof aggregation === "number") {
+      return vizLevel < aggregation ? "verified" : "pending";
+    }
+    const { level: aggLevel, nodeIndex: aggNode } = aggregation;
+    if (vizLevel < aggLevel) return "verified";
+    if (vizLevel > aggLevel) return "pending";
+    // vizLevel === aggLevel: this is the active level
+    if (nodeIndex < aggNode) return "verified";
+    if (nodeIndex === aggNode) return "proving";
+    return "pending";
+  }
 
   const leaves: TreeNode[] = [];
   for (let i = 0; i < padded; i++) {
@@ -117,34 +134,26 @@ function buildTreeNodes(
     });
   }
 
-  // Level 2 intermediates (padded/2 nodes)
+  // Level 2 intermediates (padded/2 nodes) — vizLevel 0
   const l2Count = padded / 2;
   const intermediatesL2: TreeNode[] = [];
   for (let i = 0; i < l2Count; i++) {
     const bothUnused = leaves[i * 2].status === "unused" && leaves[i * 2 + 1].status === "unused";
-    let status: TreeNodeStatus;
-    if (bothUnused) status = "unused";
-    else if (aggregationLevel >= 1) status = "verified";
-    else status = "pending";
-    intermediatesL2.push({ id: `int-2-${i}`, status });
+    intermediatesL2.push({ id: `int-2-${i}`, status: intermediateStatus(0, i, bothUnused) });
   }
 
-  // Level 1 intermediates (padded/4 nodes)
+  // Level 1 intermediates (padded/4 nodes) — vizLevel 1
   const l1Count = padded / 4;
   const intermediatesL1: TreeNode[] = [];
   for (let i = 0; i < l1Count; i++) {
     const bothUnused = intermediatesL2[i * 2]?.status === "unused" && (intermediatesL2[i * 2 + 1]?.status === "unused" || !intermediatesL2[i * 2 + 1]);
-    let status: TreeNodeStatus;
-    if (bothUnused) status = "unused";
-    else if (aggregationLevel >= 2) status = "verified";
-    else status = "pending";
-    intermediatesL1.push({ id: `int-1-${i}`, status });
+    intermediatesL1.push({ id: `int-1-${i}`, status: intermediateStatus(1, i, bothUnused) });
   }
 
-  // Root
+  // Root — vizLevel 2
   const root: TreeNode = {
     id: "root",
-    status: aggregationLevel >= 3 ? "verified" : "pending",
+    status: intermediateStatus(2, 0, false),
     label: "Root",
   };
 
@@ -381,7 +390,7 @@ export function useProveFlow() {
         lotStateTree,
         priceFeedAddress,
         priceFeedAssetsSlot,
-        (step, current, total) => {
+        (step, current, total, detail) => {
           if (abortRef.current) return;
           if (step === "swap") {
             const swapProgress = 25 + (current / total) * 45;
@@ -394,13 +403,16 @@ export function useProveFlow() {
               progress: Math.round(swapProgress),
               ...treeViz,
             }));
-          } else if (step === "aggregate") {
-            const aggProgress = 70 + (current / Math.max(total, 1)) * 15;
-            const treeViz = buildTreeNodes(totalSwaps, totalSwaps, null, current);
+          } else if (step === "aggregate" && detail) {
+            const aggProgress = 70 + ((current + 1) / Math.max(total, 1)) * 15;
+            const treeViz = buildTreeNodes(totalSwaps, totalSwaps, null, {
+              level: detail.level,
+              nodeIndex: detail.nodeIndex,
+            });
             setState((prev) => ({
               ...prev,
               status: "aggregating",
-              statusText: `Aggregating proofs (level ${current}/${total})...`,
+              statusText: `Aggregating proofs (level ${detail.level + 1}, node ${detail.nodeIndex + 1}/${detail.nodesInLevel})...`,
               progress: Math.round(aggProgress),
               ...treeViz,
             }));

@@ -171,7 +171,7 @@ export class SwapProofTree {
         lotStateTree: LotStateTree,
         priceFeedAddress: Fr,
         priceFeedAssetsSlot: Fr,
-        onProgress?: (step: string, current: number, total: number) => void,
+        onProgress?: (step: string, current: number, total: number, detail?: { level: number; nodeIndex: number; nodesInLevel: number }) => void,
     ): Promise<SwapProofTreeResult> {
         await this.initialize();
         this.initDebug();
@@ -232,7 +232,6 @@ export class SwapProofTree {
         console.log(`\nIndividual proofs generated: ${swapArtifacts.length}`);
 
         // Step 2: Build recursive tree from individual proofs
-        onProgress?.('aggregate', 0, 1);
         const finalProof = await this.buildTree(swapArtifacts, onProgress);
         console.log(`\nFinal proof generated!`);
 
@@ -279,28 +278,42 @@ export class SwapProofTree {
     /**
      * Build the tree by recursively combining proofs
      */
-    private async buildTree(proofs: ProofArtifact[], onProgress?: (step: string, current: number, total: number) => void): Promise<ProofArtifact> {
+    private async buildTree(proofs: ProofArtifact[], onProgress?: (step: string, current: number, total: number, detail?: { level: number; nodeIndex: number; nodesInLevel: number }) => void): Promise<ProofArtifact> {
         let currentLevel = proofs;
         let level = 0;
+        let combinesDone = 0;
+
+        // Compute total combines across all levels
+        let totalCombines = 0;
+        let temp = proofs.length;
+        while (temp > 1) {
+            totalCombines += Math.ceil(temp / 2);
+            temp = Math.ceil(temp / 2);
+        }
+        if (proofs.length === 1) totalCombines = 1;
 
         while (currentLevel.length > 1) {
+            const pairsInLevel = Math.ceil(currentLevel.length / 2);
             console.log(
-                `\n=== Building level ${level + 1} (${currentLevel.length} proofs -> ${Math.ceil(currentLevel.length / 2)}) ===`,
+                `\n=== Building level ${level + 1} (${currentLevel.length} proofs -> ${pairsInLevel}) ===`,
             );
-            onProgress?.('aggregate', level + 1, level + Math.ceil(Math.log2(proofs.length)));
 
             const nextLevel: ProofArtifact[] = [];
 
             for (let i = 0; i < currentLevel.length; i += 2) {
+                const pairIndex = Math.floor(i / 2);
                 const left = currentLevel[i];
                 const right = i + 1 < currentLevel.length ? currentLevel[i + 1] : null;
 
                 console.log(
-                    `\n--- Combining pair ${Math.floor(i / 2) + 1} (${right ? 'full' : 'odd, using zero hash'}) ---`,
+                    `\n--- Combining pair ${pairIndex + 1}/${pairsInLevel} (${right ? 'full' : 'odd, using zero hash'}) ---`,
                 );
+
+                onProgress?.('aggregate', combinesDone, totalCombines, { level, nodeIndex: pairIndex, nodesInLevel: pairsInLevel });
 
                 const combined = await this.combineProofs(left, right, level);
                 nextLevel.push(combined);
+                combinesDone++;
             }
 
             currentLevel = nextLevel;
@@ -310,6 +323,7 @@ export class SwapProofTree {
         // If only 1 proof, still wrap it in the summary tree for uniform structure
         if (proofs.length === 1) {
             console.log('\n=== Wrapping single proof in summary tree ===');
+            onProgress?.('aggregate', 0, 1, { level: 0, nodeIndex: 0, nodesInLevel: 1 });
             return await this.combineProofs(proofs[0], null, 0);
         }
 
