@@ -8,7 +8,7 @@ import { useProveFlow } from "@/hooks/useProveFlow";
 import RequireWallet from "@/components/layout/RequireWallet";
 
 export default function ProvePage() {
-  const { state, startProving, reset, resolveToken, formatAmount, formatPnl } =
+  const { state, startProving, downloadProof, resolveToken, formatAmount, formatPnl } =
     useProveFlow();
 
   return (
@@ -20,17 +20,12 @@ export default function ProvePage() {
           <ProofGenerationCard
             state={state}
             onGenerate={startProving}
-            onReset={reset}
+            onDownload={downloadProof}
           />
         </div>
 
         {/* Merkle Tree Visualizer */}
-        <MerkleTree
-          leaves={state.treeLeaves}
-          intermediatesL1={state.treeIntermediatesL1}
-          intermediatesL2={state.treeIntermediatesL2}
-          root={state.treeRoot}
-        />
+        <MerkleTree levels={state.treeLevels} />
 
         {/* Transaction History */}
         <TransactionTable

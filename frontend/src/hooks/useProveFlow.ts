@@ -7,6 +7,7 @@ import { useAztecWallet } from "@/hooks/useAztecWallet";
 import type {
   ProveFlowState,
   DecodedSwap,
+  DownloadableProof,
   TreeNode,
   TreeNodeStatus,
 } from "@/types";
@@ -45,19 +46,17 @@ function formatAmount(amount: bigint, decimals = 6): string {
   return fracStr ? `${whole}.${fracStr}` : whole.toString();
 }
 
-// PnL raw units = token_amount (TOKEN_DECIMALS=9) * oracle_price_diff (PRICE_PRECISION=10)
-// Divide by 10^(9+1) = 10^10 to get USD
-const PNL_DIVISOR = 10n ** 10n;
+// PnL raw units = token_amount (TOKEN_DECIMALS=9) * oracle_price_diff (PRICE_PRECISION=10,000)
+// Divide by 10^(9+4) = 10^13 to get USD
+const PNL_DIVISOR = 10n ** 13n;
 
 function formatPnl(pnl: bigint): string {
   const sign = pnl >= 0n ? "+" : "-";
   const abs = pnl < 0n ? -pnl : pnl;
   const whole = abs / PNL_DIVISOR;
-  const frac = (abs % PNL_DIVISOR).toString().padStart(10, "0").slice(0, 2);
+  const frac = (abs % PNL_DIVISOR).toString().padStart(13, "0").slice(0, 2);
   return `${sign}$${whole.toLocaleString()}.${frac}`;
 }
-
-const INITIAL_TREE_ROOT: TreeNode = { id: "root", status: "pending", label: "Root" };
 
 function makeInitialState(): ProveFlowState {
   return {
@@ -71,68 +70,60 @@ function makeInitialState(): ProveFlowState {
     tax: null,
     merkleRoot: null,
     blockNumber: null,
-    proof: null,
+    pnlProof: null,
+    taxProof: null,
     swaps: [],
-    treeLeaves: [],
-    treeIntermediatesL1: [],
-    treeIntermediatesL2: [],
-    treeRoot: INITIAL_TREE_ROOT,
+    treeLevels: [],
     error: null,
   };
 }
 
 /**
- * Build tree visualization nodes.
+ * Build tree visualization nodes for an arbitrary number of leaves.
+ * Returns `treeLevels` bottom-up: [leaves, ...intermediates, root].
+ *
  * @param totalLeaves - number of real swap leaves
  * @param provenCount - how many leaf proofs are done
  * @param currentProving - index of leaf currently being proven (null if not proving a leaf)
  * @param aggregation - aggregation progress:
- *   number: how many viz levels are fully done (0 = none, 3 = all including root)
- *   object: granular per-node progress { level, nodeIndex } where level is the
- *     viz level being built (0=L2, 1=L1, 2=root) and nodeIndex is the node
- *     currently being proven at that level
+ *   "complete": all intermediate levels verified
+ *   number: how many viz levels are fully done (0 = none)
+ *   object: granular per-node progress { level, nodeIndex }
  */
 function buildTreeNodes(
   totalLeaves: number,
   provenCount: number,
   currentProving: number | null,
-  aggregation: number | { level: number; nodeIndex: number } = 0,
-): {
-  treeLeaves: TreeNode[];
-  treeIntermediatesL2: TreeNode[];
-  treeIntermediatesL1: TreeNode[];
-  treeRoot: TreeNode;
-} {
-  // Pad to next power of 2, min 8
-  const padded = Math.max(8, Math.pow(2, Math.ceil(Math.log2(Math.max(totalLeaves, 1)))));
+  aggregation: number | { level: number; nodeIndex: number } | "complete" = 0,
+): { treeLevels: TreeNode[][] } {
+  if (totalLeaves === 0) return { treeLevels: [] };
 
-  // Determine intermediate node status based on aggregation progress
+  // Pad to next power of 2, min 2
+  const padded = Math.max(2, Math.pow(2, Math.ceil(Math.log2(Math.max(totalLeaves, 1)))));
+  const numIntermediateLevels = Math.log2(padded); // e.g. 8 leaves → 3 levels above
+
   function intermediateStatus(vizLevel: number, nodeIndex: number, isUnused: boolean): TreeNodeStatus {
     if (isUnused) return "unused";
+    if (aggregation === "complete") return "verified";
     if (typeof aggregation === "number") {
       return vizLevel < aggregation ? "verified" : "pending";
     }
     const { level: aggLevel, nodeIndex: aggNode } = aggregation;
     if (vizLevel < aggLevel) return "verified";
     if (vizLevel > aggLevel) return "pending";
-    // vizLevel === aggLevel: this is the active level
     if (nodeIndex < aggNode) return "verified";
     if (nodeIndex === aggNode) return "proving";
     return "pending";
   }
 
+  // Build leaves
   const leaves: TreeNode[] = [];
   for (let i = 0; i < padded; i++) {
     let status: TreeNodeStatus;
-    if (i >= totalLeaves) {
-      status = "unused";
-    } else if (i < provenCount) {
-      status = "verified";
-    } else if (currentProving !== null && i === currentProving) {
-      status = "proving";
-    } else {
-      status = "pending";
-    }
+    if (i >= totalLeaves) status = "unused";
+    else if (i < provenCount) status = "verified";
+    else if (currentProving !== null && i === currentProving) status = "proving";
+    else status = "pending";
     leaves.push({
       id: `leaf-${i}`,
       status,
@@ -140,35 +131,28 @@ function buildTreeNodes(
     });
   }
 
-  // Level 2 intermediates (padded/2 nodes) — vizLevel 0
-  const l2Count = padded / 2;
-  const intermediatesL2: TreeNode[] = [];
-  for (let i = 0; i < l2Count; i++) {
-    const bothUnused = leaves[i * 2].status === "unused" && leaves[i * 2 + 1].status === "unused";
-    intermediatesL2.push({ id: `int-2-${i}`, status: intermediateStatus(0, i, bothUnused) });
+  const levels: TreeNode[][] = [leaves];
+
+  // Build intermediate levels (including root)
+  for (let lvl = 0; lvl < numIntermediateLevels; lvl++) {
+    const prev = levels[lvl];
+    const count = prev.length / 2;
+    const isRoot = lvl === numIntermediateLevels - 1;
+    const nodes: TreeNode[] = [];
+    for (let i = 0; i < count; i++) {
+      const bothUnused =
+        prev[i * 2].status === "unused" &&
+        prev[i * 2 + 1].status === "unused";
+      nodes.push({
+        id: isRoot ? "root" : `int-${lvl}-${i}`,
+        status: intermediateStatus(lvl, i, isRoot ? false : bothUnused),
+        label: isRoot ? "Root" : undefined,
+      });
+    }
+    levels.push(nodes);
   }
 
-  // Level 1 intermediates (padded/4 nodes) — vizLevel 1
-  const l1Count = padded / 4;
-  const intermediatesL1: TreeNode[] = [];
-  for (let i = 0; i < l1Count; i++) {
-    const bothUnused = intermediatesL2[i * 2]?.status === "unused" && (intermediatesL2[i * 2 + 1]?.status === "unused" || !intermediatesL2[i * 2 + 1]);
-    intermediatesL1.push({ id: `int-1-${i}`, status: intermediateStatus(1, i, bothUnused) });
-  }
-
-  // Root — vizLevel 2
-  const root: TreeNode = {
-    id: "root",
-    status: intermediateStatus(2, 0, false),
-    label: "Root",
-  };
-
-  return {
-    treeLeaves: leaves,
-    treeIntermediatesL2: intermediatesL2.slice(0, 4),
-    treeIntermediatesL1: intermediatesL1.slice(0, 2),
-    treeRoot: root,
-  };
+  return { treeLevels: levels };
 }
 
 export function useProveFlow() {
@@ -428,15 +412,32 @@ export function useProveFlow() {
 
       if (abortRef.current) return;
 
+      // Build downloadable PnL proof
+      const pnlProof: DownloadableProof = {
+        type: "pnl",
+        proof: "0x" + Buffer.from(result.proof).toString("hex"),
+        publicInputs: {
+          root: result.publicInputs.root,
+          pnl: result.publicInputs.pnl.toString(),
+          remainingLotStateRoot: result.publicInputs.remainingLotStateRoot,
+          initialLotStateRoot: result.publicInputs.initialLotStateRoot,
+          priceFeedAddress: result.publicInputs.priceFeedAddress,
+          blockNumber: result.publicInputs.blockNumber.toString(),
+        },
+      };
+
       // --- Tax proof ---
-      const treeVizTax = buildTreeNodes(totalSwaps, totalSwaps, null, 3);
+      const treeVizTax = buildTreeNodes(totalSwaps, totalSwaps, null, "complete");
+      // Set root node to "proving" during tax computation
+      const taxLevels = [...treeVizTax.treeLevels];
+      const rootLevel = taxLevels[taxLevels.length - 1];
+      taxLevels[taxLevels.length - 1] = [{ ...rootLevel[0], status: "proving" }];
       setState((prev) => ({
         ...prev,
         status: "taxing",
         statusText: "Computing capital gains tax...",
         progress: 88,
-        ...treeVizTax,
-        treeRoot: { ...treeVizTax.treeRoot, status: "proving" },
+        treeLevels: taxLevels,
       }));
 
       const taxProver = new TaxProver(
@@ -448,7 +449,22 @@ export function useProveFlow() {
 
       if (abortRef.current) return;
 
-      const finalTreeViz = buildTreeNodes(totalSwaps, totalSwaps, null, 3);
+      // Build downloadable tax proof
+      const taxProof: DownloadableProof = {
+        type: "tax",
+        proof: "0x" + Buffer.from(taxResult.proof).toString("hex"),
+        publicInputs: {
+          root: taxResult.publicInputs.root,
+          pnl: taxResult.publicInputs.pnl.toString(),
+          tax: taxResult.publicInputs.tax.toString(),
+          remainingLotStateRoot: taxResult.publicInputs.remainingLotStateRoot,
+          initialLotStateRoot: taxResult.publicInputs.initialLotStateRoot,
+          priceFeedAddress: taxResult.publicInputs.priceFeedAddress,
+          blockNumber: taxResult.publicInputs.blockNumber.toString(),
+        },
+      };
+
+      const finalTreeViz = buildTreeNodes(totalSwaps, totalSwaps, null, "complete");
       setState((prev) => ({
         ...prev,
         status: "complete",
@@ -459,7 +475,8 @@ export function useProveFlow() {
         tax: taxResult.publicInputs.tax,
         merkleRoot: taxResult.publicInputs.root,
         blockNumber: taxResult.publicInputs.blockNumber,
-        proof: taxResult.proof,
+        pnlProof,
+        taxProof,
         ...finalTreeViz,
         error: null,
       }));
@@ -481,10 +498,24 @@ export function useProveFlow() {
     setState(makeInitialState());
   }, []);
 
+  const downloadProof = useCallback((type: "pnl" | "tax") => {
+    const proof = type === "pnl" ? state.pnlProof : state.taxProof;
+    if (!proof) return;
+    const json = JSON.stringify(proof, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${type}-proof.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [state.pnlProof, state.taxProof]);
+
   return {
     state,
     startProving,
     reset,
+    downloadProof,
     resolveToken,
     formatAmount,
     formatPnl,

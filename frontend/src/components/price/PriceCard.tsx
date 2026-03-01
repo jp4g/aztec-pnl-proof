@@ -10,7 +10,7 @@ import { useAztecWallet } from "@/hooks/useAztecWallet";
 import { TOKEN_ADDRESSES } from "@/hooks/useTokenBalances";
 import { useToast } from "@/hooks/useToast";
 
-const PRICE_PRECISION = 10;
+const PRICE_PRECISION = 10_000;
 const STORAGE_KEY = "privdex-price-assets";
 
 const AVAILABLE_TOKENS = Object.entries(TOKENS)

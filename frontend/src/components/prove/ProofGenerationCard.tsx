@@ -7,25 +7,26 @@ import ProgressBar from "@/components/ui/ProgressBar";
 interface ProofGenerationCardProps {
   state: ProveFlowState;
   onGenerate: () => void;
-  onReset: () => void;
+  onDownload: (type: "pnl" | "tax") => void;
 }
 
 export default function ProofGenerationCard({
   state,
   onGenerate,
-  onReset,
+  onDownload,
 }: ProofGenerationCardProps) {
   const isRunning =
     state.status !== "idle" &&
     state.status !== "complete" &&
     state.status !== "error";
 
-  const statusColor =
-    state.status === "complete"
-      ? "text-green-600"
-      : state.status === "error"
-        ? "text-red-600"
-        : "text-orange-600";
+  const isComplete = state.status === "complete";
+
+  const statusColor = isComplete
+    ? "text-green-600"
+    : state.status === "error"
+      ? "text-red-600"
+      : "text-orange-600";
 
   return (
     <div className="flex flex-col justify-center gap-4 bg-orange-50/50 rounded-2xl border border-orange-100 p-8">
@@ -41,7 +42,7 @@ export default function ProofGenerationCard({
         </p>
       </div>
 
-      <ProgressBar progress={state.progress} />
+      <ProgressBar progress={state.progress} complete={isComplete} />
 
       <div className="flex items-center justify-between text-xs text-neutral-500 font-mono mt-1">
         <span>
@@ -62,11 +63,11 @@ export default function ProofGenerationCard({
         </div>
       )}
 
-      <div className="flex gap-2 mt-4">
+      <div className="flex flex-col gap-2 mt-4">
         <button
           onClick={onGenerate}
           disabled={isRunning}
-          className="flex-1 bg-orange-600 hover:bg-orange-700 disabled:bg-neutral-300 disabled:cursor-not-allowed text-white text-sm font-medium py-3 px-4 rounded-xl shadow-sm shadow-orange-200 transition-all flex items-center justify-center gap-2 group"
+          className="w-full bg-orange-600 hover:bg-orange-700 disabled:bg-neutral-300 disabled:cursor-not-allowed text-white text-sm font-medium py-3 px-4 rounded-xl shadow-sm shadow-orange-200 transition-all flex items-center justify-center gap-2 group"
         >
           {isRunning ? (
             <>
@@ -84,17 +85,28 @@ export default function ProofGenerationCard({
                 width={18}
                 className="group-hover:rotate-12 transition-transform"
               />
-              {state.status === "complete" ? "Re-generate" : "Generate ZK Proof"}
+              {isComplete ? "Re-generate" : "Generate ZK Proof"}
             </>
           )}
         </button>
-        {(state.status === "complete" || state.status === "error") && (
-          <button
-            onClick={onReset}
-            className="px-4 py-3 text-sm font-medium text-neutral-600 bg-white border border-neutral-200 rounded-xl hover:bg-neutral-50 transition-colors"
-          >
-            Reset
-          </button>
+
+        {isComplete && (
+          <div className="flex gap-2">
+            <button
+              onClick={() => onDownload("pnl")}
+              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-orange-700 bg-white border border-orange-200 rounded-xl hover:bg-orange-50 transition-colors"
+            >
+              <Icon icon="solar:download-minimalistic-linear" width={14} />
+              PnL Proof
+            </button>
+            <button
+              onClick={() => onDownload("tax")}
+              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-orange-700 bg-white border border-orange-200 rounded-xl hover:bg-orange-50 transition-colors"
+            >
+              <Icon icon="solar:download-minimalistic-linear" width={14} />
+              Tax Proof
+            </button>
+          </div>
         )}
       </div>
     </div>

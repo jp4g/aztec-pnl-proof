@@ -54,6 +54,13 @@ export interface DecodedSwap {
   blockNumber: bigint;
 }
 
+/** A proof artifact ready for download/verification */
+export interface DownloadableProof {
+  type: "pnl" | "tax";
+  proof: string; // hex-encoded proof bytes
+  publicInputs: Record<string, string>;
+}
+
 /** Full state of the prove flow */
 export interface ProveFlowState {
   status: ProveFlowStatus;
@@ -69,14 +76,12 @@ export interface ProveFlowState {
   tax: bigint | null;
   merkleRoot: string | null;
   blockNumber: bigint | null;
-  proof: Uint8Array | null;
+  pnlProof: DownloadableProof | null;
+  taxProof: DownloadableProof | null;
   // Decoded swap data for transaction table
   swaps: DecodedSwap[];
-  // Tree visualization
-  treeLeaves: TreeNode[];
-  treeIntermediatesL1: TreeNode[];
-  treeIntermediatesL2: TreeNode[];
-  treeRoot: TreeNode;
+  // Tree visualization — bottom-up: [leaves, ...intermediates, root]
+  treeLevels: TreeNode[][];
   // Error
   error: string | null;
 }

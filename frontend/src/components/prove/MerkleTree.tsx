@@ -5,11 +5,14 @@ import { TreeNode, TreeNodeStatus } from "@/types";
 
 // --- Tree Node Components ---
 
-function getNodeStyles(status: TreeNodeStatus, size: "lg" | "md" | "sm") {
-  const sizeClasses = {
+type NodeSize = "lg" | "md" | "sm" | "xs";
+
+function getNodeStyles(status: TreeNodeStatus, size: NodeSize) {
+  const sizeClasses: Record<NodeSize, string> = {
     lg: "w-12 h-12",
     md: "w-10 h-10",
     sm: "w-8 h-8",
+    xs: "w-6 h-6",
   };
 
   const base = sizeClasses[size];
@@ -26,14 +29,18 @@ function getNodeStyles(status: TreeNodeStatus, size: "lg" | "md" | "sm") {
   }
 }
 
+const ICON_SIZES: Record<NodeSize, number> = { lg: 20, md: 16, sm: 14, xs: 10 };
+
 function NodeIcon({
   status,
   nodeType,
+  size = "sm",
 }: {
   status: TreeNodeStatus;
   nodeType: "root" | "intermediate" | "leaf";
+  size?: NodeSize;
 }) {
-  const iconSize = nodeType === "root" ? 20 : nodeType === "intermediate" ? 16 : 14;
+  const iconSize = ICON_SIZES[size];
 
   if (nodeType === "root") {
     return <Icon icon="solar:lock-keyhole-minimalistic-linear" width={iconSize} />;
@@ -109,19 +116,12 @@ function TreeLegend() {
 // --- Main Component ---
 
 interface MerkleTreeProps {
-  leaves: TreeNode[];
-  intermediatesL2: TreeNode[];
-  intermediatesL1: TreeNode[];
-  root: TreeNode;
+  /** Bottom-up: [leaves, ...intermediates, root] */
+  levels: TreeNode[][];
 }
 
-export default function MerkleTree({
-  leaves,
-  intermediatesL2,
-  intermediatesL1,
-  root,
-}: MerkleTreeProps) {
-  if (leaves.length === 0) {
+export default function MerkleTree({ levels }: MerkleTreeProps) {
+  if (levels.length === 0) {
     return (
       <section className="mb-12">
         <div className="flex items-center justify-between mb-6">
@@ -144,6 +144,20 @@ export default function MerkleTree({
     );
   }
 
+  const depth = levels.length;
+  const leafCount = levels[0].length;
+
+  // Scale node sizes based on leaf count
+  const leafSize: NodeSize = leafCount > 16 ? "xs" : "sm";
+  const intermediateSize: NodeSize = leafCount > 16 ? "sm" : "md";
+  const showLabels = leafCount <= 16;
+
+  // Container height scales with depth
+  const containerHeight = Math.max(200, (depth - 1) * 80 + 60);
+
+  // Render top-down (reverse the bottom-up levels array)
+  const topDown = [...levels].reverse();
+
   return (
     <section className="mb-12">
       <div className="flex items-center justify-between mb-6">
@@ -153,79 +167,87 @@ export default function MerkleTree({
         <TreeLegend />
       </div>
 
-      <div className="bg-white rounded-2xl border border-neutral-200 p-8 md:p-12 relative shadow-sm overflow-hidden min-h-[400px] flex flex-col justify-between items-center select-none">
-        {/* Tree Nodes */}
+      <div className="bg-white rounded-2xl border border-neutral-200 p-8 md:p-12 relative shadow-sm overflow-hidden min-h-[200px] flex flex-col justify-between items-center select-none">
         <div
           className="relative z-10 w-full h-full flex flex-col justify-between"
-          style={{ height: 320 }}
+          style={{ height: containerHeight }}
         >
-          {/* Level 0: Root */}
-          <div className="flex justify-center w-full">
-            <div className={`${getNodeStyles(root.status, "lg")} relative group`}>
-              <NodeIcon status={root.status} nodeType="root" />
-              <span className="absolute -top-8 text-[10px] font-mono text-neutral-400 opacity-0 group-hover:opacity-100 transition-opacity bg-neutral-900 text-white px-2 py-1 rounded">
-                Root
-              </span>
-            </div>
-          </div>
+          {topDown.map((levelNodes, renderIndex) => {
+            const depthFromRoot = renderIndex;
+            const isRoot = depthFromRoot === 0;
+            const isLeaves = renderIndex === depth - 1;
 
-          {/* Level 1: Intermediates */}
-          <div className="flex justify-between w-full px-[20%]">
-            {intermediatesL1.map((node) => (
-              <div key={node.id} className={getNodeStyles(node.status, "md")}>
-                <Icon
-                  icon="solar:hashtag-linear"
-                  width={16}
-                  className={
-                    node.status === "unused"
-                      ? "text-neutral-300"
-                      : "text-neutral-900"
-                  }
-                />
-              </div>
-            ))}
-          </div>
+            // Padding: 50 / 2^d % from each side — keeps children centered under parents
+            const paddingPct = isRoot ? 0 : 50 / Math.pow(2, depthFromRoot);
 
-          {/* Level 2: Intermediates */}
-          <div className="flex justify-between w-full px-[5%]">
-            {intermediatesL2.map((node) => {
-              const styles = getNodeStyles(node.status, "sm");
+            if (isRoot) {
+              const node = levelNodes[0];
               return (
-                <div key={node.id} className={styles}>
-                  <NodeIcon status={node.status} nodeType="intermediate" />
-                  {node.status === "pending" && (
-                    <div className="w-2 h-2 bg-neutral-900 rounded-full" />
-                  )}
+                <div key="root" className="flex justify-center w-full">
+                  <div className={`${getNodeStyles(node.status, "lg")} relative group`}>
+                    <NodeIcon status={node.status} nodeType="root" size="lg" />
+                    <span className="absolute -top-8 text-[10px] font-mono text-neutral-400 opacity-0 group-hover:opacity-100 transition-opacity bg-neutral-900 text-white px-2 py-1 rounded">
+                      Root
+                    </span>
+                  </div>
                 </div>
               );
-            })}
-          </div>
+            }
 
-          {/* Level 3: Leaves */}
-          <div className="flex justify-between w-full px-[1%]">
-            {leaves.map((leaf) => (
-              <div key={leaf.id} className="flex flex-col items-center gap-2">
+            if (isLeaves) {
+              return (
                 <div
-                  className={`${getNodeStyles(leaf.status, "sm")} ${
-                    leaf.status === "verified" ? "ring-2 ring-green-100" : ""
-                  }`}
+                  key="leaves"
+                  className="flex justify-between w-full"
+                  style={{ paddingLeft: `${paddingPct}%`, paddingRight: `${paddingPct}%` }}
                 >
-                  <NodeIcon status={leaf.status} nodeType="leaf" />
+                  {levelNodes.map((leaf) => (
+                    <div key={leaf.id} className="flex flex-col items-center gap-1">
+                      <div
+                        className={`${getNodeStyles(leaf.status, leafSize)} ${
+                          leaf.status === "verified" ? "ring-2 ring-green-100" : ""
+                        }`}
+                      >
+                        <NodeIcon status={leaf.status} nodeType="leaf" size={leafSize} />
+                      </div>
+                      {showLabels && (
+                        <span
+                          className={`text-[10px] font-mono ${
+                            leaf.status === "proving"
+                              ? "text-blue-600 font-medium"
+                              : leaf.status === "unused"
+                                ? "text-neutral-300"
+                                : "text-neutral-400"
+                          }`}
+                        >
+                          {leaf.label}
+                        </span>
+                      )}
+                    </div>
+                  ))}
                 </div>
-                <span
-                  className={`text-[10px] font-mono ${
-                    leaf.status === "proving"
-                      ? "text-blue-600 font-medium"
-                      : leaf.status === "unused"
-                        ? "text-neutral-300"
-                        : "text-neutral-400"
-                  }`}
-                >
-                  {leaf.label}
-                </span>
+              );
+            }
+
+            // Intermediate level
+            const size = intermediateSize;
+            return (
+              <div
+                key={`level-${renderIndex}`}
+                className="flex justify-between w-full"
+                style={{ paddingLeft: `${paddingPct}%`, paddingRight: `${paddingPct}%` }}
+              >
+                {levelNodes.map((node) => (
+                  <div key={node.id} className={getNodeStyles(node.status, size)}>
+                    <NodeIcon status={node.status} nodeType="intermediate" size={size} />
+                    {node.status === "pending" && (
+                      <div className="w-2 h-2 bg-neutral-900 rounded-full" />
+                    )}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            );
+          })}
         </div>
       </div>
     </section>

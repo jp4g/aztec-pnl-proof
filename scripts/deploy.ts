@@ -38,8 +38,11 @@ if (!COINGECKO_API_KEY) {
     process.exit(1);
 }
 
-// Oracle price precision: 1 USD = 10 units
-const PRICE_PRECISION = 10;
+// Oracle price precision: 1 USD = 10,000 units (4 decimals)
+// Limited by i64 overflow in PnL circuit: token_amount(9 decimals) * price_diff
+// must fit in i64 (max ~9.2e18). Cheap tokens like wAZTEC ($0.10) yield large
+// amounts (~2e14 base units), constraining precision to ~10,000.
+const PRICE_PRECISION = 10_000;
 
 // Pool seed: $100k USDC per pool
 const POOL_USDC_AMOUNT = 100_000n;

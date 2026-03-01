@@ -462,6 +462,20 @@ async function demoData() {
         }
     }
 
+    // --- Reset oracle prices to base (1.0x) values ---
+    console.log('\n--- Resetting oracle prices to base values ---');
+    const resetPrices: [typeof weth, bigint, string][] = [
+        [usdc_token, baseOraclePrices.USDC, 'USDC'],
+        [weth,       baseOraclePrices.wETH, 'wETH'],
+        [wzec,       baseOraclePrices.wZEC, 'wZEC'],
+        [waztec,     baseOraclePrices.wAZTEC, 'wAZTEC'],
+    ];
+    for (const [token, price, name] of resetPrices) {
+        await priceFeed.methods.set_price(token.address.toField(), price)
+            .send({ from: admin }).wait();
+        console.log(`  ${name} = ${price}`);
+    }
+
     console.log('\n=== Demo data complete! ===');
     console.log(`Winner (accounts[2]): ${demoUser} — 6 swaps, net profit`);
     console.log(`Loser  (accounts[1]): ${loserUser} — 12 swaps, net loss`);
