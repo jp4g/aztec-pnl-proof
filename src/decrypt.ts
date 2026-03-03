@@ -2,7 +2,7 @@ import { Aes128 } from '@aztec/foundation/crypto/aes128';
 import { poseidon2HashWithSeparator } from '@aztec/foundation/crypto/poseidon';
 import { Fr } from '@aztec/foundation/curves/bn254';
 import { Point } from '@aztec/foundation/curves/grumpkin';
-import { GeneratorIndex } from '@aztec/constants';
+import { DomainSeparator } from '@aztec/constants';
 import { deriveEcdhSharedSecret } from '@aztec/stdlib/logs';
 import { computeAddressSecret } from '@aztec/stdlib/keys';
 import type { CompleteAddress } from '@aztec/stdlib/contract';
@@ -108,11 +108,11 @@ async function deriveAesKeys(sharedSecret: Point): Promise<{
     // Derive two random field elements using Poseidon2 with different separators
     const rand1 = await poseidon2HashWithSeparator(
         [sharedSecret.x, sharedSecret.y],
-        GeneratorIndex.SYMMETRIC_KEY
+        DomainSeparator.SYMMETRIC_KEY
     );
     const rand2 = await poseidon2HashWithSeparator(
         [sharedSecret.x, sharedSecret.y],
-        GeneratorIndex.SYMMETRIC_KEY_2
+        DomainSeparator.SYMMETRIC_KEY_2
     );
 
     // Convert to big-endian bytes
@@ -129,11 +129,11 @@ async function deriveAesKeys(sharedSecret: Point): Promise<{
     // For the header (second pair), k=1, so add 256 to the separator
     const rand3 = await poseidon2HashWithSeparator(
         [sharedSecret.x, sharedSecret.y],
-        (1 << 8) + GeneratorIndex.SYMMETRIC_KEY
+        (1 << 8) + DomainSeparator.SYMMETRIC_KEY
     );
     const rand4 = await poseidon2HashWithSeparator(
         [sharedSecret.x, sharedSecret.y],
-        (1 << 8) + GeneratorIndex.SYMMETRIC_KEY_2
+        (1 << 8) + DomainSeparator.SYMMETRIC_KEY_2
     );
 
     const rand3Bytes = rand3.toBuffer();

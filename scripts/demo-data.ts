@@ -176,14 +176,14 @@ async function demoData() {
         console.log(`  Demo account already deployed at ${accountManager.address}\n`);
     } else {
         const deployMethod = await accountManager.getDeployMethod();
-        await deployMethod.send({ from: admin, skipClassPublication: true, skipInstancePublication: true }).wait();
+        await deployMethod.send({ from: admin, skipClassPublication: true, skipInstancePublication: true });
         console.log(`  Demo account deployed at ${accountManager.address}\n`);
     }
 
     // --- Mint 100,000 USDC to demo user (privately) ---
     console.log('--- Minting 100,000 USDC to demo user ---');
     const mintAmount = usdc(100_000);
-    await usdc_token.methods.mint_to_private(demoUser, mintAmount).send({ from: admin }).wait();
+    await usdc_token.methods.mint_to_private(demoUser, mintAmount).send({ from: admin });
     console.log(`  Minted ${mintAmount} USDC (100,000 with 6 decimals)\n`);
 
     // --- Read actual on-chain pool reserves ---
@@ -244,7 +244,7 @@ async function demoData() {
                 ];
                 for (const [token, price] of newPrices) {
                     await priceFeed.methods.set_price(token.address.toField(), price)
-                        .send({ from: admin }).wait();
+                        .send({ from: admin });
                 }
             }
         }
@@ -288,7 +288,7 @@ async function demoData() {
             .swap_exact_tokens_for_tokens(tokenIn.address, tokenOut.address, amountIn, amountOut, nonce)
             .with({ authWitnesses: [authwit] })
             .send({ from: demoUser })
-            .wait();
+            ;
         console.log(`    Swap ${i + 1} executed!`);
 
         const amountOutBigInt = BigInt(amountOut);
@@ -330,13 +330,13 @@ async function demoData() {
         console.log(`  Loser account already deployed at ${loserAccountManager.address}\n`);
     } else {
         const loserDeploy = await loserAccountManager.getDeployMethod();
-        await loserDeploy.send({ from: admin, skipClassPublication: true, skipInstancePublication: true }).wait();
+        await loserDeploy.send({ from: admin, skipClassPublication: true, skipInstancePublication: true });
         console.log(`  Loser account deployed at ${loserAccountManager.address}\n`);
     }
 
     // --- Mint 100,000 USDC to loser ---
     console.log('--- Minting 100,000 USDC to loser ---');
-    await usdc_token.methods.mint_to_private(loserUser, usdc(100_000)).send({ from: admin }).wait();
+    await usdc_token.methods.mint_to_private(loserUser, usdc(100_000)).send({ from: admin });
     console.log(`  Minted ${usdc(100_000)} USDC (100,000 with 6 decimals)\n`);
 
     // Price multipliers for the loser's 12 swaps.
@@ -402,7 +402,7 @@ async function demoData() {
                 ];
                 for (const [token, price] of newPrices) {
                     await priceFeed.methods.set_price(token.address.toField(), price)
-                        .send({ from: admin }).wait();
+                        .send({ from: admin });
                 }
             }
         }
@@ -440,7 +440,7 @@ async function demoData() {
             .swap_exact_tokens_for_tokens(tokenIn.address, tokenOut.address, amountIn, amountOut, nonce)
             .with({ authWitnesses: [authwit] })
             .send({ from: loserUser })
-            .wait();
+            ;
         console.log(`    Swap ${i + 1} executed!`);
 
         const amountOutBigInt = BigInt(amountOut);
@@ -472,7 +472,7 @@ async function demoData() {
     ];
     for (const [token, price, name] of resetPrices) {
         await priceFeed.methods.set_price(token.address.toField(), price)
-            .send({ from: admin }).wait();
+            .send({ from: admin });
         console.log(`  ${name} = ${price}`);
     }
 

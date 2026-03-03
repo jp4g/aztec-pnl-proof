@@ -54,7 +54,7 @@ export async function rebalancePools(params: {
             await priceFeed.methods
                 .set_price(tp.token.address.toField(), tp.price)
                 .send({ from: minter })
-                .wait();
+                ;
         }
     }
 
@@ -82,7 +82,7 @@ export async function rebalancePools(params: {
                 await pool.token1.methods
                     .mint_to_public(pool.contract.address, toMint)
                     .send({ from: minter })
-                    .wait();
+                    ;
                 pool.reserve1 += toMint;
             }
         } else if (value1 > value0) {
@@ -94,7 +94,7 @@ export async function rebalancePools(params: {
                 await pool.token0.methods
                     .mint_to_public(pool.contract.address, toMint)
                     .send({ from: minter })
-                    .wait();
+                    ;
                 pool.reserve0 += toMint;
             }
         }

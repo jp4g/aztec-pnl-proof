@@ -156,28 +156,28 @@ async function setup() {
 
     console.log('Deploying USDC...');
     const usdc = await TokenContract.deploy(wallet, admin, 'USD Coin', 'USDC', 6)
-        .send({ from: admin }).deployed();
+        .send({ from: admin });
     console.log(`  USDC: ${usdc.address}`);
 
     console.log('Deploying wETH...');
     const weth = await TokenContract.deploy(wallet, admin, 'Wrapped Ether', 'wETH', 18)
-        .send({ from: admin }).deployed();
+        .send({ from: admin });
     console.log(`  wETH: ${weth.address}`);
 
     console.log('Deploying wZEC...');
     const wzec = await TokenContract.deploy(wallet, admin, 'Wrapped Zcash', 'wZEC', 18)
-        .send({ from: admin }).deployed();
+        .send({ from: admin });
     console.log(`  wZEC: ${wzec.address}`);
 
     console.log('Deploying wAZTEC...');
     const waztec = await TokenContract.deploy(wallet, admin, 'Wrapped Aztec', 'wAZTEC', 18)
-        .send({ from: admin }).deployed();
+        .send({ from: admin });
     console.log(`  wAZTEC: ${waztec.address}\n`);
 
     // --- Deploy PriceFeed oracle ---
     console.log('--- Deploying PriceFeed oracle ---');
     const priceFeed = await PriceFeedContract.deploy(wallet)
-        .send({ from: admin }).deployed();
+        .send({ from: admin });
     console.log(`  PriceFeed: ${priceFeed.address}\n`);
 
     // --- Set oracle prices from CoinGecko ---
@@ -185,19 +185,19 @@ async function setup() {
 
     console.log(`  USDC   = ${oraclePrices.USDC} ($${prices.USDC})`);
     await priceFeed.methods.set_price(usdc.address.toField(), oraclePrices.USDC)
-        .send({ from: admin }).wait();
+        .send({ from: admin });
 
     console.log(`  wETH   = ${oraclePrices.wETH} ($${prices.wETH})`);
     await priceFeed.methods.set_price(weth.address.toField(), oraclePrices.wETH)
-        .send({ from: admin }).wait();
+        .send({ from: admin });
 
     console.log(`  wZEC   = ${oraclePrices.wZEC} ($${prices.wZEC})`);
     await priceFeed.methods.set_price(wzec.address.toField(), oraclePrices.wZEC)
-        .send({ from: admin }).wait();
+        .send({ from: admin });
 
     console.log(`  wAZTEC = ${oraclePrices.wAZTEC} ($${prices.wAZTEC})`);
     await priceFeed.methods.set_price(waztec.address.toField(), oraclePrices.wAZTEC)
-        .send({ from: admin }).wait();
+        .send({ from: admin });
     console.log();
 
     // --- Deploy AMM pools ---
@@ -206,34 +206,34 @@ async function setup() {
     // wETH/USDC pool
     console.log('Deploying wETH/USDC LP token...');
     const lpEthUsdc = await TokenContract.deploy(wallet, admin, 'LP wETH-USDC', 'LP-EU', 18)
-        .send({ from: admin }).deployed();
+        .send({ from: admin });
     console.log('Deploying wETH/USDC AMM...');
     const ammEthUsdc = await AMMContract.deploy(wallet, weth.address, usdc.address, lpEthUsdc.address)
-        .send({ from: admin }).deployed();
+        .send({ from: admin });
     await lpEthUsdc.methods.set_minter(ammEthUsdc.address, true)
-        .send({ from: admin }).wait();
+        .send({ from: admin });
     console.log(`  wETH/USDC AMM: ${ammEthUsdc.address} (LP: ${lpEthUsdc.address})`);
 
     // wZEC/USDC pool
     console.log('Deploying wZEC/USDC LP token...');
     const lpZecUsdc = await TokenContract.deploy(wallet, admin, 'LP wZEC-USDC', 'LP-ZU', 18)
-        .send({ from: admin }).deployed();
+        .send({ from: admin });
     console.log('Deploying wZEC/USDC AMM...');
     const ammZecUsdc = await AMMContract.deploy(wallet, wzec.address, usdc.address, lpZecUsdc.address)
-        .send({ from: admin }).deployed();
+        .send({ from: admin });
     await lpZecUsdc.methods.set_minter(ammZecUsdc.address, true)
-        .send({ from: admin }).wait();
+        .send({ from: admin });
     console.log(`  wZEC/USDC AMM: ${ammZecUsdc.address} (LP: ${lpZecUsdc.address})`);
 
     // wAZTEC/USDC pool
     console.log('Deploying wAZTEC/USDC LP token...');
     const lpAztecUsdc = await TokenContract.deploy(wallet, admin, 'LP wAZTEC-USDC', 'LP-AU', 18)
-        .send({ from: admin }).deployed();
+        .send({ from: admin });
     console.log('Deploying wAZTEC/USDC AMM...');
     const ammAztecUsdc = await AMMContract.deploy(wallet, waztec.address, usdc.address, lpAztecUsdc.address)
-        .send({ from: admin }).deployed();
+        .send({ from: admin });
     await lpAztecUsdc.methods.set_minter(ammAztecUsdc.address, true)
-        .send({ from: admin }).wait();
+        .send({ from: admin });
     console.log(`  wAZTEC/USDC AMM: ${ammAztecUsdc.address} (LP: ${lpAztecUsdc.address})\n`);
 
     // --- Seed pools with liquidity at correct price ratios ---
@@ -241,18 +241,18 @@ async function setup() {
 
     const ethPool = poolAmounts(prices.wETH, TOKEN_DECIMALS);
     console.log(`  wETH/USDC: ${Number(ethPool.tokenAmount) / 1e18} wETH + ${Number(ethPool.usdcAmount) / 1e6} USDC`);
-    await weth.methods.mint_to_public(ammEthUsdc.address, ethPool.tokenAmount).send({ from: admin }).wait();
-    await usdc.methods.mint_to_public(ammEthUsdc.address, ethPool.usdcAmount).send({ from: admin }).wait();
+    await weth.methods.mint_to_public(ammEthUsdc.address, ethPool.tokenAmount).send({ from: admin });
+    await usdc.methods.mint_to_public(ammEthUsdc.address, ethPool.usdcAmount).send({ from: admin });
 
     const zecPool = poolAmounts(prices.wZEC, TOKEN_DECIMALS);
     console.log(`  wZEC/USDC: ${Number(zecPool.tokenAmount) / 1e18} wZEC + ${Number(zecPool.usdcAmount) / 1e6} USDC`);
-    await wzec.methods.mint_to_public(ammZecUsdc.address, zecPool.tokenAmount).send({ from: admin }).wait();
-    await usdc.methods.mint_to_public(ammZecUsdc.address, zecPool.usdcAmount).send({ from: admin }).wait();
+    await wzec.methods.mint_to_public(ammZecUsdc.address, zecPool.tokenAmount).send({ from: admin });
+    await usdc.methods.mint_to_public(ammZecUsdc.address, zecPool.usdcAmount).send({ from: admin });
 
     const aztecPool = poolAmounts(prices.wAZTEC, TOKEN_DECIMALS);
     console.log(`  wAZTEC/USDC: ${Number(aztecPool.tokenAmount) / 1e18} wAZTEC + ${Number(aztecPool.usdcAmount) / 1e6} USDC`);
-    await waztec.methods.mint_to_public(ammAztecUsdc.address, aztecPool.tokenAmount).send({ from: admin }).wait();
-    await usdc.methods.mint_to_public(ammAztecUsdc.address, aztecPool.usdcAmount).send({ from: admin }).wait();
+    await waztec.methods.mint_to_public(ammAztecUsdc.address, aztecPool.tokenAmount).send({ from: admin });
+    await usdc.methods.mint_to_public(ammAztecUsdc.address, aztecPool.usdcAmount).send({ from: admin });
     console.log();
 
     // --- Save deployment.json ---

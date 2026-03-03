@@ -303,7 +303,7 @@ export class EmbeddedAuditableWallet extends BaseWallet {
       skipInstancePublication: true,
     };
 
-    const receipt = await deployMethod.send(deployOpts).wait({ timeout: 120 });
+    const receipt = await deployMethod.send(deployOpts);
     logger.info("Account deployed", receipt);
 
     const newEntry: StoredAccount = {

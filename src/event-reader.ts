@@ -1,6 +1,7 @@
 import type { AztecNode } from "@aztec/aztec.js/node";
 import { TagGenerator, type TaggingSecretExport, type TaggingSecretEntry } from "./auditor/index";
-import { poseidon2Hash } from "@aztec/foundation/crypto/poseidon";
+import { Tag, SiloedTag } from "@aztec/stdlib/logs";
+import { AztecAddress } from "@aztec/aztec.js/addresses";
 
 /**
  * Scan for encrypted event logs using tagging secrets.
@@ -73,18 +74,18 @@ async function processSecret(
         // Step 1: Generate base tags (unsiloed)
         const baseTags = await TagGenerator.generateTags(secretEntry.secret, index, count);
 
-        // Step 2: Silo each tag with the contract address
-        // Formula: siloedTag = poseidon2Hash([contractAddress, baseTag])
+        // Step 2: Silo each tag with the contract address (v4 uses domain-separated hash)
+        const app = AztecAddress.fromString(secretEntry.app.toString());
         const siloedTags = await Promise.all(
             baseTags.map(async baseTag => {
-                return await poseidon2Hash([secretEntry.app, baseTag]);
+                return await SiloedTag.compute(new Tag(baseTag), app);
             })
         );
 
         console.log(`[EventReader] Generated ${siloedTags.length} siloed tags for indices ${index}-${index + count - 1}`);
 
-        // Query logs by siloed tags
-        const logsPerTag = await node.getLogsByTags(siloedTags);
+        // Query logs by siloed tags (v4 API)
+        const logsPerTag = await node.getPrivateLogsByTags(siloedTags);
 
         const totalLogs = logsPerTag.reduce((sum, logs) => sum + logs.length, 0);
         console.log(`[EventReader] Received ${totalLogs} logs from node`);
@@ -95,8 +96,8 @@ async function processSecret(
             if (logs.length === 0) continue;
 
             for (const log of logs) {
-                // Extract the raw encrypted log buffer
-                const encryptedLog = log.log.toBuffer();
+                // v4: logData is Fr[], concatenate to buffer
+                const encryptedLog = Buffer.concat(log.logData.map(f => f.toBuffer()));
 
                 events.push({
                     txHash: log.txHash.toString(),
@@ -104,7 +105,7 @@ async function processSecret(
                     ciphertext: encryptedLog.toString('hex'),
                     ciphertextBuffer: encryptedLog,
                     ciphertextBytes: encryptedLog.length,
-                    logIndex: log.logIndexInTx,
+                    logIndex: 0, // v4 TxScopedL2Log doesn't expose logIndexInTx
                     tagIndex: index + i,
                 });
             }

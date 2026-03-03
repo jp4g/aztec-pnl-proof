@@ -41,6 +41,7 @@ async function main() {
     const summaryArtifacts = await summaryBackend.generateRecursiveProofArtifacts(
         new Uint8Array(0), // unused
         6, // unused
+        { verifierTarget: 'noir-recursive' },
     );
     console.log(`  Summary vkey hash: ${summaryArtifacts.vkHash}`);
     console.log(`  Summary vkey fields: ${summaryArtifacts.vkAsFields.length}`);

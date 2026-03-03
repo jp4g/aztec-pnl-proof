@@ -20,8 +20,10 @@ function parseSignedHex(s: string): bigint {
 /** Max concurrent lots (must match circuit MAX_LOTS) */
 const MAX_LOTS = 32;
 
-/** Generator index for siloing public leaf indices */
-const GENERATOR_INDEX__PUBLIC_LEAF_INDEX = 23;
+/** Domain separator for siloing public leaf slots (v4: DOM_SEP__PUBLIC_LEAF_SLOT) */
+const DOM_SEP__PUBLIC_LEAF_SLOT = 1247650290;
+/** Domain separator for map storage slot derivation (v4: DOM_SEP__PUBLIC_STORAGE_MAP_SLOT) */
+const DOM_SEP__PUBLIC_STORAGE_MAP_SLOT = 4015149901;
 
 /**
  * A FIFO cost basis lot: amount of tracked token acquired at a given oracle price.
@@ -343,10 +345,10 @@ export class SwapProver {
 
     /**
      * Parse an encrypted log buffer into ciphertext fields (matching on-chain representation).
-     * Skips the 32-byte tag, then reads 17 x 32-byte chunks as Fr fields.
+     * Skips the 32-byte tag, then reads 15 x 32-byte chunks as Fr fields.
      */
     private parseCiphertextFields(encryptedLog: Buffer): Fr[] {
-        const MESSAGE_CIPHERTEXT_LEN = 17;
+        const MESSAGE_CIPHERTEXT_LEN = 15;
         const ciphertextWithoutTag = encryptedLog.slice(32);
         const paddedBuffer = Buffer.alloc(MESSAGE_CIPHERTEXT_LEN * 32);
         ciphertextWithoutTag.copy(paddedBuffer, 0, 0, Math.min(ciphertextWithoutTag.length, paddedBuffer.length));
@@ -365,10 +367,10 @@ export class SwapProver {
         tokenAddress: Fr,
         blockNumber: bigint,
     ): Promise<any> {
-        const tokenSlot = await poseidon2Hash([priceFeedAssetsSlot, tokenAddress]);
+        const tokenSlot = await poseidon2HashWithSeparator([priceFeedAssetsSlot, tokenAddress], DOM_SEP__PUBLIC_STORAGE_MAP_SLOT);
         const treeIndex = await poseidon2HashWithSeparator(
             [priceFeedAddress, tokenSlot],
-            GENERATOR_INDEX__PUBLIC_LEAF_INDEX,
+            DOM_SEP__PUBLIC_LEAF_SLOT,
         );
         const witness = await this.config.node.getPublicDataWitness(
             Number(blockNumber) as any, treeIndex,

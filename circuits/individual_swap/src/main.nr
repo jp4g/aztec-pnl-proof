@@ -1,7 +1,7 @@
 mod utils;
 
-use dep::aztec::messages::encoding::MESSAGE_CIPHERTEXT_LEN;
-use dep::protocol_types::{
+use aztec::messages::encoding::MESSAGE_CIPHERTEXT_LEN;
+use protocol_types::{
     hash::poseidon2_hash_with_separator,
     merkle_tree::root::root_from_sibling_path,
 };

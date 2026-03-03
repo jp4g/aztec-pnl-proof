@@ -1,5 +1,5 @@
 use bb_proof_verification::{UltraHonkZKProof, UltraHonkVerificationKey, verify_honk_proof};
-use dep::protocol_types::hash::poseidon2_hash;
+use protocol_types::hash::poseidon2_hash;
 
 /// Public inputs per child proof (6 Fields):
 ///   [0] leaf_or_root              - leaf hash (individual) or merkle root (summary)

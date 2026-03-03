@@ -1,4 +1,4 @@
-import { before, describe, test } from "node:test";
+import { describe, test } from "node:test";
 import { expect } from '@jest/globals';
 import { getInitialTestAccountsData } from '@aztec/accounts/testing';
 import { AztecAddress } from '@aztec/aztec.js/addresses';
@@ -26,7 +26,7 @@ import vkeys from '../circuits/vkeys/vkeys.json' with { type: 'json' };
 
 const { AZTEC_NODE_URL = "http://localhost:8080" } = process.env;
 
-describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", () => {
+describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 1200000 }, () => {
 
     let node: AztecNode;
     let wallet: EmbeddedWallet;
@@ -96,7 +96,8 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", () => {
         { inKey: 'B', outKey: 'A', pool: 'AB' },  // Swap 6
     ];
 
-    before(async () => {
+    test("prove PnL from 6 swaps across 3 pools with varying prices", { timeout: 1200000 }, async () => {
+        // --- Setup (moved from before() due to bun's 60s hook timeout) ---
         console.log("Initializing Barretenberg...");
         const threads = require('os').cpus().length;
         bb = await Barretenberg.new({ threads });
@@ -116,57 +117,56 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", () => {
 
         // Deploy PriceFeed
         console.log("Deploying PriceFeed...");
-        priceFeed = await PriceFeedContract.deploy(wallet).send({ from: addresses[0] }).deployed();
+        priceFeed = await PriceFeedContract.deploy(wallet).send({ from: addresses[0] });
         console.log(`  PriceFeed: ${priceFeed.address}`);
 
         // Deploy 3 tokens
         console.log("Deploying tokens...");
-        tokenA = await TokenContract.deploy(wallet, addresses[0], "Token A", "TKA", 18).send({ from: addresses[0] }).deployed();
-        tokenB = await TokenContract.deploy(wallet, addresses[0], "Token B", "TKB", 18).send({ from: addresses[0] }).deployed();
-        tokenC = await TokenContract.deploy(wallet, addresses[0], "Token C", "TKC", 18).send({ from: addresses[0] }).deployed();
+        tokenA = await TokenContract.deploy(wallet, addresses[0], "Token A", "TKA", 18).send({ from: addresses[0] });
+        tokenB = await TokenContract.deploy(wallet, addresses[0], "Token B", "TKB", 18).send({ from: addresses[0] });
+        tokenC = await TokenContract.deploy(wallet, addresses[0], "Token C", "TKC", 18).send({ from: addresses[0] });
         console.log(`  tokenA: ${tokenA.address}`);
         console.log(`  tokenB: ${tokenB.address}`);
         console.log(`  tokenC: ${tokenC.address}`);
 
         // Set initial oracle prices
         console.log("Setting initial prices...");
-        await priceFeed.methods.set_price(tokenA.address.toField(), PRICE_SCHEDULE[0][0]).send({ from: addresses[0] }).wait();
-        await priceFeed.methods.set_price(tokenB.address.toField(), PRICE_SCHEDULE[0][1]).send({ from: addresses[0] }).wait();
-        await priceFeed.methods.set_price(tokenC.address.toField(), PRICE_SCHEDULE[0][2]).send({ from: addresses[0] }).wait();
+        await priceFeed.methods.set_price(tokenA.address.toField(), PRICE_SCHEDULE[0][0]).send({ from: addresses[0] });
+        await priceFeed.methods.set_price(tokenB.address.toField(), PRICE_SCHEDULE[0][1]).send({ from: addresses[0] });
+        await priceFeed.methods.set_price(tokenC.address.toField(), PRICE_SCHEDULE[0][2]).send({ from: addresses[0] });
         console.log(`  A=${PRICE_SCHEDULE[0][0]}, B=${PRICE_SCHEDULE[0][1]}, C=${PRICE_SCHEDULE[0][2]}`);
 
         // Deploy 3 LP tokens
         console.log("Deploying LP tokens...");
-        lpAB = await TokenContract.deploy(wallet, addresses[0], "LP AB", "LPAB", 18).send({ from: addresses[0] }).deployed();
-        lpAC = await TokenContract.deploy(wallet, addresses[0], "LP AC", "LPAC", 18).send({ from: addresses[0] }).deployed();
-        lpBC = await TokenContract.deploy(wallet, addresses[0], "LP BC", "LPBC", 18).send({ from: addresses[0] }).deployed();
+        lpAB = await TokenContract.deploy(wallet, addresses[0], "LP AB", "LPAB", 18).send({ from: addresses[0] });
+        lpAC = await TokenContract.deploy(wallet, addresses[0], "LP AC", "LPAC", 18).send({ from: addresses[0] });
+        lpBC = await TokenContract.deploy(wallet, addresses[0], "LP BC", "LPBC", 18).send({ from: addresses[0] });
 
         // Deploy 3 AMM pools
         console.log("Deploying AMM pools...");
-        poolAB = await AMMContract.deploy(wallet, tokenA.address, tokenB.address, lpAB.address).send({ from: addresses[0] }).deployed();
-        poolAC = await AMMContract.deploy(wallet, tokenA.address, tokenC.address, lpAC.address).send({ from: addresses[0] }).deployed();
-        poolBC = await AMMContract.deploy(wallet, tokenB.address, tokenC.address, lpBC.address).send({ from: addresses[0] }).deployed();
+        poolAB = await AMMContract.deploy(wallet, tokenA.address, tokenB.address, lpAB.address).send({ from: addresses[0] });
+        poolAC = await AMMContract.deploy(wallet, tokenA.address, tokenC.address, lpAC.address).send({ from: addresses[0] });
+        poolBC = await AMMContract.deploy(wallet, tokenB.address, tokenC.address, lpBC.address).send({ from: addresses[0] });
         console.log(`  poolAB: ${poolAB.address}`);
         console.log(`  poolAC: ${poolAC.address}`);
         console.log(`  poolBC: ${poolBC.address}`);
 
         // Seed pools with liquidity
         console.log("Seeding pools with liquidity...");
-        await tokenA.methods.mint_to_public(poolAB.address, POOL_AB_LIQ_A).send({ from: addresses[0] }).wait();
-        await tokenB.methods.mint_to_public(poolAB.address, POOL_AB_LIQ_B).send({ from: addresses[0] }).wait();
-        await tokenA.methods.mint_to_public(poolAC.address, POOL_AC_LIQ_A).send({ from: addresses[0] }).wait();
-        await tokenC.methods.mint_to_public(poolAC.address, POOL_AC_LIQ_C).send({ from: addresses[0] }).wait();
-        await tokenB.methods.mint_to_public(poolBC.address, POOL_BC_LIQ_B).send({ from: addresses[0] }).wait();
-        await tokenC.methods.mint_to_public(poolBC.address, POOL_BC_LIQ_C).send({ from: addresses[0] }).wait();
+        await tokenA.methods.mint_to_public(poolAB.address, POOL_AB_LIQ_A).send({ from: addresses[0] });
+        await tokenB.methods.mint_to_public(poolAB.address, POOL_AB_LIQ_B).send({ from: addresses[0] });
+        await tokenA.methods.mint_to_public(poolAC.address, POOL_AC_LIQ_A).send({ from: addresses[0] });
+        await tokenC.methods.mint_to_public(poolAC.address, POOL_AC_LIQ_C).send({ from: addresses[0] });
+        await tokenB.methods.mint_to_public(poolBC.address, POOL_BC_LIQ_B).send({ from: addresses[0] });
+        await tokenC.methods.mint_to_public(poolBC.address, POOL_BC_LIQ_C).send({ from: addresses[0] });
 
         // Mint tokenA to swapper (private)
         console.log(`Minting ${INITIAL_TOKEN_A} tokenA to swapper...`);
-        await tokenA.methods.mint_to_private(addresses[1], INITIAL_TOKEN_A).send({ from: addresses[0] }).wait();
+        await tokenA.methods.mint_to_private(addresses[1], INITIAL_TOKEN_A).send({ from: addresses[0] });
 
         console.log("Setup complete!");
-    });
+        // --- End setup ---
 
-    test("prove PnL from 6 swaps across 3 pools with varying prices", { timeout: 1200000 }, async () => {
         const swapper = addresses[1];
         const minter = addresses[0];
 
@@ -235,7 +235,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", () => {
                 .swap_exact_tokens_for_tokens(tokenIn.address, tokenOut.address, amountIn, amountOut, nonce)
                 .with({ authWitnesses: [authwit] })
                 .send({ from: swapper })
-                .wait();
+                ;
             console.log(`  Swap ${i + 1} executed!`);
 
             amountsOut.push(BigInt(amountOut));
@@ -402,10 +402,10 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", () => {
         expect(result.publicInputs.blockNumber).toBe(blockNumbers[5]);
 
         // Verify merkle root (leaves are hashes of ciphertext fields)
-        const MESSAGE_CIPHERTEXT_LEN = 17;
+        const MESSAGE_CIPHERTEXT_LEN = 15;
         const expectedLeaves: Fr[] = [];
         for (let i = 0; i < 6; i++) {
-            // Parse ciphertext into fields (skip 32-byte tag, then 17 x 32-byte chunks)
+            // Parse ciphertext into fields (skip 32-byte tag, then 15 x 32-byte chunks)
             const buf = swapEvents[i].ciphertextBuffer.slice(32);
             const padded = Buffer.alloc(MESSAGE_CIPHERTEXT_LEN * 32);
             buf.copy(padded, 0, 0, Math.min(buf.length, padded.length));
@@ -429,7 +429,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", () => {
         const hB = await poseidon2Hash([h45, zero1]);
         const expectedRoot = await poseidon2Hash([hA, hB]);
 
-        expect(result.publicInputs.root).toBe(expectedRoot.toString());
+        expect(BigInt(result.publicInputs.root)).toBe(expectedRoot.toBigInt());
         console.log(`  Merkle root matches!`);
 
         // ========================================

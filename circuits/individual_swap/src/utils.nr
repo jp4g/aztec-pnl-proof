@@ -1,4 +1,4 @@
-use dep::aztec::{
+use aztec::{
     messages::{
         encoding::{MESSAGE_CIPHERTEXT_LEN, EPH_PK_X_SIZE_IN_FIELDS},
         encryption::aes128::derive_aes_symmetric_key_and_iv_from_ecdh_shared_secret_using_poseidon2_unsafe,
@@ -6,9 +6,9 @@ use dep::aztec::{
     keys::ecdh_shared_secret::derive_ecdh_shared_secret,
     utils::point::{point_from_x_coord_and_sign, get_sign_of_point},
 };
-use dep::std::{aes128::aes128_encrypt, embedded_curve_ops::EmbeddedCurveScalar};
-use dep::protocol_types::{
-    constants::GENERATOR_INDEX__PUBLIC_LEAF_INDEX,
+use std::{aes128::aes128_encrypt, embedded_curve_ops::EmbeddedCurveScalar};
+use protocol_types::{
+    constants::{DOM_SEP__PUBLIC_LEAF_SLOT, DOM_SEP__PUBLIC_STORAGE_MAP_SLOT},
     hash::{poseidon2_hash, poseidon2_hash_with_separator},
     merkle_tree::root::root_from_sibling_path,
     utils::field::full_field_less_than,
@@ -33,7 +33,7 @@ impl PublicDataLeafPreimage {
         if is_empty {
             0
         } else {
-            poseidon2_hash([self.slot, self.value, self.next_index, self.next_slot])
+            poseidon2_hash([self.slot, self.value, self.next_slot, self.next_index])
         }
     }
 }
@@ -47,12 +47,12 @@ pub struct PriceWitness {
 pub fn compute_public_data_tree_index(contract_address: Field, storage_slot: Field) -> Field {
     poseidon2_hash_with_separator(
         [contract_address, storage_slot],
-        GENERATOR_INDEX__PUBLIC_LEAF_INDEX,
+        DOM_SEP__PUBLIC_LEAF_SLOT,
     )
 }
 
 pub fn derive_storage_slot_in_map(storage_slot: Field, key: Field) -> Field {
-    poseidon2_hash([storage_slot, key])
+    poseidon2_hash_with_separator([storage_slot, key], DOM_SEP__PUBLIC_STORAGE_MAP_SLOT)
 }
 
 pub fn verify_and_read_public_data(
