@@ -2,15 +2,6 @@ import { $ } from 'bun';
 
 async function postinstall() {
   try {
-    // Compile token contract and generate TS artifact
-    console.log('Compiling token contract...');
-    await $`cd contracts/token_contract && aztec compile`;
-    console.log('✓ Token contract compiled');
-
-    console.log('Generating Token TS artifact...');
-    await $`aztec codegen contracts/token_contract/target -o src/artifacts/`;
-    console.log('✓ Token artifact generated');
-
     // Compile AMM contract and generate TS artifact
     console.log('Compiling AMM contract...');
     await $`cd contracts/amm_contract && aztec compile`;

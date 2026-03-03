@@ -137,8 +137,8 @@ export class AMMContract extends ContractBase {
     /** swap_tokens_for_exact_tokens(token_in: struct, token_out: struct, amount_out: integer, amount_in_max: integer, authwit_nonce: field) */
     swap_tokens_for_exact_tokens: ((token_in: AztecAddressLike, token_out: AztecAddressLike, amount_out: (bigint | number), amount_in_max: (bigint | number), authwit_nonce: FieldLike) => ContractFunctionInteraction) & Pick<ContractMethod, 'selector'>;
 
-    /** sync_private_state() */
-    sync_private_state: (() => ContractFunctionInteraction) & Pick<ContractMethod, 'selector'>;
+    /** sync_state() */
+    sync_state: (() => ContractFunctionInteraction) & Pick<ContractMethod, 'selector'>;
   };
 
   
