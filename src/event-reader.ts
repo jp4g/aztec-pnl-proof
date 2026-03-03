@@ -1,5 +1,5 @@
 import type { AztecNode } from "@aztec/aztec.js/node";
-import { TagGenerator, type TaggingSecretExport, type TaggingSecretEntry } from "@aztec/note-collector";
+import { TagGenerator, type TaggingSecretExport, type TaggingSecretEntry } from "./auditor/index";
 import { poseidon2Hash } from "@aztec/foundation/crypto/poseidon";
 
 /**

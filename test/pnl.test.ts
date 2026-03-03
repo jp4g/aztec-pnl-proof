@@ -7,7 +7,7 @@ import { TokenContract } from '@aztec/noir-contracts.js/Token';
 import { PriceFeedContract } from '@aztec/noir-contracts.js/PriceFeed';
 import { AMMContract } from '../src/artifacts/AMM';
 import { precision } from "../src/utils";
-import { AuditableTestWallet } from "@aztec/note-collector";
+import { EmbeddedWallet } from "@aztec/wallets/embedded";
 import { Barretenberg } from '@aztec/bb.js';
 import type { CompiledCircuit } from '@aztec/noir-types';
 import { Fr } from '@aztec/foundation/curves/bn254';
@@ -29,7 +29,7 @@ const { AZTEC_NODE_URL = "http://localhost:8080" } = process.env;
 describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", () => {
 
     let node: AztecNode;
-    let wallet: AuditableTestWallet;
+    let wallet: EmbeddedWallet;
     let addresses: AztecAddress[];
 
     // 3 tokens
@@ -106,7 +106,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", () => {
         console.log(`Connected to Aztec node at "${AZTEC_NODE_URL}"`);
 
         addresses = [];
-        wallet = await AuditableTestWallet.create(node, { proverEnabled: false });
+        wallet = await EmbeddedWallet.create(node, { ephemeral: true, pxeConfig: { proverEnabled: false } });
 
         const accounts = await getInitialTestAccountsData();
         for (const account of accounts) {

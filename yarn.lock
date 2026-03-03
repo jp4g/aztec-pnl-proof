@@ -621,8 +621,8 @@
 "@aztec/archiver@file:../aztec-packages/yarn-project/archiver", "@aztec/archiver@workspace:^":
   version "0.1.0"
   dependencies:
+    "@aztec/blob-client" "workspace:^"
     "@aztec/blob-lib" "workspace:^"
-    "@aztec/blob-sink" "workspace:^"
     "@aztec/constants" "workspace:^"
     "@aztec/epoch-cache" "workspace:^"
     "@aztec/ethereum" "workspace:^"
@@ -657,7 +657,8 @@
   dependencies:
     "@aztec/archiver" "workspace:^"
     "@aztec/bb-prover" "workspace:^"
-    "@aztec/blob-sink" "workspace:^"
+    "@aztec/blob-client" "workspace:^"
+    "@aztec/blob-lib" "workspace:^"
     "@aztec/constants" "workspace:^"
     "@aztec/epoch-cache" "workspace:^"
     "@aztec/ethereum" "workspace:^"
@@ -671,12 +672,14 @@
     "@aztec/p2p" "workspace:^"
     "@aztec/protocol-contracts" "workspace:^"
     "@aztec/prover-client" "workspace:^"
+    "@aztec/prover-node" "workspace:^"
     "@aztec/sequencer-client" "workspace:^"
     "@aztec/simulator" "workspace:^"
     "@aztec/slasher" "workspace:^"
     "@aztec/stdlib" "workspace:^"
     "@aztec/telemetry-client" "workspace:^"
     "@aztec/validator-client" "workspace:^"
+    "@aztec/validator-ha-signer" "workspace:^"
     "@aztec/world-state" "workspace:^"
     koa "^2.16.1"
     koa-router "^13.1.1"
@@ -708,7 +711,7 @@
     "@aztec/aztec.js" "workspace:^"
     "@aztec/bb-prover" "workspace:^"
     "@aztec/bb.js" "portal:../../barretenberg/ts"
-    "@aztec/blob-sink" "workspace:^"
+    "@aztec/blob-client" "workspace:^"
     "@aztec/bot" "workspace:^"
     "@aztec/builder" "workspace:^"
     "@aztec/cli" "workspace:^"
@@ -727,10 +730,12 @@
     "@aztec/prover-client" "workspace:^"
     "@aztec/prover-node" "workspace:^"
     "@aztec/pxe" "workspace:^"
+    "@aztec/sequencer-client" "workspace:^"
     "@aztec/stdlib" "workspace:^"
     "@aztec/telemetry-client" "workspace:^"
-    "@aztec/test-wallet" "workspace:^"
     "@aztec/txe" "workspace:^"
+    "@aztec/validator-ha-signer" "workspace:^"
+    "@aztec/wallets" "workspace:^"
     "@aztec/world-state" "workspace:^"
     "@types/chalk" "^2.2.0"
     abitype "^0.8.11"
@@ -768,15 +773,7 @@
     pako "^2.1.0"
     tslib "^2.4.0"
 
-"@aztec/blob-lib@file:../aztec-packages/yarn-project/blob-lib", "@aztec/blob-lib@workspace:^":
-  version "0.1.0"
-  dependencies:
-    "@aztec/constants" "workspace:^"
-    "@aztec/foundation" "workspace:^"
-    "@crate-crypto/node-eth-kzg" "^0.10.0"
-    tslib "^2.4.0"
-
-"@aztec/blob-sink@file:../aztec-packages/yarn-project/blob-sink", "@aztec/blob-sink@workspace:^":
+"@aztec/blob-client@file:../aztec-packages/yarn-project/blob-client", "@aztec/blob-client@workspace:^":
   version "0.1.0"
   dependencies:
     "@aztec/blob-lib" "workspace:^"
@@ -792,6 +789,17 @@
     viem "npm:@aztec/viem@2.38.2"
     zod "^3.23.8"
 
+"@aztec/blob-lib@file:../aztec-packages/yarn-project/blob-lib", "@aztec/blob-lib@workspace:^":
+  version "0.1.0"
+  dependencies:
+    "@aztec/constants" "workspace:^"
+    "@aztec/foundation" "workspace:^"
+    "@crate-crypto/node-eth-kzg" "^0.10.0"
+    tslib "^2.4.0"
+
+"@aztec/blob-sink@file:../aztec-packages/yarn-project/blob-sink":
+  version "0.0.0"
+
 "@aztec/bot@file:../aztec-packages/yarn-project/bot", "@aztec/bot@workspace:^":
   version "0.1.0"
   dependencies:
@@ -801,14 +809,17 @@
     "@aztec/ethereum" "workspace:^"
     "@aztec/foundation" "workspace:^"
     "@aztec/kv-store" "workspace:^"
+    "@aztec/l1-artifacts" "workspace:^"
     "@aztec/noir-contracts.js" "workspace:^"
     "@aztec/noir-protocol-circuits-types" "workspace:^"
+    "@aztec/noir-test-contracts.js" "workspace:^"
     "@aztec/protocol-contracts" "workspace:^"
     "@aztec/stdlib" "workspace:^"
     "@aztec/telemetry-client" "workspace:^"
-    "@aztec/test-wallet" "workspace:^"
+    "@aztec/wallets" "workspace:^"
     source-map-support "^0.5.21"
     tslib "^2.4.0"
+    viem "npm:@aztec/viem@2.38.2"
     zod "^3.23.8"
 
 "@aztec/builder@file:../aztec-packages/yarn-project/builder", "@aztec/builder@workspace:^":
@@ -854,8 +865,10 @@
     "@aztec/node-lib" "workspace:^"
     "@aztec/p2p" "workspace:^"
     "@aztec/protocol-contracts" "workspace:^"
+    "@aztec/sequencer-client" "workspace:^"
+    "@aztec/slasher" "workspace:^"
     "@aztec/stdlib" "workspace:^"
-    "@aztec/test-wallet" "workspace:^"
+    "@aztec/wallets" "workspace:^"
     "@aztec/world-state" "workspace:^"
     "@ethersproject/wallet" "^5.8.0"
     "@iarna/toml" "^2.2.5"
@@ -948,7 +961,7 @@
     "@aztec/constants" "workspace:^"
     "@aztec/foundation" "workspace:^"
     "@aztec/noir-noir_codegen" "portal:../../noir/packages/noir_codegen"
-    "@aztec/noir-noir_js" "file:../../../../Library/Caches/Yarn/v6/npm-@aztec-ivc-integration-0.1.0-8f1020f0-ffe4-46bf-93b4-8b7f58ae0ed1-1770675034771/node_modules/noir/packages/noir_js"
+    "@aztec/noir-noir_js" "file:../../../../Library/Caches/Yarn/v6/npm-@aztec-ivc-integration-0.1.0-d6b9b045-58f2-4f86-a415-cb0391ab7dcb-1772519066818/node_modules/noir/packages/noir_js"
     "@aztec/noir-noirc_abi" "portal:../../noir/packages/noirc_abi"
     "@aztec/noir-types" "portal:../../noir/packages/types"
     "@aztec/stdlib" "workspace:^"
@@ -1018,7 +1031,7 @@
   dependencies:
     "@aztec/archiver" "workspace:^"
     "@aztec/bb-prover" "workspace:^"
-    "@aztec/blob-sink" "workspace:^"
+    "@aztec/blob-client" "workspace:^"
     "@aztec/constants" "workspace:^"
     "@aztec/epoch-cache" "workspace:^"
     "@aztec/ethereum" "workspace:^"
@@ -1036,8 +1049,8 @@
     "@aztec/world-state" "workspace:^"
     tslib "^2.4.0"
 
-"@aztec/noir-acvm_js@1.0.0-beta.15", "@aztec/noir-acvm_js@file:../aztec-packages/noir/packages/acvm_js", "@aztec/noir-acvm_js@portal:../../noir/packages/acvm_js":
-  version "1.0.0-beta.15"
+"@aztec/noir-acvm_js@1.0.0-beta.18", "@aztec/noir-acvm_js@file:../aztec-packages/noir/packages/acvm_js", "@aztec/noir-acvm_js@portal:../../noir/packages/acvm_js":
+  version "1.0.0-beta.18"
 
 "@aztec/noir-contracts.js@file:../aztec-packages/yarn-project/noir-contracts.js", "@aztec/noir-contracts.js@workspace:^":
   version "0.1.0"
@@ -1046,24 +1059,24 @@
     tslib "^2.4.0"
 
 "@aztec/noir-noir_codegen@file:../aztec-packages/noir/packages/noir_codegen", "@aztec/noir-noir_codegen@portal:../../noir/packages/noir_codegen":
-  version "1.0.0-beta.15"
+  version "1.0.0-beta.18"
   dependencies:
-    "@aztec/noir-types" "1.0.0-beta.15"
-    glob "^11.0.3"
+    "@aztec/noir-types" "1.0.0-beta.18"
+    glob "^13.0.0"
     ts-command-line-args "^2.5.1"
 
 "@aztec/noir-noir_js@file:../aztec-packages/noir/packages/noir_js":
-  version "1.0.0-beta.15"
+  version "1.0.0-beta.18"
   dependencies:
-    "@aztec/noir-acvm_js" "1.0.0-beta.15"
-    "@aztec/noir-noirc_abi" "1.0.0-beta.15"
-    "@aztec/noir-types" "1.0.0-beta.15"
+    "@aztec/noir-acvm_js" "1.0.0-beta.18"
+    "@aztec/noir-noirc_abi" "1.0.0-beta.18"
+    "@aztec/noir-types" "1.0.0-beta.18"
     pako "^2.1.0"
 
-"@aztec/noir-noirc_abi@1.0.0-beta.15", "@aztec/noir-noirc_abi@file:../aztec-packages/noir/packages/noirc_abi", "@aztec/noir-noirc_abi@portal:../../noir/packages/noirc_abi":
-  version "1.0.0-beta.15"
+"@aztec/noir-noirc_abi@1.0.0-beta.18", "@aztec/noir-noirc_abi@file:../aztec-packages/noir/packages/noirc_abi", "@aztec/noir-noirc_abi@portal:../../noir/packages/noirc_abi":
+  version "1.0.0-beta.18"
   dependencies:
-    "@aztec/noir-types" "1.0.0-beta.15"
+    "@aztec/noir-types" "1.0.0-beta.18"
 
 "@aztec/noir-protocol-circuits-types@file:../aztec-packages/yarn-project/noir-protocol-circuits-types", "@aztec/noir-protocol-circuits-types@workspace:^":
   version "0.1.0"
@@ -1079,31 +1092,14 @@
     change-case "^5.4.4"
     tslib "^2.4.0"
 
-"@aztec/noir-test-contracts.js@file:../aztec-packages/yarn-project/noir-test-contracts.js":
+"@aztec/noir-test-contracts.js@file:../aztec-packages/yarn-project/noir-test-contracts.js", "@aztec/noir-test-contracts.js@workspace:^":
   version "0.1.0"
   dependencies:
     "@aztec/aztec.js" "workspace:^"
     tslib "^2.4.0"
 
-"@aztec/noir-types@1.0.0-beta.15", "@aztec/noir-types@file:../aztec-packages/noir/packages/types", "@aztec/noir-types@portal:../../noir/packages/types", "@aztec/noir-types@workspace:*":
-  version "1.0.0-beta.15"
-
-"@aztec/note-collector@file:../aztec-packages/yarn-project/note-collector":
-  version "0.1.0"
-  dependencies:
-    "@aztec/accounts" "workspace:^"
-    "@aztec/aztec.js" "workspace:^"
-    "@aztec/bb-prover" "workspace:^"
-    "@aztec/entrypoints" "workspace:^"
-    "@aztec/foundation" "workspace:^"
-    "@aztec/key-store" "workspace:^"
-    "@aztec/kv-store" "workspace:^"
-    "@aztec/protocol-contracts" "workspace:^"
-    "@aztec/pxe" "workspace:^"
-    "@aztec/simulator" "workspace:^"
-    "@aztec/stdlib" "workspace:^"
-    "@aztec/wallet-sdk" "workspace:^"
-    tslib "^2.4.0"
+"@aztec/noir-types@1.0.0-beta.18", "@aztec/noir-types@file:../aztec-packages/noir/packages/types", "@aztec/noir-types@portal:../../noir/packages/types", "@aztec/noir-types@workspace:*":
+  version "1.0.0-beta.18"
 
 "@aztec/p2p-bootstrap@file:../aztec-packages/yarn-project/p2p-bootstrap", "@aztec/p2p-bootstrap@workspace:^":
   version "0.1.0"
@@ -1195,8 +1191,8 @@
   dependencies:
     "@aztec/archiver" "workspace:^"
     "@aztec/bb-prover" "workspace:^"
+    "@aztec/blob-client" "workspace:^"
     "@aztec/blob-lib" "workspace:^"
-    "@aztec/blob-sink" "workspace:^"
     "@aztec/constants" "workspace:^"
     "@aztec/epoch-cache" "workspace:^"
     "@aztec/ethereum" "workspace:^"
@@ -1246,8 +1242,8 @@
   dependencies:
     "@aztec/aztec.js" "workspace:^"
     "@aztec/bb-prover" "workspace:^"
+    "@aztec/blob-client" "workspace:^"
     "@aztec/blob-lib" "workspace:^"
-    "@aztec/blob-sink" "workspace:^"
     "@aztec/constants" "workspace:^"
     "@aztec/epoch-cache" "workspace:^"
     "@aztec/ethereum" "workspace:^"
@@ -1267,6 +1263,7 @@
     "@aztec/stdlib" "workspace:^"
     "@aztec/telemetry-client" "workspace:^"
     "@aztec/validator-client" "workspace:^"
+    "@aztec/validator-ha-signer" "workspace:^"
     "@aztec/world-state" "workspace:^"
     lodash.chunk "^4.2.0"
     tslib "^2.4.0"
@@ -1316,6 +1313,7 @@
     "@aztec/foundation" "workspace:^"
     "@aztec/l1-artifacts" "workspace:^"
     "@aztec/noir-noirc_abi" "portal:../../noir/packages/noirc_abi"
+    "@aztec/validator-ha-signer" "workspace:^"
     "@google-cloud/storage" "^7.15.0"
     axios "^1.12.0"
     json-stringify-deterministic "1.0.12"
@@ -1351,17 +1349,8 @@
     prom-client "^15.1.3"
     viem "npm:@aztec/viem@2.38.2"
 
-"@aztec/test-wallet@file:../aztec-packages/yarn-project/test-wallet", "@aztec/test-wallet@workspace:^":
-  version "0.1.0"
-  dependencies:
-    "@aztec/accounts" "workspace:^"
-    "@aztec/aztec.js" "workspace:^"
-    "@aztec/entrypoints" "workspace:^"
-    "@aztec/foundation" "workspace:^"
-    "@aztec/noir-contracts.js" "workspace:^"
-    "@aztec/pxe" "workspace:^"
-    "@aztec/stdlib" "workspace:^"
-    "@aztec/wallet-sdk" "workspace:^"
+"@aztec/test-wallet@file:../aztec-packages/yarn-project/test-wallet":
+  version "0.0.0"
 
 "@aztec/txe@file:../aztec-packages/yarn-project/txe", "@aztec/txe@workspace:^":
   version "0.0.0"
@@ -1385,19 +1374,36 @@
 "@aztec/validator-client@file:../aztec-packages/yarn-project/validator-client", "@aztec/validator-client@workspace:^":
   version "0.1.0"
   dependencies:
+    "@aztec/blob-client" "workspace:^"
+    "@aztec/blob-lib" "workspace:^"
     "@aztec/constants" "workspace:^"
     "@aztec/epoch-cache" "workspace:^"
     "@aztec/ethereum" "workspace:^"
     "@aztec/foundation" "workspace:^"
     "@aztec/node-keystore" "workspace:^"
+    "@aztec/noir-protocol-circuits-types" "workspace:^"
     "@aztec/p2p" "workspace:^"
+    "@aztec/protocol-contracts" "workspace:^"
+    "@aztec/prover-client" "workspace:^"
+    "@aztec/simulator" "workspace:^"
     "@aztec/slasher" "workspace:^"
     "@aztec/stdlib" "workspace:^"
     "@aztec/telemetry-client" "workspace:^"
+    "@aztec/validator-ha-signer" "workspace:^"
     koa "^2.16.1"
     koa-router "^13.1.1"
     tslib "^2.4.0"
     viem "npm:@aztec/viem@2.38.2"
+
+"@aztec/validator-ha-signer@file:../aztec-packages/yarn-project/validator-ha-signer", "@aztec/validator-ha-signer@workspace:^":
+  version "0.1.0"
+  dependencies:
+    "@aztec/ethereum" "workspace:^"
+    "@aztec/foundation" "workspace:^"
+    node-pg-migrate "^8.0.4"
+    pg "^8.11.3"
+    tslib "^2.4.0"
+    zod "^3.23.8"
 
 "@aztec/wallet-sdk@file:../aztec-packages/yarn-project/wallet-sdk", "@aztec/wallet-sdk@workspace:^":
   version "0.1.0"
@@ -1408,6 +1414,19 @@
     "@aztec/foundation" "workspace:^"
     "@aztec/pxe" "workspace:^"
     "@aztec/stdlib" "workspace:^"
+
+"@aztec/wallets@file:../aztec-packages/yarn-project/wallets", "@aztec/wallets@workspace:^":
+  version "0.1.0"
+  dependencies:
+    "@aztec/accounts" "workspace:^"
+    "@aztec/aztec.js" "workspace:^"
+    "@aztec/entrypoints" "workspace:^"
+    "@aztec/foundation" "workspace:^"
+    "@aztec/kv-store" "workspace:^"
+    "@aztec/protocol-contracts" "workspace:^"
+    "@aztec/pxe" "workspace:^"
+    "@aztec/stdlib" "workspace:^"
+    "@aztec/wallet-sdk" "workspace:^"
 
 "@aztec/world-state@file:../aztec-packages/yarn-project/world-state", "@aztec/world-state@workspace:^":
   version "0.1.0"
@@ -3908,6 +3927,11 @@ b4a@^1.6.4:
   resolved "https://registry.yarnpkg.com/b4a/-/b4a-1.7.3.tgz#24cf7ccda28f5465b66aec2bac69e32809bf112f"
   integrity sha512-5Q2mfq2WfGuFp3uS//0s6baOJLMoVduPYVeNmDYxu5OUA1/cBfvr2RIS7vi62LdNj/urk1hfmj867I3qt6uZ7Q==
 
+balanced-match@^4.0.2:
+  version "4.0.4"
+  resolved "https://registry.yarnpkg.com/balanced-match/-/balanced-match-4.0.4.tgz#bfb10662feed8196a2c62e7c68e17720c274179a"
+  integrity sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA==
+
 bare-events@^2.5.4, bare-events@^2.7.0:
   version "2.8.2"
   resolved "https://registry.yarnpkg.com/bare-events/-/bare-events-2.8.2.tgz#7b3e10bd8e1fc80daf38bb516921678f566ab89f"
@@ -4010,6 +4034,13 @@ bowser@^2.11.0:
   version "2.13.1"
   resolved "https://registry.yarnpkg.com/bowser/-/bowser-2.13.1.tgz#5a4c652de1d002f847dd011819f5fc729f308a7e"
   integrity sha512-OHawaAbjwx6rqICCKgSG0SAnT05bzd7ppyKLVUITZpANBaaMFBAsaNkto3LoQ31tyFP5kNujE8Cdx85G9VzOkw==
+
+brace-expansion@^5.0.2:
+  version "5.0.4"
+  resolved "https://registry.yarnpkg.com/brace-expansion/-/brace-expansion-5.0.4.tgz#614daaecd0a688f660bbbc909a8748c3d80d4336"
+  integrity sha512-h+DEnpVvxmfVefa4jFbCf5HdH5YMDXRsmKflpf1pILZWRFlTbJpxeU55nJl4Smt5HQaGzg1o6RHFPJaOqnmBDg==
+  dependencies:
+    balanced-match "^4.0.2"
 
 brorand@^1.1.0:
   version "1.1.0"
@@ -4896,7 +4927,16 @@ get-uri@^6.0.1:
     data-uri-to-buffer "^6.0.2"
     debug "^4.3.4"
 
-glob@^11.0.3:
+glob@^13.0.0:
+  version "13.0.6"
+  resolved "https://registry.yarnpkg.com/glob/-/glob-13.0.6.tgz#078666566a425147ccacfbd2e332deb66a2be71d"
+  integrity sha512-Wjlyrolmm8uDpm/ogGyXZXb1Z+Ca2B8NbJwqBVg0axK9GbBeoS7yGV6vjXnYdGm6X53iehEuxxbyiKp8QmN4Vw==
+  dependencies:
+    minimatch "^10.2.2"
+    minipass "^7.1.3"
+    path-scurry "^2.0.2"
+
+glob@~11.1.0:
   version "11.1.0"
   resolved "https://registry.yarnpkg.com/glob/-/glob-11.1.0.tgz#4f826576e4eb99c7dad383793d2f9f08f67e50a6"
   integrity sha512-vuNwKSaKiqm7g0THUBu2x7ckSs3XJLXE+2ssL7/MfTGPLLcrJQ/4Uq1CjPTtO5cCIiRxqvN6Twy1qOwhL0Xjcw==
@@ -5785,6 +5825,13 @@ minimatch@^10.1.1:
   dependencies:
     "@isaacs/brace-expansion" "^5.0.0"
 
+minimatch@^10.2.2:
+  version "10.2.4"
+  resolved "https://registry.yarnpkg.com/minimatch/-/minimatch-10.2.4.tgz#465b3accbd0218b8281f5301e27cedc697f96fde"
+  integrity sha512-oRjTw/97aTBN0RHbYCdtF1MQfvusSIBQM0IZEgzl6426+8jSC0nF1a/GmnVLpfB9yyr6g6FTqWqiZVbxrtaCIg==
+  dependencies:
+    brace-expansion "^5.0.2"
+
 minimist@^1.2.6:
   version "1.2.8"
   resolved "https://registry.yarnpkg.com/minimist/-/minimist-1.2.8.tgz#c1a464e7693302e082a075cee0c057741ac4772c"
@@ -5794,6 +5841,11 @@ minipass@^7.1.2:
   version "7.1.2"
   resolved "https://registry.yarnpkg.com/minipass/-/minipass-7.1.2.tgz#93a9626ce5e5e66bd4db86849e7515e92340a707"
   integrity sha512-qOOzS1cBTWYF4BH8fVePDBOO9iptMnGUEZwNc/cMWnTV2nVLZ7VoNWEPHkYczZA0pdoA7dl6e7FL659nX9S2aw==
+
+minipass@^7.1.3:
+  version "7.1.3"
+  resolved "https://registry.yarnpkg.com/minipass/-/minipass-7.1.3.tgz#79389b4eb1bb2d003a9bba87d492f2bd37bdc65b"
+  integrity sha512-tEBHqDnIoM/1rXME1zgka9g6Q2lcoCkxHLuc7ODJ5BxbP5d4c2Z5cGgtXAku59200Cx7diuHTOYfSBD8n6mm8A==
 
 mitt@^3.0.1:
   version "3.0.1"
@@ -5908,6 +5960,14 @@ node-gyp-build@^4.3.0:
   version "4.8.4"
   resolved "https://registry.yarnpkg.com/node-gyp-build/-/node-gyp-build-4.8.4.tgz#8a70ee85464ae52327772a90d66c6077a900cfc8"
   integrity sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==
+
+node-pg-migrate@^8.0.4:
+  version "8.0.4"
+  resolved "https://registry.yarnpkg.com/node-pg-migrate/-/node-pg-migrate-8.0.4.tgz#b2e519e7ebc4c2f7777ef4b5cf0a01591ddef2ee"
+  integrity sha512-HTlJ6fOT/2xHhAUtsqSN85PGMAqSbfGJNRwQF8+ZwQ1+sVGNUTl/ZGEshPsOI3yV22tPIyHXrKXr3S0JxeYLrg==
+  dependencies:
+    glob "~11.1.0"
+    yargs "~17.7.0"
 
 npm-run-path@^5.1.0:
   version "5.3.0"
@@ -6091,6 +6151,14 @@ path-scurry@^2.0.0:
     lru-cache "^11.0.0"
     minipass "^7.1.2"
 
+path-scurry@^2.0.2:
+  version "2.0.2"
+  resolved "https://registry.yarnpkg.com/path-scurry/-/path-scurry-2.0.2.tgz#6be0d0ee02a10d9e0de7a98bae65e182c9061f85"
+  integrity sha512-3O/iVVsJAPsOnpwWIeD+d6z/7PmqApyQePUtCndjatj/9I5LylHvt5qluFaBT3I5h3r1ejfR056c+FCv+NnNXg==
+  dependencies:
+    lru-cache "^11.0.0"
+    minipass "^7.1.2"
+
 path-to-regexp@^6.3.0:
   version "6.3.0"
   resolved "https://registry.yarnpkg.com/path-to-regexp/-/path-to-regexp-6.3.0.tgz#2b6a26a337737a8e1416f9272ed0766b1c0389f4"
@@ -6105,6 +6173,62 @@ pend@~1.2.0:
   version "1.2.0"
   resolved "https://registry.yarnpkg.com/pend/-/pend-1.2.0.tgz#7a57eb550a6783f9115331fcf4663d5c8e007a50"
   integrity sha512-F3asv42UuXchdzt+xXqfW1OGlVBe+mxa2mqI0pg5yAHZPvFmY3Y6drSf/GQ1A86WgWEN9Kzh/WrgKa6iGcHXLg==
+
+pg-cloudflare@^1.3.0:
+  version "1.3.0"
+  resolved "https://registry.yarnpkg.com/pg-cloudflare/-/pg-cloudflare-1.3.0.tgz#386035d4bfcf1a7045b026f8b21acf5353f14d65"
+  integrity sha512-6lswVVSztmHiRtD6I8hw4qP/nDm1EJbKMRhf3HCYaqud7frGysPv7FYJ5noZQdhQtN2xJnimfMtvQq21pdbzyQ==
+
+pg-connection-string@^2.11.0:
+  version "2.11.0"
+  resolved "https://registry.yarnpkg.com/pg-connection-string/-/pg-connection-string-2.11.0.tgz#5dca53ff595df33ba9db812e181b19909866d10b"
+  integrity sha512-kecgoJwhOpxYU21rZjULrmrBJ698U2RxXofKVzOn5UDj61BPj/qMb7diYUR1nLScCDbrztQFl1TaQZT0t1EtzQ==
+
+pg-int8@1.0.1:
+  version "1.0.1"
+  resolved "https://registry.yarnpkg.com/pg-int8/-/pg-int8-1.0.1.tgz#943bd463bf5b71b4170115f80f8efc9a0c0eb78c"
+  integrity sha512-WCtabS6t3c8SkpDBUlb1kjOs7l66xsGdKpIPZsg4wR+B3+u9UAum2odSsF9tnvxg80h4ZxLWMy4pRjOsFIqQpw==
+
+pg-pool@^3.12.0:
+  version "3.12.0"
+  resolved "https://registry.yarnpkg.com/pg-pool/-/pg-pool-3.12.0.tgz#798c84ec7d42ba03fff056ebe575daa6e14feab8"
+  integrity sha512-eIJ0DES8BLaziFHW7VgJEBPi5hg3Nyng5iKpYtj3wbcAUV9A1wLgWiY7ajf/f/oO1wfxt83phXPY8Emztg7ITg==
+
+pg-protocol@^1.12.0:
+  version "1.12.0"
+  resolved "https://registry.yarnpkg.com/pg-protocol/-/pg-protocol-1.12.0.tgz#e9827f3e1dae6cdcb78d009cba5bb699d88ae998"
+  integrity sha512-uOANXNRACNdElMXJ0tPz6RBM0XQ61nONGAwlt8da5zs/iUOOCLBQOHSXnrC6fMsvtjxbOJrZZl5IScGv+7mpbg==
+
+pg-types@2.2.0:
+  version "2.2.0"
+  resolved "https://registry.yarnpkg.com/pg-types/-/pg-types-2.2.0.tgz#2d0250d636454f7cfa3b6ae0382fdfa8063254a3"
+  integrity sha512-qTAAlrEsl8s4OiEQY69wDvcMIdQN6wdz5ojQiOy6YRMuynxenON0O5oCpJI6lshc6scgAY8qvJ2On/p+CXY0GA==
+  dependencies:
+    pg-int8 "1.0.1"
+    postgres-array "~2.0.0"
+    postgres-bytea "~1.0.0"
+    postgres-date "~1.0.4"
+    postgres-interval "^1.1.0"
+
+pg@^8.11.3:
+  version "8.19.0"
+  resolved "https://registry.yarnpkg.com/pg/-/pg-8.19.0.tgz#2cb45322471c1ed05786ee7ec09bd91abdfe3eeb"
+  integrity sha512-QIcLGi508BAHkQ3pJNptsFz5WQMlpGbuBGBaIaXsWK8mel2kQ/rThYI+DbgjUvZrIr7MiuEuc9LcChJoEZK1xQ==
+  dependencies:
+    pg-connection-string "^2.11.0"
+    pg-pool "^3.12.0"
+    pg-protocol "^1.12.0"
+    pg-types "2.2.0"
+    pgpass "1.0.5"
+  optionalDependencies:
+    pg-cloudflare "^1.3.0"
+
+pgpass@1.0.5:
+  version "1.0.5"
+  resolved "https://registry.yarnpkg.com/pgpass/-/pgpass-1.0.5.tgz#9b873e4a564bb10fa7a7dbd55312728d422a223d"
+  integrity sha512-FdW9r/jQZhSeohs1Z3sI1yxFQNFvMcnmfuj4WBMUTxOrAyLMaTcE1aAMBiTlbMNaXvBCQuVi0R7hd8udDSP7ug==
+  dependencies:
+    split2 "^4.1.0"
 
 picocolors@^1.1.1:
   version "1.1.1"
@@ -6179,6 +6303,28 @@ playwright@1.49.0:
     playwright-core "1.49.0"
   optionalDependencies:
     fsevents "2.3.2"
+
+postgres-array@~2.0.0:
+  version "2.0.0"
+  resolved "https://registry.yarnpkg.com/postgres-array/-/postgres-array-2.0.0.tgz#48f8fce054fbc69671999329b8834b772652d82e"
+  integrity sha512-VpZrUqU5A69eQyW2c5CA1jtLecCsN2U/bD6VilrFDWq5+5UIEVO7nazS3TEcHf1zuPYO/sqGvUvW62g86RXZuA==
+
+postgres-bytea@~1.0.0:
+  version "1.0.1"
+  resolved "https://registry.yarnpkg.com/postgres-bytea/-/postgres-bytea-1.0.1.tgz#c40b3da0222c500ff1e51c5d7014b60b79697c7a"
+  integrity sha512-5+5HqXnsZPE65IJZSMkZtURARZelel2oXUEO8rH83VS/hxH5vv1uHquPg5wZs8yMAfdv971IU+kcPUczi7NVBQ==
+
+postgres-date@~1.0.4:
+  version "1.0.7"
+  resolved "https://registry.yarnpkg.com/postgres-date/-/postgres-date-1.0.7.tgz#51bc086006005e5061c591cee727f2531bf641a8"
+  integrity sha512-suDmjLVQg78nMK2UZ454hAG+OAW+HQPZ6n++TNDUX+L0+uUlLywnoxJKDou51Zm+zTCjrCl0Nq6J9C5hP9vK/Q==
+
+postgres-interval@^1.1.0:
+  version "1.2.0"
+  resolved "https://registry.yarnpkg.com/postgres-interval/-/postgres-interval-1.2.0.tgz#b460c82cb1587507788819a06aa0fffdb3544695"
+  integrity sha512-9ZhXKM/rw350N1ovuWHbGxnGh/SNJ4cnxHiM0rxE4VN41wsg8P8zWn9hv/buK00RP4WvlOyr/RBDiptyxVbkZQ==
+  dependencies:
+    xtend "^4.0.0"
 
 process-warning@^5.0.0:
   version "5.0.0"
@@ -6648,7 +6794,7 @@ source-map@^0.6.0, source-map@~0.6.1:
   resolved "https://registry.yarnpkg.com/source-map/-/source-map-0.6.1.tgz#74722af32e9614e9c287a8d0bbde48b5e2f1a263"
   integrity sha512-UjgapumWlbMhkBgzT7Ykc5YXUT46F0iKu8SGXq0bcwP5dz/h0Plj6enJqjz1Zbq2l5WaqYnrVbwWOWMyF3F47g==
 
-split2@^4.0.0:
+split2@^4.0.0, split2@^4.1.0:
   version "4.2.0"
   resolved "https://registry.yarnpkg.com/split2/-/split2-4.2.0.tgz#c9c5920904d148bab0b9f67145f245a86aadbfa4"
   integrity sha512-UcjcJOWknrNkF6PLX83qcHM6KHgVKNkV62Y8a5uYDVv9ydGQVwAHMKqHdJje1VTWpljG0WYpCDhrCdAOYH4TWg==
@@ -7141,6 +7287,11 @@ ws@^8.13.0, ws@^8.19.0:
   resolved "https://registry.yarnpkg.com/ws/-/ws-8.19.0.tgz#ddc2bdfa5b9ad860204f5a72a4863a8895fd8c8b"
   integrity sha512-blAT2mjOEIi0ZzruJfIhb3nps74PRWTCz1IjglWEEpQl5XS/UNama6u2/rjFkDDouqr4L67ry+1aGIALViWjDg==
 
+xtend@^4.0.0:
+  version "4.0.2"
+  resolved "https://registry.yarnpkg.com/xtend/-/xtend-4.0.2.tgz#bb72779f5fa465186b1f438f674fa347fdb5db54"
+  integrity sha512-LKYU1iAXJXUgAXn9URjiu+MWhyUXHsvfp7mcuYm9dSUKK0/CjtrUwFAxD82/mCWbtLsGjFIad0wIsod4zrTAEQ==
+
 xxhash-wasm@^1.1.0:
   version "1.1.0"
   resolved "https://registry.yarnpkg.com/xxhash-wasm/-/xxhash-wasm-1.1.0.tgz#ffe7f0b98220a4afac171e3fb9b6d1f8771f015e"
@@ -7156,7 +7307,7 @@ yargs-parser@^21.1.1:
   resolved "https://registry.yarnpkg.com/yargs-parser/-/yargs-parser-21.1.1.tgz#9096bceebf990d21bb31fa9516e0ede294a77d35"
   integrity sha512-tVpsJW7DdjecAiFpbIB1e3qxIQsE6NoPc5/eTdrbbIC4h0LVsWhnoa3g+m2HclBIujHzsxZ4VJVA+GUuc2/LBw==
 
-yargs@^17.7.2:
+yargs@^17.7.2, yargs@~17.7.0:
   version "17.7.2"
   resolved "https://registry.yarnpkg.com/yargs/-/yargs-17.7.2.tgz#991df39aca675a192b816e1e0363f9d75d2aa269"
   integrity sha512-7dSzzRQ++CKnNI/krKnYRV7JKKPUXMEh61soaHKg9mrWEhzFWhFnxPxGl+69cD1Ou63C13NUPCnmIcrvqCuM6w==

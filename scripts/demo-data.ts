@@ -18,7 +18,7 @@ import { Fr } from '@aztec/aztec.js/fields';
 import { PriceFeedContract, PriceFeedContractArtifact } from '@aztec/noir-contracts.js/PriceFeed';
 import { TokenContract, TokenContractArtifact } from '../src/artifacts/Token';
 import { AMMContract, AMMContractArtifact } from '../src/artifacts/AMM';
-import { AuditableTestWallet } from '@aztec/note-collector';
+import { EmbeddedWallet } from '@aztec/wallets/embedded';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import type { PoolState } from '../src/rebalance';
@@ -101,7 +101,7 @@ async function demoData() {
     console.log(`Connected to Aztec node at "${AZTEC_NODE_URL}"`);
 
     // --- Register all 3 test accounts ---
-    const wallet = await AuditableTestWallet.create(node, { proverEnabled: false });
+    const wallet = await EmbeddedWallet.create(node, { ephemeral: true, pxeConfig: { proverEnabled: false } });
     const accounts = await getInitialTestAccountsData();
     const addresses: AztecAddress[] = [];
     for (const account of accounts) {

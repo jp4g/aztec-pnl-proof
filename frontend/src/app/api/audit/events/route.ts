@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AztecAddress } from "@aztec/aztec.js/addresses";
 import { createAztecNodeClient } from "@aztec/aztec.js/node";
-import { TagGenerator } from "@aztec/note-collector";
+import { TagGenerator } from "@proof/auditor";
 import { DirectionalAppTaggingSecret } from "@aztec/stdlib/logs";
 import { poseidon2Hash } from "@aztec/foundation/crypto/poseidon";
 

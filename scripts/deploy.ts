@@ -24,7 +24,7 @@ import { createAztecNodeClient, type AztecNode } from '@aztec/aztec.js/node';
 import { PriceFeedContract } from '@aztec/noir-contracts.js/PriceFeed';
 import { TokenContract } from '../src/artifacts/Token';
 import { AMMContract } from '../src/artifacts/AMM';
-import { AuditableTestWallet } from '@aztec/note-collector';
+import { EmbeddedWallet } from '@aztec/wallets/embedded';
 import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 
@@ -141,7 +141,7 @@ async function setup() {
     console.log(`Connected to Aztec node at "${AZTEC_NODE_URL}"`);
 
     // Create wallet with first test account as admin
-    const wallet = await AuditableTestWallet.create(node, { proverEnabled: false });
+    const wallet = await EmbeddedWallet.create(node, { ephemeral: true, pxeConfig: { proverEnabled: false } });
     const accounts = await getInitialTestAccountsData();
     const addresses: AztecAddress[] = [];
     for (const account of accounts) {

@@ -19,7 +19,7 @@
     "@aztec/pxe": "file:../aztec-packages/yarn-project/pxe",
     "@aztec/stdlib": "file:../aztec-packages/yarn-project/stdlib",
     "@aztec/test-wallet": "file:../aztec-packages/yarn-project/test-wallet",
-    "@aztec/note-collector": "file:../aztec-packages/yarn-project/note-collector",
+    "@aztec/wallets": "file:../aztec-packages/yarn-project/wallets",
     "@aztec/bb.js": "file:../aztec-packages/barretenberg/ts",
     "@aztec/noir-noir_js": "file:../aztec-packages/noir/packages/noir_js",
     "@aztec/noir-types": "file:../aztec-packages/noir/packages/types"
@@ -42,6 +42,7 @@
     "@aztec/noir-noir_js": "file:../aztec-packages/noir/packages/noir_js",
     "@aztec/noir-noirc_abi": "file:../aztec-packages/noir/packages/noirc_abi",
     "@aztec/noir-types": "file:../aztec-packages/noir/packages/types",
+    "@aztec/blob-client": "file:../aztec-packages/yarn-project/blob-client",
     "@aztec/blob-lib": "file:../aztec-packages/yarn-project/blob-lib",
     "@aztec/blob-sink": "file:../aztec-packages/yarn-project/blob-sink",
     "@aztec/bot": "file:../aztec-packages/yarn-project/bot",
@@ -64,7 +65,6 @@
     "@aztec/noir-contracts.js": "file:../aztec-packages/yarn-project/noir-contracts.js",
     "@aztec/noir-protocol-circuits-types": "file:../aztec-packages/yarn-project/noir-protocol-circuits-types",
     "@aztec/noir-test-contracts.js": "file:../aztec-packages/yarn-project/noir-test-contracts.js",
-    "@aztec/note-collector": "file:../aztec-packages/yarn-project/note-collector",
     "@aztec/p2p": "file:../aztec-packages/yarn-project/p2p",
     "@aztec/p2p-bootstrap": "file:../aztec-packages/yarn-project/p2p-bootstrap",
     "@aztec/protocol-contracts": "file:../aztec-packages/yarn-project/protocol-contracts",
@@ -79,7 +79,9 @@
     "@aztec/test-wallet": "file:../aztec-packages/yarn-project/test-wallet",
     "@aztec/txe": "file:../aztec-packages/yarn-project/txe",
     "@aztec/validator-client": "file:../aztec-packages/yarn-project/validator-client",
+    "@aztec/validator-ha-signer": "file:../aztec-packages/yarn-project/validator-ha-signer",
     "@aztec/wallet-sdk": "file:../aztec-packages/yarn-project/wallet-sdk",
+    "@aztec/wallets": "file:../aztec-packages/yarn-project/wallets",
     "@aztec/world-state": "file:../aztec-packages/yarn-project/world-state"
   },
   "packageManager": "yarn@1.22.22"

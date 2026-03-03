@@ -86,24 +86,6 @@
     "@aztec/aztec.js" "workspace:^"
     tslib "^2.4.0"
 
-"@aztec/note-collector@file:../../aztec-packages/yarn-project/note-collector":
-  version "0.1.0"
-  resolved "file:../../aztec-packages/yarn-project/note-collector"
-  dependencies:
-    "@aztec/accounts" "workspace:^"
-    "@aztec/aztec.js" "workspace:^"
-    "@aztec/bb-prover" "workspace:^"
-    "@aztec/entrypoints" "workspace:^"
-    "@aztec/foundation" "workspace:^"
-    "@aztec/key-store" "workspace:^"
-    "@aztec/kv-store" "workspace:^"
-    "@aztec/protocol-contracts" "workspace:^"
-    "@aztec/pxe" "workspace:^"
-    "@aztec/simulator" "workspace:^"
-    "@aztec/stdlib" "workspace:^"
-    "@aztec/wallet-sdk" "workspace:^"
-    tslib "^2.4.0"
-
 "@aztec/pxe@file:../../aztec-packages/yarn-project/pxe":
   version "0.1.0"
   resolved "file:../../aztec-packages/yarn-project/pxe"

@@ -13,10 +13,9 @@ import { SPONSORED_FPC_SALT } from "@aztec/constants";
 import { GrumpkinScalar } from "@aztec/foundation/curves/grumpkin";
 import type { FieldsOf } from "@aztec/foundation/types";
 import { SchnorrAccountContract } from "@aztec/accounts/schnorr/lazy";
-import { AuditableWallet } from "@aztec/note-collector/client/wallet";
-import { createBrowserAuditablePXE } from "@aztec/note-collector/client/browser";
+import { createPXE, type TaggingSecretExport } from "@aztec/pxe/client/lazy";
 import { getPXEConfig } from "@aztec/pxe/config";
-import { type FeeOptions } from "@aztec/wallet-sdk/base-wallet";
+import { BaseWallet, type FeeOptions } from "@aztec/wallet-sdk/base-wallet";
 import { GasSettings } from "@aztec/stdlib/gas";
 
 const logger = createLogger("privdex:wallet");
@@ -154,7 +153,7 @@ function setStoredActiveAddress(address: string) {
 
 
 
-export class EmbeddedAuditableWallet extends AuditableWallet {
+export class EmbeddedAuditableWallet extends BaseWallet {
   connectedAccount: AztecAddress | null = null;
   protected accounts: Map<string, Account> = new Map();
   private internalAccounts = new Set<string>();
@@ -199,9 +198,7 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
 
     const config = getPXEConfig();
     config.proverEnabled = false;
-    const pxe = await createBrowserAuditablePXE(aztecNode, config, {
-      useLogSuffix: true,
-    });
+    const pxe = await createPXE(aztecNode, config, {});
 
     // Register sponsored FPC on the PXE
     const { SponsoredFPCContractArtifact } = await import(
@@ -454,6 +451,14 @@ export class EmbeddedAuditableWallet extends AuditableWallet {
     }
     this.connectedAccount = address;
     setStoredActiveAddress(key);
+  }
+
+  exportTaggingSecrets(
+    account: AztecAddress,
+    apps: AztecAddress[],
+    counterparties?: AztecAddress[],
+  ): Promise<TaggingSecretExport> {
+    return this.pxe.exportTaggingSecrets(account, apps, counterparties);
   }
 
   async getAuditProofInputs(account: AztecAddress, poolAddresses: AztecAddress[]) {
