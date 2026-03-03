@@ -98,7 +98,7 @@ export function TokenProvider({ children }: { children: ReactNode }) {
 
       const { AztecAddress } = await import("@aztec/aztec.js/addresses");
       const { Contract } = await import("@aztec/aztec.js/contracts");
-      const { TokenContractArtifact } = await import("@/artifacts/Token");
+      const { TokenContractArtifact } = await import("@aztec/noir-contracts.js/Token");
 
       const usdcAddressStr = process.env.NEXT_PUBLIC_TOKEN_USDC;
       if (!usdcAddressStr) throw new Error("NEXT_PUBLIC_TOKEN_USDC not set");

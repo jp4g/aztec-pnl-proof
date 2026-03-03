@@ -159,7 +159,7 @@ export default function SwapCard() {
       const { AztecAddress } = await import("@aztec/aztec.js/addresses");
       const { Contract } = await import("@aztec/aztec.js/contracts");
       const { Fr } = await import("@aztec/aztec.js/fields");
-      const { TokenContractArtifact } = await import("@/artifacts/Token");
+      const { TokenContractArtifact } = await import("@aztec/noir-contracts.js/Token");
       const { AMMContractArtifact } = await import("@/artifacts/AMM");
 
       const poolAddr = AztecAddress.fromString(poolAddrHex);

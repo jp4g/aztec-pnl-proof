@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AztecAddress } from "@aztec/aztec.js/addresses";
 import { createAztecNodeClient } from "@aztec/aztec.js/node";
-import { TagGenerator } from "@proof/auditor";
-import { DirectionalAppTaggingSecret } from "@aztec/stdlib/logs";
-import { poseidon2Hash } from "@aztec/foundation/crypto/poseidon";
+import { TagGenerator } from "@proof/auditor/tag-generator";
+import { DirectionalAppTaggingSecret, Tag, SiloedTag } from "@aztec/stdlib/logs";
 
 const AZTEC_NODE_URL = process.env.NEXT_PUBLIC_AZTEC_NODE_URL ?? "http://localhost:8080";
 
@@ -49,18 +48,19 @@ export async function POST(request: NextRequest) {
         const count = Math.min(batchSize, maxIndices - index);
         const baseTags = await TagGenerator.generateTags(secret, index, count);
         const siloedTags = await Promise.all(
-          baseTags.map(async (baseTag) => poseidon2Hash([app, baseTag]))
+          baseTags.map(async (baseTag) => SiloedTag.compute(new Tag(baseTag), app))
         );
 
-        const logsPerTag = await node.getLogsByTags(siloedTags);
+        const logsPerTag = await node.getPrivateLogsByTags(siloedTags);
 
         for (let i = 0; i < logsPerTag.length; i++) {
           for (const log of logsPerTag[i]) {
+            const ciphertextBuffer = Buffer.concat(log.logData.map((f: any) => f.toBuffer()));
             events.push({
               txHash: log.txHash.toString(),
               blockNumber: log.blockNumber.toString(),
-              ciphertext: log.log.toBuffer().toString("hex"),
-              logIndex: log.logIndexInTx,
+              ciphertext: ciphertextBuffer.toString("hex"),
+              logIndex: 0,
               tagIndex: index + i,
             });
           }

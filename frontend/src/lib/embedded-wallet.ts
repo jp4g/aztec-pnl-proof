@@ -33,22 +33,22 @@ const CONTRACT_REGISTRY: ContractRegistryEntry[] = [
   {
     label: "Token (USDC)",
     address: process.env.NEXT_PUBLIC_TOKEN_USDC,
-    loadArtifact: () => import("../artifacts/Token").then((m) => m.TokenContractArtifact),
+    loadArtifact: () => import("@aztec/noir-contracts.js/Token").then((m) => m.TokenContractArtifact),
   },
   {
     label: "Token (wETH)",
     address: process.env.NEXT_PUBLIC_TOKEN_WETH,
-    loadArtifact: () => import("../artifacts/Token").then((m) => m.TokenContractArtifact),
+    loadArtifact: () => import("@aztec/noir-contracts.js/Token").then((m) => m.TokenContractArtifact),
   },
   {
     label: "Token (wZEC)",
     address: process.env.NEXT_PUBLIC_TOKEN_WZEC,
-    loadArtifact: () => import("../artifacts/Token").then((m) => m.TokenContractArtifact),
+    loadArtifact: () => import("@aztec/noir-contracts.js/Token").then((m) => m.TokenContractArtifact),
   },
   {
     label: "Token (wAZTEC)",
     address: process.env.NEXT_PUBLIC_TOKEN_WAZTEC,
-    loadArtifact: () => import("../artifacts/Token").then((m) => m.TokenContractArtifact),
+    loadArtifact: () => import("@aztec/noir-contracts.js/Token").then((m) => m.TokenContractArtifact),
   },
   {
     label: "PriceFeed",
@@ -73,17 +73,17 @@ const CONTRACT_REGISTRY: ContractRegistryEntry[] = [
   {
     label: "LP (ETH/USDC)",
     address: process.env.NEXT_PUBLIC_LP_ETH_USDC,
-    loadArtifact: () => import("../artifacts/Token").then((m) => m.TokenContractArtifact),
+    loadArtifact: () => import("@aztec/noir-contracts.js/Token").then((m) => m.TokenContractArtifact),
   },
   {
     label: "LP (ZEC/USDC)",
     address: process.env.NEXT_PUBLIC_LP_ZEC_USDC,
-    loadArtifact: () => import("../artifacts/Token").then((m) => m.TokenContractArtifact),
+    loadArtifact: () => import("@aztec/noir-contracts.js/Token").then((m) => m.TokenContractArtifact),
   },
   {
     label: "LP (AZTEC/USDC)",
     address: process.env.NEXT_PUBLIC_LP_AZTEC_USDC,
-    loadArtifact: () => import("../artifacts/Token").then((m) => m.TokenContractArtifact),
+    loadArtifact: () => import("@aztec/noir-contracts.js/Token").then((m) => m.TokenContractArtifact),
   },
 ];
 
@@ -99,17 +99,17 @@ interface StoredAccount {
 const DEMO_ACCOUNTS: StoredAccount[] = [
   {
     // accounts[2] — "winner" demo account (6 profitable swaps)
-    address: "0x08cad1e03676948f661bc00df74eadac619fc961aa8bf9ee7ca9e9b64291485c",
+    address: "0x17d474561f3cc64c896779fad1220017139791d250cff95370d239656c4aaeae",
     secretKey: "0x0f6addf0da06c33293df974a565b03d1ab096090d907d98055a8b7f4954e120c",
-    signingKey: "0x1a13d68e8713f34653bd523832a5d7041f5721f06e6dfa99061fe91a08e66a66",
+    signingKey: "0x22a37cf85375a80c4c462062586179e0543473dec7e43f2f10b81198fc7e9b07",
     salt: "0x0000000000000000000000000000000000000000000000000000000000000000",
     isDemo: true,
   },
   {
     // accounts[1] — "loser" demo account (12 losing swaps)
-    address: "0x0c28d3544b8c71648627c230b8e10ff7bdafb364957867473dbcf3c4f483b064",
+    address: "0x1b755492d6dd51deb08b7e51a33133186687ea13527f07921fd74640dc8dec24",
     secretKey: "0x0aebd1b4be76efa44f5ee655c20bf9ea60f7ae44b9a7fd1fd9f189c7a0b0cdae",
-    signingKey: "0x014296867376e488f9e6673f1c36f3ba366e8cbf857b956325106e365a518531",
+    signingKey: "0x06eee295d74d9d4e6aec5e3106d7ba7b2c0c3ec2873e7e9149449aae96696270",
     salt: "0x0000000000000000000000000000000000000000000000000000000000000000",
     isDemo: true,
   },

@@ -261,7 +261,7 @@ export default function PriceCard() {
       const { AztecAddress } = await import("@aztec/aztec.js/addresses");
       const { Contract } = await import("@aztec/aztec.js/contracts");
       const { PriceFeedContractArtifact } = await import("@aztec/noir-contracts.js/PriceFeed");
-      const { TokenContractArtifact } = await import("@/artifacts/Token");
+      const { TokenContractArtifact } = await import("@aztec/noir-contracts.js/Token");
 
       const pfAddr = process.env.NEXT_PUBLIC_PRICE_FEED;
       if (!pfAddr) throw new Error("NEXT_PUBLIC_PRICE_FEED not set");

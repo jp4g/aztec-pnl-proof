@@ -59,7 +59,7 @@ export function useTokenBalances() {
         try {
           const { AztecAddress } = await import("@aztec/aztec.js/addresses");
           const { Contract } = await import("@aztec/aztec.js/contracts");
-          const { TokenContractArtifact } = await import("@/artifacts/Token");
+          const { TokenContractArtifact } = await import("@aztec/noir-contracts.js/Token");
 
           const token = await Contract.at(
             AztecAddress.fromString(tokenAddr),
