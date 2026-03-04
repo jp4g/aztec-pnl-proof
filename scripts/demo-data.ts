@@ -21,7 +21,7 @@ import { AMMContract, AMMContractArtifact } from '../src/artifacts/AMM';
 import { EmbeddedWallet } from '@aztec/wallets/embedded';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import type { PoolState } from '../src/rebalance';
+import { rebalancePools, type PoolState } from '../src/rebalance';
 import { SponsoredFeePaymentMethod } from '@aztec/aztec.js/fee';
 import { getContractInstanceFromInstantiationParams } from '@aztec/aztec.js/contracts';
 import { SPONSORED_FPC_SALT } from '@aztec/constants';
@@ -30,6 +30,7 @@ import { SponsoredFPCContract } from '@aztec/noir-contracts.js/SponsoredFPC';
 const { AZTEC_NODE_URL = 'http://localhost:8080' } = process.env;
 
 const USDC_DECIMALS = 6;
+const TOKEN_DECIMALS = 9;
 
 interface DeployedInfra {
     admin: string;
@@ -276,9 +277,9 @@ async function demoData() {
 
     // All pools are token/USDC where token0=token, token1=USDC
     const poolStates: Record<PoolKey, PoolState> = {
-        'wETH/USDC':   { contract: ammEthUsdc,   token0: weth,   token1: usdc_token, ...ethReserves },
-        'wZEC/USDC':   { contract: ammZecUsdc,   token0: wzec,   token1: usdc_token, ...zecReserves },
-        'wAZTEC/USDC': { contract: ammAztecUsdc, token0: waztec, token1: usdc_token, ...aztecReserves },
+        'wETH/USDC':   { contract: ammEthUsdc,   token0: weth,   token1: usdc_token, ...ethReserves,   decimals0: TOKEN_DECIMALS, decimals1: USDC_DECIMALS },
+        'wZEC/USDC':   { contract: ammZecUsdc,   token0: wzec,   token1: usdc_token, ...zecReserves,   decimals0: TOKEN_DECIMALS, decimals1: USDC_DECIMALS },
+        'wAZTEC/USDC': { contract: ammAztecUsdc, token0: waztec, token1: usdc_token, ...aztecReserves, decimals0: TOKEN_DECIMALS, decimals1: USDC_DECIMALS },
     };
 
     // Base oracle prices from deployment
@@ -298,26 +299,24 @@ async function demoData() {
         const def = SWAP_DEFS[i];
         const mult = PRICE_MULTIPLIERS[i];
 
-        // Update oracle prices when multipliers change
-        // NOTE: We only set oracle prices, not rebalance AMM reserves.
-        // The rebalancer (src/rebalance.ts) assumes same-decimal tokens and overflows
-        // with mixed decimals (USDC=6, tokens=18). The oracle price is what the proof
-        // circuit reads for PnL; AMM prices just determine the actual swap rate.
+        // Update oracle prices and rebalance pools when multipliers change
         if (i > 0) {
             const prevMult = PRICE_MULTIPLIERS[i - 1];
             const changed = mult.wETH !== prevMult.wETH || mult.wZEC !== prevMult.wZEC || mult.wAZTEC !== prevMult.wAZTEC;
             if (changed) {
-                console.log(`\n  Updating oracle prices (ETH:${mult.wETH}x, ZEC:${mult.wZEC}x, AZTEC:${mult.wAZTEC}x)`);
-                const newPrices: [typeof weth, bigint][] = [
-                    [usdc_token, BigInt(Math.round(Number(baseOraclePrices.USDC) * mult.USDC))],
-                    [weth,       BigInt(Math.round(Number(baseOraclePrices.wETH) * mult.wETH))],
-                    [wzec,       BigInt(Math.round(Number(baseOraclePrices.wZEC) * mult.wZEC))],
-                    [waztec,     BigInt(Math.round(Number(baseOraclePrices.wAZTEC) * mult.wAZTEC))],
-                ];
-                for (const [token, price] of newPrices) {
-                    await priceFeed.methods.set_price(token.address.toField(), price)
-                        .send(sendOpts(admin));
-                }
+                console.log(`\n  Updating oracle prices & rebalancing (ETH:${mult.wETH}x, ZEC:${mult.wZEC}x, AZTEC:${mult.wAZTEC}x)`);
+                await rebalancePools({
+                    priceFeed,
+                    minter: admin,
+                    pools: Object.values(poolStates),
+                    tokenPrices: [
+                        { token: usdc_token, price: BigInt(Math.round(Number(baseOraclePrices.USDC) * mult.USDC)) },
+                        { token: weth,       price: BigInt(Math.round(Number(baseOraclePrices.wETH) * mult.wETH)) },
+                        { token: wzec,       price: BigInt(Math.round(Number(baseOraclePrices.wZEC) * mult.wZEC)) },
+                        { token: waztec,     price: BigInt(Math.round(Number(baseOraclePrices.wAZTEC) * mult.wAZTEC)) },
+                    ],
+                    sendOpts,
+                });
             }
         }
 
@@ -468,22 +467,24 @@ async function demoData() {
         const def = LOSER_SWAP_DEFS[i];
         const mult = LOSER_PRICE_MULTIPLIERS[i];
 
-        // Update oracle prices when multipliers change
+        // Update oracle prices and rebalance pools when multipliers change
         if (i > 0) {
             const prevMult = LOSER_PRICE_MULTIPLIERS[i - 1];
             const changed = mult.wETH !== prevMult.wETH || mult.wZEC !== prevMult.wZEC || mult.wAZTEC !== prevMult.wAZTEC;
             if (changed) {
-                console.log(`\n  Updating oracle prices (ETH:${mult.wETH}x, ZEC:${mult.wZEC}x, AZTEC:${mult.wAZTEC}x)`);
-                const newPrices: [typeof weth, bigint][] = [
-                    [usdc_token, BigInt(Math.round(Number(baseOraclePrices.USDC) * mult.USDC))],
-                    [weth,       BigInt(Math.round(Number(baseOraclePrices.wETH) * mult.wETH))],
-                    [wzec,       BigInt(Math.round(Number(baseOraclePrices.wZEC) * mult.wZEC))],
-                    [waztec,     BigInt(Math.round(Number(baseOraclePrices.wAZTEC) * mult.wAZTEC))],
-                ];
-                for (const [token, price] of newPrices) {
-                    await priceFeed.methods.set_price(token.address.toField(), price)
-                        .send(sendOpts(admin));
-                }
+                console.log(`\n  Updating oracle prices & rebalancing (ETH:${mult.wETH}x, ZEC:${mult.wZEC}x, AZTEC:${mult.wAZTEC}x)`);
+                await rebalancePools({
+                    priceFeed,
+                    minter: admin,
+                    pools: Object.values(poolStates),
+                    tokenPrices: [
+                        { token: usdc_token, price: BigInt(Math.round(Number(baseOraclePrices.USDC) * mult.USDC)) },
+                        { token: weth,       price: BigInt(Math.round(Number(baseOraclePrices.wETH) * mult.wETH)) },
+                        { token: wzec,       price: BigInt(Math.round(Number(baseOraclePrices.wZEC) * mult.wZEC)) },
+                        { token: waztec,     price: BigInt(Math.round(Number(baseOraclePrices.wAZTEC) * mult.wAZTEC)) },
+                    ],
+                    sendOpts,
+                });
             }
         }
 
@@ -542,19 +543,21 @@ async function demoData() {
         }
     }
 
-    // --- Reset oracle prices to base (1.0x) values ---
-    console.log('\n--- Resetting oracle prices to base values ---');
-    const resetPrices: [typeof weth, bigint, string][] = [
-        [usdc_token, baseOraclePrices.USDC, 'USDC'],
-        [weth,       baseOraclePrices.wETH, 'wETH'],
-        [wzec,       baseOraclePrices.wZEC, 'wZEC'],
-        [waztec,     baseOraclePrices.wAZTEC, 'wAZTEC'],
-    ];
-    for (const [token, price, name] of resetPrices) {
-        await priceFeed.methods.set_price(token.address.toField(), price)
-            .send(sendOpts(admin));
-        console.log(`  ${name} = ${price}`);
-    }
+    // --- Reset oracle prices to base (1.0x) values and rebalance ---
+    console.log('\n--- Resetting oracle prices to base values & rebalancing ---');
+    await rebalancePools({
+        priceFeed,
+        minter: admin,
+        pools: Object.values(poolStates),
+        tokenPrices: [
+            { token: usdc_token, price: baseOraclePrices.USDC },
+            { token: weth,       price: baseOraclePrices.wETH },
+            { token: wzec,       price: baseOraclePrices.wZEC },
+            { token: waztec,     price: baseOraclePrices.wAZTEC },
+        ],
+        sendOpts,
+    });
+    console.log('  Prices reset and pools rebalanced');
 
     console.log('\n=== Demo data complete! ===');
     console.log(`Winner (accounts[2]): ${demoUser} — 6 swaps, net profit`);

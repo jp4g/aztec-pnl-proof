@@ -266,6 +266,13 @@ export function useProveFlow() {
         }
       }
 
+      console.log(`[prove] Discovered ${encryptedEvents.length} events, decoded ${decodedSwaps.length} swaps`);
+      decodedSwaps.forEach((s, i) => {
+        const tIn = resolveToken(s.tokenIn);
+        const tOut = resolveToken(s.tokenOut);
+        console.log(`  [${i}] ${tIn.symbol} -> ${tOut.symbol}: in=${s.amountIn} out=${s.amountOut} block=${s.blockNumber}`);
+      });
+
       // Build initial tree visualization
       const treeViz = buildTreeNodes(totalSwaps, 0, null);
 
@@ -336,7 +343,7 @@ export function useProveFlow() {
         const usdcField = Fr.fromString(usdcAddr);
         await lotStateTree.setLots(
           usdcField,
-          [{ amount: 100_000n * 10n ** 6n, costPerUnit: 10n }],
+          [{ amount: 100_000n * 10n ** 6n, costPerUnit: 10_000n }],
           1
         );
       }

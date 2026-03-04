@@ -124,9 +124,17 @@ export async function POST(request: NextRequest) {
 
     events.sort((a, b) => Number(a.blockNumber) - Number(b.blockNumber));
 
+    // Deduplicate by txHash
+    const seen = new Set<string>();
+    const unique = events.filter(e => {
+      if (seen.has(e.txHash)) return false;
+      seen.add(e.txHash);
+      return true;
+    });
+
     return NextResponse.json({
-      events,
-      totalEvents: events.length,
+      events: unique,
+      totalEvents: unique.length,
     });
   } catch (error: any) {
     console.error("Event retrieval error:", error);

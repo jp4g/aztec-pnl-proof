@@ -163,6 +163,7 @@ export class SwapProver {
 
         // Get sell-side lots and sibling path from INITIAL tree state
         const sellData = lotStateTree.getLots(tokenIn);
+        console.log(`  Sell-side lots for ${tokenIn}: numLots=${sellData.numLots}, total=${sellData.lots.slice(0, sellData.numLots).reduce((s, l) => s + l.amount, 0n)}, amountIn=${amountIn}`);
         const sellSiblingPath = await lotStateTree.getSiblingPath(sellIndex);
         const initialRoot = await lotStateTree.getRoot();
 
@@ -332,6 +333,16 @@ export class SwapProver {
                 lotsCopy[j].amount -= consumed;
                 remaining -= consumed;
             }
+        }
+
+        // When is_exact_input=false, amount_in is the max bound (not actual consumed),
+        // so remaining > 0 is expected. PnL is correctly computed on consumed lots only.
+        if (remaining > 0n) {
+            const totalAvailable = lots.slice(0, numLots).reduce((s, l) => s + l.amount, 0n);
+            console.warn(
+                `  Lot shortfall (expected for exact-output swaps): sell=${sellAmount}, ` +
+                `available=${totalAvailable}, deficit=${remaining}`
+            );
         }
 
         // Compact

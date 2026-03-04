@@ -7,7 +7,8 @@ import { Token } from "@/types";
 import TokenIcon from "@/components/ui/TokenIcon";
 import ProgressBar from "@/components/ui/ProgressBar";
 import { useAztecWallet } from "@/hooks/useAztecWallet";
-import { TOKEN_ADDRESSES } from "@/hooks/useTokenBalances";
+import { TOKEN_ADDRESSES, TOKEN_DECIMALS } from "@/hooks/useTokenBalances";
+import { rebalancePools, type PoolState, type TokenPrice } from "@proof/rebalance";
 import { useToast } from "@/hooks/useToast";
 
 const PRICE_PRECISION = 10_000;
@@ -273,48 +274,42 @@ export default function PriceCard() {
         wallet
       );
 
-      // Build price map: symbol -> oracle price (bigint, with precision)
-      const priceMap = new Map<string, bigint>();
+      // Build token prices for all tokens (including USDC which isn't in rows)
+      const tokenPrices: TokenPrice[] = [];
+      const priceBySymbol = new Map<string, number>();
       for (const row of rows) {
         const price = parseFloat(row.newPrice || row.currentPrice);
-        if (!isNaN(price)) {
-          priceMap.set(row.symbol, BigInt(Math.round(price * PRICE_PRECISION)));
-        }
+        if (!isNaN(price)) priceBySymbol.set(row.symbol, price);
+      }
+      // USDC is always $1
+      priceBySymbol.set("USDC", 1.0);
+
+      for (const [symbol, price] of priceBySymbol) {
+        const addrStr = TOKEN_ADDRESSES[symbol];
+        if (!addrStr) continue;
+        const addr = AztecAddress.fromString(addrStr);
+        tokenPrices.push({
+          token: { address: addr } as TokenPrice["token"],
+          price: BigInt(Math.round(price * PRICE_PRECISION)),
+        });
       }
 
-      // 1. Set oracle prices for changed tokens
-      for (const changed of changedTokens) {
-        currentStep++;
-        setProgress({ step: currentStep, total: totalSteps, label: `Setting ${changed.symbol} price...` });
+      setProgress({ step: 1, total: totalSteps, label: "Setting oracle prices..." });
 
-        const tokenAddrStr = TOKEN_ADDRESSES[changed.symbol];
-        if (!tokenAddrStr) continue;
-
-        const tokenAddr = AztecAddress.fromString(tokenAddrStr);
-        const oraclePrice = priceMap.get(changed.symbol)!;
-
-        await priceFeed.methods
-          .set_price(tokenAddr.toField(), oraclePrice)
-          .send({ from: adminRef.current });
-      }
-
-      // 2. Rebalance affected pools
+      const poolStates: PoolState[] = [];
       for (const pool of affectedPools) {
-        currentStep++;
-        setProgress({ step: currentStep, total: totalSteps, label: `Rebalancing ${pool.label}...` });
-
         if (!pool.address) continue;
-
         const poolAddr = AztecAddress.fromString(pool.address);
         const token0AddrStr = TOKEN_ADDRESSES[pool.token0];
         const token1AddrStr = TOKEN_ADDRESSES[pool.token1];
         if (!token0AddrStr || !token1AddrStr) continue;
 
-        const token0Addr = AztecAddress.fromString(token0AddrStr);
-        const token1Addr = AztecAddress.fromString(token1AddrStr);
-
-        const token0Contract = await Contract.at(token0Addr, TokenContractArtifact, wallet);
-        const token1Contract = await Contract.at(token1Addr, TokenContractArtifact, wallet);
+        const token0Contract = await Contract.at(
+          AztecAddress.fromString(token0AddrStr), TokenContractArtifact, wallet
+        );
+        const token1Contract = await Contract.at(
+          AztecAddress.fromString(token1AddrStr), TokenContractArtifact, wallet
+        );
 
         const owner = AztecAddress.fromString(address);
         const [reserve0Raw, reserve1Raw] = await Promise.all([
@@ -322,36 +317,24 @@ export default function PriceCard() {
           token1Contract.methods.balance_of_public(poolAddr).simulate({ from: owner }),
         ]);
 
-        const reserve0 = typeof reserve0Raw === "bigint" ? reserve0Raw : BigInt(reserve0Raw.toString());
-        const reserve1 = typeof reserve1Raw === "bigint" ? reserve1Raw : BigInt(reserve1Raw.toString());
-
-        const p0 = priceMap.get(pool.token0);
-        const p1 = priceMap.get(pool.token1);
-        if (p0 === undefined || p1 === undefined) continue;
-
-        const value0 = reserve0 * p0;
-        const value1 = reserve1 * p1;
-
-        if (value0 > value1 && p1 > BigInt(0)) {
-          // Mint token1 to balance
-          const targetR1 = reserve0 * p0 / p1;
-          const toMint = targetR1 - reserve1;
-          if (toMint > BigInt(0)) {
-            await token1Contract.methods
-              .mint_to_public(poolAddr, toMint)
-              .send({ from: adminRef.current });
-          }
-        } else if (value1 > value0 && p0 > BigInt(0)) {
-          // Mint token0 to balance
-          const targetR0 = reserve1 * p1 / p0;
-          const toMint = targetR0 - reserve0;
-          if (toMint > BigInt(0)) {
-            await token0Contract.methods
-              .mint_to_public(poolAddr, toMint)
-              .send({ from: adminRef.current });
-          }
-        }
+        poolStates.push({
+          contract: { address: poolAddr } as PoolState["contract"],
+          token0: token0Contract as unknown as PoolState["token0"],
+          token1: token1Contract as unknown as PoolState["token1"],
+          reserve0: typeof reserve0Raw === "bigint" ? reserve0Raw : BigInt(reserve0Raw.toString()),
+          reserve1: typeof reserve1Raw === "bigint" ? reserve1Raw : BigInt(reserve1Raw.toString()),
+          decimals0: TOKEN_DECIMALS[pool.token0] ?? 9,
+          decimals1: TOKEN_DECIMALS[pool.token1] ?? 9,
+        });
       }
+
+      await rebalancePools({
+        priceFeed: priceFeed as unknown as Parameters<typeof rebalancePools>[0]["priceFeed"],
+        minter: adminRef.current,
+        pools: poolStates,
+        tokenPrices,
+        sendOpts: (from) => ({ from }),
+      });
 
       // Update current prices to new prices
       setRows((prev) =>

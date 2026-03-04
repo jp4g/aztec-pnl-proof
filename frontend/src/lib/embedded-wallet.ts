@@ -202,7 +202,7 @@ export class EmbeddedAuditableWallet extends BaseWallet {
     const aztecNode = createAztecNodeClient(nodeUrl);
 
     const config = getPXEConfig();
-    config.proverEnabled = false;
+    config.proverEnabled = true;
     const pxe = await createPXE(aztecNode, config, {});
 
     // Register sponsored FPC on the PXE

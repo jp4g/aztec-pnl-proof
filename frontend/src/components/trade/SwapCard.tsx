@@ -4,9 +4,7 @@ import { useState, useCallback, useEffect, useMemo } from "react";
 import { Icon } from "@iconify/react";
 import {
   TOKENS,
-  MOCK_PRICES,
   getSwappableTokens,
-  type TokenSymbol,
 } from "@/data/dummy";
 import { Token } from "@/types";
 import TokenIcon from "@/components/ui/TokenIcon";
@@ -49,6 +47,9 @@ export default function SwapCard() {
   const [sellToken, setSellToken] = useState<Token>(TOKENS.USDC);
   const [buyToken, setBuyToken] = useState<Token>(TOKENS.wETH);
   const [sellAmount, setSellAmount] = useState("");
+  const [buyAmount, setBuyAmount] = useState("");
+  const [activeInput, setActiveInput] = useState<"sell" | "buy">("sell");
+  const [quoting, setQuoting] = useState(false);
   const [slippage, setSlippage] = useState(1);
   const [swapping, setSwapping] = useState(false);
 
@@ -60,15 +61,111 @@ export default function SwapCard() {
     [sellToken.symbol]
   );
 
-  const estimatedOutput = useMemo(() => {
-    const amt = parseFloat(sellAmount);
-    if (!amt || amt <= 0) return "";
-    const sellPrice = MOCK_PRICES[sellToken.symbol as TokenSymbol] ?? 0;
-    const buyPrice = MOCK_PRICES[buyToken.symbol as TokenSymbol] ?? 0;
-    if (!buyPrice) return "";
-    const result = amt * (sellPrice / buyPrice);
-    return result.toFixed(6).replace(/\.?0+$/, "");
-  }, [sellAmount, sellToken.symbol, buyToken.symbol]);
+  // Quote the other side when user types in either input
+  useEffect(() => {
+    if (!wallet || !address) return;
+
+    const poolAddrHex = getPoolAddress(sellToken.symbol, buyToken.symbol);
+    if (!poolAddrHex) return;
+
+    if (activeInput === "sell") {
+      const amt = parseFloat(sellAmount);
+      if (!amt || amt <= 0) { setBuyAmount(""); return; }
+
+      let cancelled = false;
+      setQuoting(true);
+      (async () => {
+        try {
+          const { AztecAddress } = await import("@aztec/aztec.js/addresses");
+          const { Contract } = await import("@aztec/aztec.js/contracts");
+          const { TokenContractArtifact } = await import("@aztec/noir-contracts.js/Token");
+          const { AMMContractArtifact } = await import("@/artifacts/AMM");
+
+          const poolAddr = AztecAddress.fromString(poolAddrHex);
+          const sellAddr = AztecAddress.fromString(TOKEN_ADDRESSES[sellToken.symbol]!);
+          const buyAddr = AztecAddress.fromString(TOKEN_ADDRESSES[buyToken.symbol]!);
+          const owner = AztecAddress.fromString(address!);
+
+          const tokenSell = await Contract.at(sellAddr, TokenContractArtifact, wallet);
+          const tokenBuy = await Contract.at(buyAddr, TokenContractArtifact, wallet);
+          const pool = await Contract.at(poolAddr, AMMContractArtifact, wallet);
+
+          const [reserveIn, reserveOut] = await Promise.all([
+            tokenSell.methods.balance_of_public(poolAddr).simulate({ from: owner }),
+            tokenBuy.methods.balance_of_public(poolAddr).simulate({ from: owner }),
+          ]);
+
+          const sellDecimals = TOKEN_DECIMALS[sellToken.symbol] ?? 9;
+          const buyDecimals = TOKEN_DECIMALS[buyToken.symbol] ?? 9;
+          const amountIn = toTokenAmount(sellAmount, sellDecimals);
+
+          const amountOut = await pool.methods
+            .get_amount_out_for_exact_in(reserveIn, reserveOut, amountIn)
+            .simulate({ from: owner });
+
+          if (!cancelled) {
+            const outBig = typeof amountOut === "bigint" ? amountOut : BigInt(amountOut.toString());
+            const formatted = formatTokenBalance(outBig, buyDecimals);
+            setBuyAmount(formatted.replace(/,/g, ""));
+          }
+        } catch (err) {
+          console.warn("Quote failed:", err);
+          if (!cancelled) setBuyAmount("");
+        } finally {
+          if (!cancelled) setQuoting(false);
+        }
+      })();
+      return () => { cancelled = true; };
+    } else {
+      const amt = parseFloat(buyAmount);
+      if (!amt || amt <= 0) { setSellAmount(""); return; }
+
+      let cancelled = false;
+      setQuoting(true);
+      (async () => {
+        try {
+          const { AztecAddress } = await import("@aztec/aztec.js/addresses");
+          const { Contract } = await import("@aztec/aztec.js/contracts");
+          const { TokenContractArtifact } = await import("@aztec/noir-contracts.js/Token");
+          const { AMMContractArtifact } = await import("@/artifacts/AMM");
+
+          const poolAddr = AztecAddress.fromString(poolAddrHex);
+          const sellAddr = AztecAddress.fromString(TOKEN_ADDRESSES[sellToken.symbol]!);
+          const buyAddr = AztecAddress.fromString(TOKEN_ADDRESSES[buyToken.symbol]!);
+          const owner = AztecAddress.fromString(address!);
+
+          const tokenSell = await Contract.at(sellAddr, TokenContractArtifact, wallet);
+          const tokenBuy = await Contract.at(buyAddr, TokenContractArtifact, wallet);
+          const pool = await Contract.at(poolAddr, AMMContractArtifact, wallet);
+
+          const [reserveIn, reserveOut] = await Promise.all([
+            tokenSell.methods.balance_of_public(poolAddr).simulate({ from: owner }),
+            tokenBuy.methods.balance_of_public(poolAddr).simulate({ from: owner }),
+          ]);
+
+          const sellDecimals = TOKEN_DECIMALS[sellToken.symbol] ?? 9;
+          const buyDecimals = TOKEN_DECIMALS[buyToken.symbol] ?? 9;
+          const amountOut = toTokenAmount(buyAmount, buyDecimals);
+
+          const amountIn = await pool.methods
+            .get_amount_in_for_exact_out(reserveIn, reserveOut, amountOut)
+            .simulate({ from: owner });
+
+          if (!cancelled) {
+            const inBig = typeof amountIn === "bigint" ? amountIn : BigInt(amountIn.toString());
+            const formatted = formatTokenBalance(inBig, sellDecimals);
+            setSellAmount(formatted.replace(/,/g, ""));
+          }
+        } catch (err) {
+          console.warn("Reverse quote failed:", err);
+          if (!cancelled) setSellAmount("");
+        } finally {
+          if (!cancelled) setQuoting(false);
+        }
+      })();
+      return () => { cancelled = true; };
+    }
+  }, [wallet, address, sellAmount, buyAmount, activeInput, sellToken.symbol, buyToken.symbol]);
 
   // Fetch balances when token selection changes
   useEffect(() => {
@@ -98,9 +195,27 @@ export default function SwapCard() {
 
   const handleAmountChange = useCallback((value: string) => {
     if (value === "" || isValidAmount(value)) {
+      setActiveInput("sell");
       setSellAmount(value);
     }
   }, []);
+
+  const handleBuyAmountChange = useCallback((value: string) => {
+    if (value === "" || isValidAmount(value)) {
+      setActiveInput("buy");
+      setBuyAmount(value);
+    }
+  }, []);
+
+  const handleMax = useCallback(() => {
+    const bal = getBalance(sellToken.symbol);
+    if (!bal) return;
+    const parsed = parseBalance(bal);
+    if (parsed > 0) {
+      setActiveInput("sell");
+      setSellAmount(String(parsed));
+    }
+  }, [getBalance, sellToken.symbol]);
 
   const flipTokens = useCallback(() => {
     const newSell = buyToken;
@@ -108,6 +223,8 @@ export default function SwapCard() {
     setSellToken(newSell);
     setBuyToken(newBuy);
     setSellAmount("");
+    setBuyAmount("");
+    setActiveInput("sell");
   }, [sellToken, buyToken]);
 
   const handleSlippageChange = useCallback((value: string) => {
@@ -216,6 +333,8 @@ export default function SwapCard() {
       setBalance(buyToken.symbol, formatTokenBalance(BigInt(Math.round((prevBuyRaw + buyDelta) * 10 ** buyDecimals)), buyDecimals));
 
       setSellAmount("");
+      setBuyAmount("");
+      setActiveInput("sell");
       showToast(`Swapped ${sellAmount} ${sellToken.symbol} for ~${formatTokenBalance(amountOutBig, buyDecimals)} ${buyToken.symbol}`, "success");
     } catch (err) {
       console.error("Swap failed:", err);
@@ -246,8 +365,10 @@ export default function SwapCard() {
         balance={sellBalance}
         balanceLoading={isLoading(sellToken.symbol)}
         onRefresh={connected ? refreshAll : undefined}
+        onMax={connected && !isDemo ? handleMax : undefined}
         tokenOptions={tokenList}
         readOnly={false}
+        dimmed={activeInput === "buy" && quoting}
       />
 
       {/* Flip button */}
@@ -268,12 +389,13 @@ export default function SwapCard() {
         label="You Receive"
         token={buyToken}
         onTokenChange={handleBuyTokenChange}
-        amount={estimatedOutput}
-        onAmountChange={() => {}}
+        amount={buyAmount}
+        onAmountChange={handleBuyAmountChange}
         balance={buyBalance}
         balanceLoading={isLoading(buyToken.symbol)}
         tokenOptions={buyOptions}
-        readOnly={true}
+        readOnly={false}
+        dimmed={activeInput === "sell" && quoting}
       />
 
       {/* Slippage */}
@@ -317,8 +439,10 @@ function TokenSection({
   balance,
   balanceLoading,
   onRefresh,
+  onMax,
   tokenOptions,
   readOnly,
+  dimmed,
 }: {
   label: string;
   token: Token;
@@ -328,8 +452,10 @@ function TokenSection({
   balance: string;
   balanceLoading?: boolean;
   onRefresh?: () => void;
+  onMax?: () => void;
   tokenOptions: Token[];
   readOnly: boolean;
+  dimmed?: boolean;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -347,12 +473,20 @@ function TokenSection({
             </button>
           )}
         </div>
-        <span className="text-xs text-neutral-400 font-mono">
+        <span className="text-xs text-neutral-400 font-mono flex items-center gap-1.5">
           Balance:{" "}
           {balanceLoading ? (
             <span className="inline-block w-3 h-3 border border-neutral-300 border-t-transparent rounded-full animate-spin align-middle" />
           ) : (
             balance
+          )}
+          {onMax && (
+            <button
+              onClick={onMax}
+              className="text-[10px] font-semibold text-orange-500 hover:text-orange-600 uppercase"
+            >
+              Max
+            </button>
           )}
         </span>
       </div>
@@ -405,9 +539,9 @@ function TokenSection({
           value={amount}
           onChange={(e) => onAmountChange(e.target.value)}
           readOnly={readOnly}
-          className={`flex-1 text-right text-xl font-mono bg-transparent outline-none placeholder:text-neutral-300 text-neutral-900 ${
-            readOnly ? "cursor-default" : ""
-          }`}
+          className={`flex-1 text-right text-xl font-mono bg-transparent outline-none placeholder:text-neutral-300 ${
+            dimmed ? "text-neutral-400" : "text-neutral-900"
+          } ${readOnly ? "cursor-default" : ""}`}
         />
       </div>
     </div>

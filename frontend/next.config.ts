@@ -53,6 +53,14 @@ const nextConfig: NextConfig = {
       config.plugins.push(
         new webpack.ProvidePlugin({
           Buffer: ["buffer", "Buffer"],
+        }),
+        // Polyfill `window` in Web Worker contexts — BB WASM workers reference
+        // `window` which doesn't exist in workers (only `self`/`globalThis`).
+        new webpack.BannerPlugin({
+          banner: 'if(typeof window==="undefined"){globalThis.window=globalThis;}',
+          raw: true,
+          entryOnly: false,
+          test: /\.js$/,
         })
       );
     }

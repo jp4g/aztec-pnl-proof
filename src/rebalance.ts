@@ -1,24 +1,47 @@
 import type { AztecAddress } from '@aztec/aztec.js/addresses';
-import type { TokenContract } from '@aztec/noir-contracts.js/Token';
-import type { PriceFeedContract } from '@aztec/noir-contracts.js/PriceFeed';
-import type { AMMContract } from './artifacts/AMM';
+
+/**
+ * Minimal contract interface for rebalancing — satisfied by both typed
+ * Noir codegen contracts (scripts) and generic Contract.at() (frontend).
+ */
+interface Sendable {
+    send(opts: Record<string, any>): Promise<any>;
+}
+
+interface HasAddress {
+    address: AztecAddress;
+}
+
+interface TokenLike extends HasAddress {
+    methods: {
+        mint_to_public(to: AztecAddress, amount: bigint): Sendable;
+    };
+}
+
+interface PriceFeedLike extends HasAddress {
+    methods: {
+        set_price(token: any, price: bigint): Sendable;
+    };
+}
 
 /**
  * Mutable pool state tracked by the caller.
  */
 export interface PoolState {
-    contract: AMMContract;
-    token0: TokenContract;
-    token1: TokenContract;
+    contract: HasAddress;
+    token0: TokenLike;
+    token1: TokenLike;
     reserve0: bigint;
     reserve1: bigint;
+    decimals0: number;
+    decimals1: number;
 }
 
 /**
  * Token with its target oracle price.
  */
 export interface TokenPrice {
-    token: TokenContract;
+    token: HasAddress & { address: AztecAddress & { toField(): any } };
     price: bigint;
 }
 
@@ -34,7 +57,7 @@ export interface TokenPrice {
  * Pool reserves are mutated in-place.
  */
 export async function rebalancePools(params: {
-    priceFeed: PriceFeedContract;
+    priceFeed: PriceFeedLike;
     minter: AztecAddress;
     pools: PoolState[];
     tokenPrices: TokenPrice[];
@@ -71,13 +94,21 @@ export async function rebalancePools(params: {
         }
 
         // AMM marginal price: reserve1/reserve0 = price0/price1
-        // Equivalently: reserve0 * price0 == reserve1 * price1
-        const value0 = pool.reserve0 * p0;
-        const value1 = pool.reserve1 * p1;
+        // Normalize reserves to a common decimal base before comparing USD values,
+        // since tokens have different decimals (e.g. USDC=6, wETH=9).
+        const d0 = BigInt(pool.decimals0);
+        const d1 = BigInt(pool.decimals1);
+        const maxD = d0 > d1 ? d0 : d1;
+        const norm0 = pool.reserve0 * 10n ** (maxD - d0);
+        const norm1 = pool.reserve1 * 10n ** (maxD - d1);
+
+        const value0 = norm0 * p0;
+        const value1 = norm1 * p1;
 
         if (value0 > value1) {
             // Token0 side is overweight - mint token1 to balance
-            const targetR1 = pool.reserve0 * p0 / p1;
+            const targetNorm1 = norm0 * p0 / p1;
+            const targetR1 = targetNorm1 / 10n ** (maxD - d1);
             const toMint = targetR1 - pool.reserve1;
             if (toMint > 0n) {
                 console.log(`  Rebalance pool(${addr0.slice(0, 10)}../${addr1.slice(0, 10)}..): mint ${toMint} of token1`);
@@ -89,7 +120,8 @@ export async function rebalancePools(params: {
             }
         } else if (value1 > value0) {
             // Token1 side is overweight - mint token0 to balance
-            const targetR0 = pool.reserve1 * p1 / p0;
+            const targetNorm0 = norm1 * p1 / p0;
+            const targetR0 = targetNorm0 / 10n ** (maxD - d0);
             const toMint = targetR0 - pool.reserve0;
             if (toMint > 0n) {
                 console.log(`  Rebalance pool(${addr0.slice(0, 10)}../${addr1.slice(0, 10)}..): mint ${toMint} of token0`);

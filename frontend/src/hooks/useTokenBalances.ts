@@ -13,9 +13,9 @@ export const TOKEN_ADDRESSES: Record<string, string | undefined> = {
 
 export const TOKEN_DECIMALS: Record<string, number> = {
   USDC: 6,
-  wETH: 18,
-  wZEC: 18,
-  wAZTEC: 18,
+  wETH: 9,
+  wZEC: 9,
+  wAZTEC: 9,
 };
 
 export function formatTokenBalance(raw: bigint, decimals: number): string {
