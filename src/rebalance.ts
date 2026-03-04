@@ -39,8 +39,10 @@ export async function rebalancePools(params: {
     pools: PoolState[];
     tokenPrices: TokenPrice[];
     setOracle?: boolean;
+    sendOpts?: (from: AztecAddress) => Record<string, any>;
 }): Promise<void> {
     const { priceFeed, minter, pools, tokenPrices, setOracle = true } = params;
+    const opts = params.sendOpts ?? ((from: AztecAddress) => ({ from }));
 
     // Build lookup: address string -> price
     const priceMap = new Map<string, bigint>();
@@ -53,7 +55,7 @@ export async function rebalancePools(params: {
         for (const tp of tokenPrices) {
             await priceFeed.methods
                 .set_price(tp.token.address.toField(), tp.price)
-                .send({ from: minter })
+                .send(opts(minter))
                 ;
         }
     }
@@ -81,7 +83,7 @@ export async function rebalancePools(params: {
                 console.log(`  Rebalance pool(${addr0.slice(0, 10)}../${addr1.slice(0, 10)}..): mint ${toMint} of token1`);
                 await pool.token1.methods
                     .mint_to_public(pool.contract.address, toMint)
-                    .send({ from: minter })
+                    .send(opts(minter))
                     ;
                 pool.reserve1 += toMint;
             }
@@ -93,7 +95,7 @@ export async function rebalancePools(params: {
                 console.log(`  Rebalance pool(${addr0.slice(0, 10)}../${addr1.slice(0, 10)}..): mint ${toMint} of token0`);
                 await pool.token0.methods
                     .mint_to_public(pool.contract.address, toMint)
-                    .send({ from: minter })
+                    .send(opts(minter))
                     ;
                 pool.reserve0 += toMint;
             }

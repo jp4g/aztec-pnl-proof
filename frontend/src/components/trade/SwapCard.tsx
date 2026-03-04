@@ -42,7 +42,7 @@ function isValidAmount(value: string): boolean {
 }
 
 export default function SwapCard() {
-  const { wallet, address, status: walletStatus } = useAztecWallet();
+  const { wallet, address, status: walletStatus, isDemoAccount } = useAztecWallet();
   const { getBalance, isLoading, fetchBalance, refreshAll, setBalance } = useTokenBalances();
   const { showToast } = useToast();
 
@@ -53,6 +53,7 @@ export default function SwapCard() {
   const [swapping, setSwapping] = useState(false);
 
   const connected = walletStatus === "connected";
+  const isDemo = connected && address ? isDemoAccount(address) : false;
 
   const buyOptions = useMemo(
     () => getSwappableTokens(sellToken.symbol),
@@ -126,6 +127,9 @@ export default function SwapCard() {
   let buttonDisabled = false;
   if (!connected) {
     buttonLabel = "Connect Wallet";
+    buttonDisabled = true;
+  } else if (isDemo) {
+    buttonLabel = "Demo Account";
     buttonDisabled = true;
   } else if (!hasAmount) {
     buttonLabel = "Enter an amount";
@@ -226,6 +230,12 @@ export default function SwapCard() {
   return (
     <div className="w-full max-w-md bg-white rounded-2xl border border-neutral-200 shadow-sm p-6">
       <h2 className="text-lg font-semibold text-neutral-900 mb-5">Swap</h2>
+
+      {isDemo && (
+        <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-xs text-amber-700">
+          Changing demo account state is restricted — make a new account to create a PnL proof with live data!
+        </div>
+      )}
 
       {/* You Pay */}
       <TokenSection

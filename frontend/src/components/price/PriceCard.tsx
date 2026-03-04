@@ -43,8 +43,9 @@ function isValidPrice(value: string): boolean {
 }
 
 export default function PriceCard() {
-  const { wallet, address, status: walletStatus } = useAztecWallet();
+  const { wallet, address, status: walletStatus, isDemoAccount } = useAztecWallet();
   const { showToast } = useToast();
+  const isDemo = walletStatus === "connected" && address ? isDemoAccount(address) : false;
 
   const [rows, setRows] = useState<TokenPriceRow[]>(() => {
     if (typeof window === "undefined") return [];
@@ -386,6 +387,9 @@ export default function PriceCard() {
   if (!connected) {
     buttonLabel = "Connect Wallet";
     buttonDisabled = true;
+  } else if (isDemo) {
+    buttonLabel = "Demo Account";
+    buttonDisabled = true;
   } else if (changedTokens.length === 0) {
     buttonLabel = "No price changes";
     buttonDisabled = true;
@@ -398,6 +402,12 @@ export default function PriceCard() {
 
   return (
     <div className="w-full max-w-md bg-white rounded-2xl border border-neutral-200 shadow-sm p-6">
+      {isDemo && (
+        <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-xs text-amber-700">
+          Changing demo account state is restricted — make a new account to create a PnL proof with live data!
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between mb-5">
         <h2 className="text-lg font-semibold text-neutral-900">Set Oracle Prices</h2>
@@ -445,7 +455,7 @@ export default function PriceCard() {
                 placeholder="0.00"
                 value={row.newPrice}
                 onChange={(e) => handlePriceChange(row.symbol, e.target.value)}
-                disabled={!connected || executing}
+                disabled={!connected || executing || isDemo}
                 className="flex-1 text-right text-sm font-mono bg-white border border-neutral-200 rounded-lg px-2 py-1.5 outline-none focus:border-orange-400 disabled:bg-neutral-100 disabled:text-neutral-400"
               />
               {isChanged && (

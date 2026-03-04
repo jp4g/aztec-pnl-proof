@@ -18,6 +18,10 @@ import { SwapProofTree } from '../src/swap-proof-tree';
 import { LotStateTree } from '../src/lot-state-tree';
 import { TaxProver } from '../src/tax-prover';
 import { rebalancePools, type PoolState } from '../src/rebalance';
+import { SponsoredFeePaymentMethod } from '@aztec/aztec.js/fee';
+import { getContractInstanceFromInstantiationParams } from '@aztec/aztec.js/contracts';
+import { SPONSORED_FPC_SALT } from '@aztec/constants';
+import { SponsoredFPCContract } from '@aztec/noir-contracts.js/SponsoredFPC';
 
 import individualSwapCircuit from '../circuits/individual_swap/target/individual_swap.json' with { type: 'json' };
 import swapSummaryTreeCircuit from '../circuits/swap_summary_tree/target/swap_summary_tree.json' with { type: 'json' };
@@ -26,7 +30,7 @@ import vkeys from '../circuits/vkeys/vkeys.json' with { type: 'json' };
 
 const { AZTEC_NODE_URL = "http://localhost:8080" } = process.env;
 
-describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 1200000 }, () => {
+describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 86_400_000 }, () => {
 
     let node: AztecNode;
     let wallet: EmbeddedWallet;
@@ -96,7 +100,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 1
         { inKey: 'B', outKey: 'A', pool: 'AB' },  // Swap 6
     ];
 
-    test("prove PnL from 6 swaps across 3 pools with varying prices", { timeout: 1200000 }, async () => {
+    test("prove PnL from 6 swaps across 3 pools with varying prices", { timeout: 86_400_000 }, async () => {
         // --- Setup (moved from before() due to bun's 60s hook timeout) ---
         console.log("Initializing Barretenberg...");
         const threads = require('os').cpus().length;
@@ -106,63 +110,114 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 1
         node = createAztecNodeClient(AZTEC_NODE_URL);
         console.log(`Connected to Aztec node at "${AZTEC_NODE_URL}"`);
 
-        addresses = [];
-        wallet = await EmbeddedWallet.create(node, { ephemeral: true, pxeConfig: { proverEnabled: false } });
+        const nodeInfo = await node.getNodeInfo();
+        const isDevnet = nodeInfo.l1ChainId === 11155111;
+        console.log(`  Chain ID: ${nodeInfo.l1ChainId}, isDevnet: ${isDevnet}`);
 
-        const accounts = await getInitialTestAccountsData();
-        for (const account of accounts) {
-            const manager = await wallet.createSchnorrAccount(account.secret, account.salt, account.signingKey);
-            addresses.push(manager.address);
+        addresses = [];
+        wallet = await EmbeddedWallet.create(node, { ephemeral: true, pxeConfig: { proverEnabled: isDevnet } });
+        let fpcAddress: AztecAddress | undefined;
+
+        if (isDevnet) {
+            console.log("Devnet detected — registering SponsoredFPC and deploying fresh accounts...");
+            const fpcInstance = await getContractInstanceFromInstantiationParams(SponsoredFPCContract.artifact, {
+                salt: new Fr(SPONSORED_FPC_SALT),
+            });
+            await wallet.registerContract(fpcInstance, SponsoredFPCContract.artifact);
+            fpcAddress = fpcInstance.address;
+            console.log(`  SponsoredFPC registered at: ${fpcAddress}`);
+            const fpcPaymentMethod = new SponsoredFeePaymentMethod(fpcAddress);
+
+            for (let i = 0; i < 2; i++) {
+                const manager = await wallet.createSchnorrAccount(Fr.random(), Fr.random());
+                const deployMethod = await manager.getDeployMethod();
+                console.log(`  Deploying account ${i} at ${manager.address}...`);
+                const deployReceipt = await deployMethod.send({
+                    from: AztecAddress.ZERO,
+                    fee: { paymentMethod: fpcPaymentMethod },
+                    skipClassPublication: i !== 0,
+                    wait: { returnReceipt: true, timeout: 600 },
+                });
+                console.log(`  Account ${i} status: ${deployReceipt.status}, result: ${deployReceipt.executionResult}, tx: ${deployReceipt.txHash}`);
+                if (deployReceipt.executionResult !== 'success') {
+                    throw new Error(`Account ${i} deploy failed: ${deployReceipt.executionResult} (revert: ${deployReceipt.revertReason})`);
+                }
+                addresses.push(manager.address);
+            }
+
+            // Force PXE to discover account signing key notes via full contract sync
+            const pxeDebug = (wallet.pxe as any).debug;
+            for (let i = 0; i < addresses.length; i++) {
+                const notes = await pxeDebug.getNotes({
+                    contractAddress: addresses[i],
+                    scopes: [addresses[i]],
+                });
+                console.log(`  Account ${i} notes after sync: ${notes.length}`);
+                if (notes.length === 0) {
+                    throw new Error(`Account ${i} at ${addresses[i]} has no notes — deployment may have failed silently`);
+                }
+            }
+        } else {
+            const accounts = await getInitialTestAccountsData();
+            for (const account of accounts) {
+                const manager = await wallet.createSchnorrAccount(account.secret, account.salt, account.signingKey);
+                addresses.push(manager.address);
+            }
         }
+
+        const sendOpts = (from: AztecAddress) =>
+            isDevnet
+                ? { from, fee: { paymentMethod: new SponsoredFeePaymentMethod(fpcAddress!) } }
+                : { from };
 
         // Deploy PriceFeed
         console.log("Deploying PriceFeed...");
-        priceFeed = await PriceFeedContract.deploy(wallet).send({ from: addresses[0] });
+        priceFeed = await PriceFeedContract.deploy(wallet).send(sendOpts(addresses[0]));
         console.log(`  PriceFeed: ${priceFeed.address}`);
 
         // Deploy 3 tokens
         console.log("Deploying tokens...");
-        tokenA = await TokenContract.deploy(wallet, addresses[0], "Token A", "TKA", 18).send({ from: addresses[0] });
-        tokenB = await TokenContract.deploy(wallet, addresses[0], "Token B", "TKB", 18).send({ from: addresses[0] });
-        tokenC = await TokenContract.deploy(wallet, addresses[0], "Token C", "TKC", 18).send({ from: addresses[0] });
+        tokenA = await TokenContract.deploy(wallet, addresses[0], "Token A", "TKA", 18).send(sendOpts(addresses[0]));
+        tokenB = await TokenContract.deploy(wallet, addresses[0], "Token B", "TKB", 18).send(sendOpts(addresses[0]));
+        tokenC = await TokenContract.deploy(wallet, addresses[0], "Token C", "TKC", 18).send(sendOpts(addresses[0]));
         console.log(`  tokenA: ${tokenA.address}`);
         console.log(`  tokenB: ${tokenB.address}`);
         console.log(`  tokenC: ${tokenC.address}`);
 
         // Set initial oracle prices
         console.log("Setting initial prices...");
-        await priceFeed.methods.set_price(tokenA.address.toField(), PRICE_SCHEDULE[0][0]).send({ from: addresses[0] });
-        await priceFeed.methods.set_price(tokenB.address.toField(), PRICE_SCHEDULE[0][1]).send({ from: addresses[0] });
-        await priceFeed.methods.set_price(tokenC.address.toField(), PRICE_SCHEDULE[0][2]).send({ from: addresses[0] });
+        await priceFeed.methods.set_price(tokenA.address.toField(), PRICE_SCHEDULE[0][0]).send(sendOpts(addresses[0]));
+        await priceFeed.methods.set_price(tokenB.address.toField(), PRICE_SCHEDULE[0][1]).send(sendOpts(addresses[0]));
+        await priceFeed.methods.set_price(tokenC.address.toField(), PRICE_SCHEDULE[0][2]).send(sendOpts(addresses[0]));
         console.log(`  A=${PRICE_SCHEDULE[0][0]}, B=${PRICE_SCHEDULE[0][1]}, C=${PRICE_SCHEDULE[0][2]}`);
 
         // Deploy 3 LP tokens
         console.log("Deploying LP tokens...");
-        lpAB = await TokenContract.deploy(wallet, addresses[0], "LP AB", "LPAB", 18).send({ from: addresses[0] });
-        lpAC = await TokenContract.deploy(wallet, addresses[0], "LP AC", "LPAC", 18).send({ from: addresses[0] });
-        lpBC = await TokenContract.deploy(wallet, addresses[0], "LP BC", "LPBC", 18).send({ from: addresses[0] });
+        lpAB = await TokenContract.deploy(wallet, addresses[0], "LP AB", "LPAB", 18).send(sendOpts(addresses[0]));
+        lpAC = await TokenContract.deploy(wallet, addresses[0], "LP AC", "LPAC", 18).send(sendOpts(addresses[0]));
+        lpBC = await TokenContract.deploy(wallet, addresses[0], "LP BC", "LPBC", 18).send(sendOpts(addresses[0]));
 
         // Deploy 3 AMM pools
         console.log("Deploying AMM pools...");
-        poolAB = await AMMContract.deploy(wallet, tokenA.address, tokenB.address, lpAB.address).send({ from: addresses[0] });
-        poolAC = await AMMContract.deploy(wallet, tokenA.address, tokenC.address, lpAC.address).send({ from: addresses[0] });
-        poolBC = await AMMContract.deploy(wallet, tokenB.address, tokenC.address, lpBC.address).send({ from: addresses[0] });
+        poolAB = await AMMContract.deploy(wallet, tokenA.address, tokenB.address, lpAB.address).send(sendOpts(addresses[0]));
+        poolAC = await AMMContract.deploy(wallet, tokenA.address, tokenC.address, lpAC.address).send(sendOpts(addresses[0]));
+        poolBC = await AMMContract.deploy(wallet, tokenB.address, tokenC.address, lpBC.address).send(sendOpts(addresses[0]));
         console.log(`  poolAB: ${poolAB.address}`);
         console.log(`  poolAC: ${poolAC.address}`);
         console.log(`  poolBC: ${poolBC.address}`);
 
         // Seed pools with liquidity
         console.log("Seeding pools with liquidity...");
-        await tokenA.methods.mint_to_public(poolAB.address, POOL_AB_LIQ_A).send({ from: addresses[0] });
-        await tokenB.methods.mint_to_public(poolAB.address, POOL_AB_LIQ_B).send({ from: addresses[0] });
-        await tokenA.methods.mint_to_public(poolAC.address, POOL_AC_LIQ_A).send({ from: addresses[0] });
-        await tokenC.methods.mint_to_public(poolAC.address, POOL_AC_LIQ_C).send({ from: addresses[0] });
-        await tokenB.methods.mint_to_public(poolBC.address, POOL_BC_LIQ_B).send({ from: addresses[0] });
-        await tokenC.methods.mint_to_public(poolBC.address, POOL_BC_LIQ_C).send({ from: addresses[0] });
+        await tokenA.methods.mint_to_public(poolAB.address, POOL_AB_LIQ_A).send(sendOpts(addresses[0]));
+        await tokenB.methods.mint_to_public(poolAB.address, POOL_AB_LIQ_B).send(sendOpts(addresses[0]));
+        await tokenA.methods.mint_to_public(poolAC.address, POOL_AC_LIQ_A).send(sendOpts(addresses[0]));
+        await tokenC.methods.mint_to_public(poolAC.address, POOL_AC_LIQ_C).send(sendOpts(addresses[0]));
+        await tokenB.methods.mint_to_public(poolBC.address, POOL_BC_LIQ_B).send(sendOpts(addresses[0]));
+        await tokenC.methods.mint_to_public(poolBC.address, POOL_BC_LIQ_C).send(sendOpts(addresses[0]));
 
         // Mint tokenA to swapper (private)
         console.log(`Minting ${INITIAL_TOKEN_A} tokenA to swapper...`);
-        await tokenA.methods.mint_to_private(addresses[1], INITIAL_TOKEN_A).send({ from: addresses[0] });
+        await tokenA.methods.mint_to_private(addresses[1], INITIAL_TOKEN_A).send(sendOpts(addresses[0]));
 
         console.log("Setup complete!");
         // --- End setup ---
@@ -211,6 +266,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 1
                             { token: tokenB, price: pB },
                             { token: tokenC, price: pC },
                         ],
+                        sendOpts,
                     });
                 }
             }
@@ -234,7 +290,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 1
             await pool.methods
                 .swap_exact_tokens_for_tokens(tokenIn.address, tokenOut.address, amountIn, amountOut, nonce)
                 .with({ authWitnesses: [authwit] })
-                .send({ from: swapper })
+                .send(sendOpts(swapper))
                 ;
             console.log(`  Swap ${i + 1} executed!`);
 
