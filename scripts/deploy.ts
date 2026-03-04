@@ -19,7 +19,7 @@
  */
 
 import { getInitialTestAccountsData } from '@aztec/accounts/testing';
-import { type AztecAddress } from '@aztec/aztec.js/addresses';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
 import { createAztecNodeClient, type AztecNode } from '@aztec/aztec.js/node';
 import { PriceFeedContract } from '@aztec/noir-contracts.js/PriceFeed';
 import { TokenContract } from '../src/artifacts/Token';
@@ -27,6 +27,11 @@ import { AMMContract } from '../src/artifacts/AMM';
 import { EmbeddedWallet } from '@aztec/wallets/embedded';
 import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
+import { SponsoredFeePaymentMethod } from '@aztec/aztec.js/fee';
+import { getContractInstanceFromInstantiationParams } from '@aztec/aztec.js/contracts';
+import { SPONSORED_FPC_SALT } from '@aztec/constants';
+import { SponsoredFPCContract } from '@aztec/noir-contracts.js/SponsoredFPC';
+import { Fr } from '@aztec/foundation/curves/bn254';
 
 const {
     AZTEC_NODE_URL = 'http://localhost:8080',
@@ -100,8 +105,16 @@ function poolAmounts(tokenPriceUsd: number, tokenDecimals: number) {
     return { usdcAmount, tokenAmount };
 }
 
+interface AccountInfo {
+    address: string;
+    secretKey: string;
+    signingKey: string;
+    salt: string;
+}
+
 interface DeployedInfra {
     admin: string;
+    adminAccount?: AccountInfo;
     priceFeed: string;
     tokens: {
         USDC: string;
@@ -116,6 +129,7 @@ interface DeployedInfra {
     };
     prices: { USDC: number; wETH: number; wZEC: number; wAZTEC: number };
     oraclePrices: { USDC: string; wETH: string; wZEC: string; wAZTEC: string };
+    demoAccounts?: AccountInfo[];
 }
 
 async function setup() {
@@ -140,14 +154,89 @@ async function setup() {
     const node: AztecNode = createAztecNodeClient(AZTEC_NODE_URL);
     console.log(`Connected to Aztec node at "${AZTEC_NODE_URL}"`);
 
-    // Create wallet with first test account as admin
-    const wallet = await EmbeddedWallet.create(node, { ephemeral: true, pxeConfig: { proverEnabled: false } });
-    const accounts = await getInitialTestAccountsData();
+    // Detect devnet vs sandbox
+    const nodeInfo = await node.getNodeInfo();
+    const isDevnet = nodeInfo.l1ChainId === 11155111;
+    console.log(`  Chain ID: ${nodeInfo.l1ChainId}, isDevnet: ${isDevnet}`);
+
+    // Create wallet — enable proving on devnet
+    const wallet = await EmbeddedWallet.create(node, { ephemeral: true, pxeConfig: { proverEnabled: isDevnet } });
+
+    let fpcAddress: AztecAddress | undefined;
     const addresses: AztecAddress[] = [];
-    for (const account of accounts) {
-        const manager = await wallet.createSchnorrAccount(account.secret, account.salt, account.signingKey);
-        addresses.push(manager.address);
+    const demoAccounts: AccountInfo[] = [];
+    let adminAccount: AccountInfo | undefined;
+
+    const sendOpts = (from: AztecAddress) =>
+        isDevnet && fpcAddress
+            ? { from, fee: { paymentMethod: new SponsoredFeePaymentMethod(fpcAddress) } }
+            : { from };
+
+    if (isDevnet) {
+        // Register SponsoredFPC
+        console.log('Devnet detected — registering SponsoredFPC and deploying fresh accounts...');
+        const fpcInstance = await getContractInstanceFromInstantiationParams(SponsoredFPCContract.artifact, {
+            salt: new Fr(SPONSORED_FPC_SALT),
+        });
+        await wallet.registerContract(fpcInstance, SponsoredFPCContract.artifact);
+        fpcAddress = fpcInstance.address;
+        console.log(`  SponsoredFPC registered at: ${fpcAddress}`);
+        const fpcPaymentMethod = new SponsoredFeePaymentMethod(fpcAddress);
+
+        // Deploy 3 fresh accounts: admin + 2 demo accounts
+        for (let i = 0; i < 3; i++) {
+            const secret = Fr.random();
+            const signingKey = Fr.random();
+            const manager = await wallet.createSchnorrAccount(secret, Fr.ZERO, signingKey);
+            const deployMethod = await manager.getDeployMethod();
+            console.log(`  Deploying account ${i} at ${manager.address}...`);
+            const deployReceipt = await deployMethod.send({
+                from: AztecAddress.ZERO,
+                fee: { paymentMethod: fpcPaymentMethod },
+                skipClassPublication: i !== 0,
+                wait: { returnReceipt: true, timeout: 600 },
+            });
+            console.log(`  Account ${i} status: ${deployReceipt.status}, result: ${deployReceipt.executionResult}, tx: ${deployReceipt.txHash}`);
+            if (deployReceipt.executionResult !== 'success') {
+                throw new Error(`Account ${i} deploy failed: ${deployReceipt.executionResult} (revert: ${deployReceipt.revertReason})`);
+            }
+            addresses.push(manager.address);
+
+            const accountInfo: AccountInfo = {
+                address: manager.address.toString(),
+                secretKey: secret.toString(),
+                signingKey: signingKey.toString(),
+                salt: Fr.ZERO.toString(),
+            };
+
+            if (i === 0) {
+                adminAccount = accountInfo;
+            } else {
+                demoAccounts.push(accountInfo);
+            }
+        }
+
+        // Force PXE to discover account signing key notes via full contract sync
+        const pxeDebug = (wallet.pxe as any).debug;
+        for (let i = 0; i < addresses.length; i++) {
+            const notes = await pxeDebug.getNotes({
+                contractAddress: addresses[i],
+                scopes: [addresses[i]],
+            });
+            console.log(`  Account ${i} notes after sync: ${notes.length}`);
+            if (notes.length === 0) {
+                throw new Error(`Account ${i} at ${addresses[i]} has no notes — deployment may have failed silently`);
+            }
+        }
+    } else {
+        // Sandbox: use pre-deployed test accounts
+        const accounts = await getInitialTestAccountsData();
+        for (const account of accounts) {
+            const manager = await wallet.createSchnorrAccount(account.secret, account.salt, account.signingKey);
+            addresses.push(manager.address);
+        }
     }
+
     const admin = addresses[0];
     console.log(`Admin (minter): ${admin}\n`);
 
@@ -156,28 +245,28 @@ async function setup() {
 
     console.log('Deploying USDC...');
     const usdc = await TokenContract.deploy(wallet, admin, 'USD Coin', 'USDC', 6)
-        .send({ from: admin });
+        .send(sendOpts(admin));
     console.log(`  USDC: ${usdc.address}`);
 
     console.log('Deploying wETH...');
     const weth = await TokenContract.deploy(wallet, admin, 'Wrapped Ether', 'wETH', 18)
-        .send({ from: admin });
+        .send(sendOpts(admin));
     console.log(`  wETH: ${weth.address}`);
 
     console.log('Deploying wZEC...');
     const wzec = await TokenContract.deploy(wallet, admin, 'Wrapped Zcash', 'wZEC', 18)
-        .send({ from: admin });
+        .send(sendOpts(admin));
     console.log(`  wZEC: ${wzec.address}`);
 
     console.log('Deploying wAZTEC...');
     const waztec = await TokenContract.deploy(wallet, admin, 'Wrapped Aztec', 'wAZTEC', 18)
-        .send({ from: admin });
+        .send(sendOpts(admin));
     console.log(`  wAZTEC: ${waztec.address}\n`);
 
     // --- Deploy PriceFeed oracle ---
     console.log('--- Deploying PriceFeed oracle ---');
     const priceFeed = await PriceFeedContract.deploy(wallet)
-        .send({ from: admin });
+        .send(sendOpts(admin));
     console.log(`  PriceFeed: ${priceFeed.address}\n`);
 
     // --- Set oracle prices from CoinGecko ---
@@ -185,19 +274,19 @@ async function setup() {
 
     console.log(`  USDC   = ${oraclePrices.USDC} ($${prices.USDC})`);
     await priceFeed.methods.set_price(usdc.address.toField(), oraclePrices.USDC)
-        .send({ from: admin });
+        .send(sendOpts(admin));
 
     console.log(`  wETH   = ${oraclePrices.wETH} ($${prices.wETH})`);
     await priceFeed.methods.set_price(weth.address.toField(), oraclePrices.wETH)
-        .send({ from: admin });
+        .send(sendOpts(admin));
 
     console.log(`  wZEC   = ${oraclePrices.wZEC} ($${prices.wZEC})`);
     await priceFeed.methods.set_price(wzec.address.toField(), oraclePrices.wZEC)
-        .send({ from: admin });
+        .send(sendOpts(admin));
 
     console.log(`  wAZTEC = ${oraclePrices.wAZTEC} ($${prices.wAZTEC})`);
     await priceFeed.methods.set_price(waztec.address.toField(), oraclePrices.wAZTEC)
-        .send({ from: admin });
+        .send(sendOpts(admin));
     console.log();
 
     // --- Deploy AMM pools ---
@@ -206,34 +295,34 @@ async function setup() {
     // wETH/USDC pool
     console.log('Deploying wETH/USDC LP token...');
     const lpEthUsdc = await TokenContract.deploy(wallet, admin, 'LP wETH-USDC', 'LP-EU', 18)
-        .send({ from: admin });
+        .send(sendOpts(admin));
     console.log('Deploying wETH/USDC AMM...');
     const ammEthUsdc = await AMMContract.deploy(wallet, weth.address, usdc.address, lpEthUsdc.address)
-        .send({ from: admin });
+        .send(sendOpts(admin));
     await lpEthUsdc.methods.set_minter(ammEthUsdc.address, true)
-        .send({ from: admin });
+        .send(sendOpts(admin));
     console.log(`  wETH/USDC AMM: ${ammEthUsdc.address} (LP: ${lpEthUsdc.address})`);
 
     // wZEC/USDC pool
     console.log('Deploying wZEC/USDC LP token...');
     const lpZecUsdc = await TokenContract.deploy(wallet, admin, 'LP wZEC-USDC', 'LP-ZU', 18)
-        .send({ from: admin });
+        .send(sendOpts(admin));
     console.log('Deploying wZEC/USDC AMM...');
     const ammZecUsdc = await AMMContract.deploy(wallet, wzec.address, usdc.address, lpZecUsdc.address)
-        .send({ from: admin });
+        .send(sendOpts(admin));
     await lpZecUsdc.methods.set_minter(ammZecUsdc.address, true)
-        .send({ from: admin });
+        .send(sendOpts(admin));
     console.log(`  wZEC/USDC AMM: ${ammZecUsdc.address} (LP: ${lpZecUsdc.address})`);
 
     // wAZTEC/USDC pool
     console.log('Deploying wAZTEC/USDC LP token...');
     const lpAztecUsdc = await TokenContract.deploy(wallet, admin, 'LP wAZTEC-USDC', 'LP-AU', 18)
-        .send({ from: admin });
+        .send(sendOpts(admin));
     console.log('Deploying wAZTEC/USDC AMM...');
     const ammAztecUsdc = await AMMContract.deploy(wallet, waztec.address, usdc.address, lpAztecUsdc.address)
-        .send({ from: admin });
+        .send(sendOpts(admin));
     await lpAztecUsdc.methods.set_minter(ammAztecUsdc.address, true)
-        .send({ from: admin });
+        .send(sendOpts(admin));
     console.log(`  wAZTEC/USDC AMM: ${ammAztecUsdc.address} (LP: ${lpAztecUsdc.address})\n`);
 
     // --- Seed pools with liquidity at correct price ratios ---
@@ -241,18 +330,18 @@ async function setup() {
 
     const ethPool = poolAmounts(prices.wETH, TOKEN_DECIMALS);
     console.log(`  wETH/USDC: ${Number(ethPool.tokenAmount) / 1e18} wETH + ${Number(ethPool.usdcAmount) / 1e6} USDC`);
-    await weth.methods.mint_to_public(ammEthUsdc.address, ethPool.tokenAmount).send({ from: admin });
-    await usdc.methods.mint_to_public(ammEthUsdc.address, ethPool.usdcAmount).send({ from: admin });
+    await weth.methods.mint_to_public(ammEthUsdc.address, ethPool.tokenAmount).send(sendOpts(admin));
+    await usdc.methods.mint_to_public(ammEthUsdc.address, ethPool.usdcAmount).send(sendOpts(admin));
 
     const zecPool = poolAmounts(prices.wZEC, TOKEN_DECIMALS);
     console.log(`  wZEC/USDC: ${Number(zecPool.tokenAmount) / 1e18} wZEC + ${Number(zecPool.usdcAmount) / 1e6} USDC`);
-    await wzec.methods.mint_to_public(ammZecUsdc.address, zecPool.tokenAmount).send({ from: admin });
-    await usdc.methods.mint_to_public(ammZecUsdc.address, zecPool.usdcAmount).send({ from: admin });
+    await wzec.methods.mint_to_public(ammZecUsdc.address, zecPool.tokenAmount).send(sendOpts(admin));
+    await usdc.methods.mint_to_public(ammZecUsdc.address, zecPool.usdcAmount).send(sendOpts(admin));
 
     const aztecPool = poolAmounts(prices.wAZTEC, TOKEN_DECIMALS);
     console.log(`  wAZTEC/USDC: ${Number(aztecPool.tokenAmount) / 1e18} wAZTEC + ${Number(aztecPool.usdcAmount) / 1e6} USDC`);
-    await waztec.methods.mint_to_public(ammAztecUsdc.address, aztecPool.tokenAmount).send({ from: admin });
-    await usdc.methods.mint_to_public(ammAztecUsdc.address, aztecPool.usdcAmount).send({ from: admin });
+    await waztec.methods.mint_to_public(ammAztecUsdc.address, aztecPool.tokenAmount).send(sendOpts(admin));
+    await usdc.methods.mint_to_public(ammAztecUsdc.address, aztecPool.usdcAmount).send(sendOpts(admin));
     console.log();
 
     // --- Save deployment.json ---
@@ -277,6 +366,8 @@ async function setup() {
             wZEC: oraclePrices.wZEC.toString(),
             wAZTEC: oraclePrices.wAZTEC.toString(),
         },
+        ...(adminAccount ? { adminAccount } : {}),
+        ...(demoAccounts.length > 0 ? { demoAccounts } : {}),
     };
 
     const outPath = join(process.cwd(), 'deployment.json');
@@ -298,6 +389,9 @@ async function setup() {
         NEXT_PUBLIC_LP_ZEC_USDC: lpZecUsdc.address.toString(),
         NEXT_PUBLIC_LP_AZTEC_USDC: lpAztecUsdc.address.toString(),
     };
+    if (demoAccounts.length > 0) {
+        deployedVars.NEXT_PUBLIC_DEMO_ACCOUNTS = JSON.stringify(demoAccounts);
+    }
     let existing = '';
     try { existing = await readFile(envPath, 'utf-8'); } catch {}
     const lines = existing.split('\n');

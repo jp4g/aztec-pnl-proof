@@ -295,8 +295,7 @@ export default function PriceCard() {
 
         await priceFeed.methods
           .set_price(tokenAddr.toField(), oraclePrice)
-          .send({ from: adminRef.current })
-          .wait();
+          .send({ from: adminRef.current });
       }
 
       // 2. Rebalance affected pools
@@ -340,8 +339,7 @@ export default function PriceCard() {
           if (toMint > BigInt(0)) {
             await token1Contract.methods
               .mint_to_public(poolAddr, toMint)
-              .send({ from: adminRef.current })
-              .wait();
+              .send({ from: adminRef.current });
           }
         } else if (value1 > value0 && p0 > BigInt(0)) {
           // Mint token0 to balance
@@ -350,8 +348,7 @@ export default function PriceCard() {
           if (toMint > BigInt(0)) {
             await token0Contract.methods
               .mint_to_public(poolAddr, toMint)
-              .send({ from: adminRef.current })
-              .wait();
+              .send({ from: adminRef.current });
           }
         }
       }

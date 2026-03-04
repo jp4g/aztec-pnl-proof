@@ -14,18 +14,19 @@
   "dependencies": {
     "@aztec/accounts": "file:../aztec-packages/yarn-project/accounts",
     "@aztec/aztec.js": "file:../aztec-packages/yarn-project/aztec.js",
+    "@aztec/bb.js": "file:../aztec-packages/barretenberg/ts",
     "@aztec/noir-contracts.js": "file:../aztec-packages/yarn-project/noir-contracts.js",
+    "@aztec/noir-noir_js": "file:../aztec-packages/noir/packages/noir_js",
+    "@aztec/noir-types": "file:../aztec-packages/noir/packages/types",
     "@aztec/protocol-contracts": "file:../aztec-packages/yarn-project/protocol-contracts",
     "@aztec/pxe": "file:../aztec-packages/yarn-project/pxe",
     "@aztec/stdlib": "file:../aztec-packages/yarn-project/stdlib",
     "@aztec/test-wallet": "file:../aztec-packages/yarn-project/test-wallet",
-    "@aztec/wallets": "file:../aztec-packages/yarn-project/wallets",
-    "@aztec/bb.js": "file:../aztec-packages/barretenberg/ts",
-    "@aztec/noir-noir_js": "file:../aztec-packages/noir/packages/noir_js",
-    "@aztec/noir-types": "file:../aztec-packages/noir/packages/types"
+    "@aztec/wallets": "file:../aztec-packages/yarn-project/wallets"
   },
   "devDependencies": {
     "@types/node": "^22.15.1",
+    "@zkpassport/poseidon2": "^0.6.2",
     "typescript": "^5.4.4"
   },
   "resolutions": {

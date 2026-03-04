@@ -110,8 +110,7 @@ export function TokenProvider({ children }: { children: ReactNode }) {
 
       await token.methods
         .mint_to_private(recipient, amount)
-        .send({ from: adminRef.current })
-        .wait();
+        .send({ from: adminRef.current });
 
       saveMintedAddress(address);
       setHasMintedUsdc(true);

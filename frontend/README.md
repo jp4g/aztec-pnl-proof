@@ -5,29 +5,36 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 First, run the development server:
 
 ```bash
-npm run dev
-# or
 yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Deploy to Vercel
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+The project uses local `file:` dependencies on `aztec-packages`, so it must be built locally and deployed as pre-built output.
 
-## Learn More
+### One-time setup
 
-To learn more about Next.js, take a look at the following resources:
+1. Install Vercel CLI: `npm i -g vercel`
+2. Link the project: `vercel link` (set root directory to `.`)
+3. Set the runtime env var:
+   ```bash
+   vercel env add NEXT_PUBLIC_AZTEC_NODE_URL
+   # Value: https://v4-devnet-2.aztec-labs.com
+   ```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Deploy
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+vercel build --prod
+node scripts/patch-vercel-output.mjs
+vercel deploy --prebuilt --prod
+```
+
+Or use the shortcut: `yarn deploy:prod`
+
+The patch script copies the API route bundle into the serverless function directory — Vercel's file tracing can't follow symlinked dependencies outside the project root.
 
 ## Known Issues
 

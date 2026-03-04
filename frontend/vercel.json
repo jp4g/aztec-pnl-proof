@@ -1,0 +1,3 @@
+{
+  "installCommand": "echo 'using local node_modules'"
+}

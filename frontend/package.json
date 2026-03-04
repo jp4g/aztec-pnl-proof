@@ -6,9 +6,12 @@
     "dev": "rm -rf .next && next dev --webpack",
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "deploy": "vercel build && node scripts/patch-vercel-output.mjs && vercel deploy --prebuilt",
+    "deploy:prod": "vercel build && node scripts/patch-vercel-output.mjs && vercel deploy --prebuilt --prod"
   },
   "dependencies": {
+    "@zkpassport/poseidon2": "^0.6.2",
     "@aztec/accounts": "file:../../aztec-packages/yarn-project/accounts",
     "@aztec/aztec.js": "file:../../aztec-packages/yarn-project/aztec.js",
     "@aztec/constants": "file:../../aztec-packages/yarn-project/constants",

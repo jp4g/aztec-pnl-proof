@@ -12,7 +12,7 @@
  */
 
 import { getInitialTestAccountsData } from '@aztec/accounts/testing';
-import { type AztecAddress } from '@aztec/aztec.js/addresses';
+import { AztecAddress } from '@aztec/aztec.js/addresses';
 import { createAztecNodeClient, type AztecNode } from '@aztec/aztec.js/node';
 import { Fr } from '@aztec/aztec.js/fields';
 import { PriceFeedContract, PriceFeedContractArtifact } from '@aztec/noir-contracts.js/PriceFeed';
@@ -22,6 +22,10 @@ import { EmbeddedWallet } from '@aztec/wallets/embedded';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import type { PoolState } from '../src/rebalance';
+import { SponsoredFeePaymentMethod } from '@aztec/aztec.js/fee';
+import { getContractInstanceFromInstantiationParams } from '@aztec/aztec.js/contracts';
+import { SPONSORED_FPC_SALT } from '@aztec/constants';
+import { SponsoredFPCContract } from '@aztec/noir-contracts.js/SponsoredFPC';
 
 const { AZTEC_NODE_URL = 'http://localhost:8080' } = process.env;
 
@@ -43,6 +47,8 @@ interface DeployedInfra {
     };
     prices: { USDC: number; wETH: number; wZEC: number; wAZTEC: number };
     oraclePrices: { USDC: string; wETH: string; wZEC: string; wAZTEC: string };
+    adminAccount?: { address: string; secretKey: string; signingKey: string; salt: string };
+    demoAccounts?: { address: string; secretKey: string; signingKey: string; salt: string }[];
 }
 
 // Price multipliers per swap phase
@@ -100,18 +106,80 @@ async function demoData() {
     const node: AztecNode = createAztecNodeClient(AZTEC_NODE_URL);
     console.log(`Connected to Aztec node at "${AZTEC_NODE_URL}"`);
 
-    // --- Register all 3 test accounts ---
-    const wallet = await EmbeddedWallet.create(node, { ephemeral: true, pxeConfig: { proverEnabled: false } });
-    const accounts = await getInitialTestAccountsData();
+    // Detect devnet vs sandbox
+    const nodeInfo = await node.getNodeInfo();
+    const isDevnet = nodeInfo.l1ChainId === 11155111;
+    console.log(`  Chain ID: ${nodeInfo.l1ChainId}, isDevnet: ${isDevnet}`);
+
+    const wallet = await EmbeddedWallet.create(node, { ephemeral: true, pxeConfig: { proverEnabled: isDevnet } });
+
+    let fpcAddress: AztecAddress | undefined;
     const addresses: AztecAddress[] = [];
-    for (const account of accounts) {
-        const manager = await wallet.createSchnorrAccount(account.secret, account.salt, account.signingKey);
-        addresses.push(manager.address);
+
+    if (isDevnet) {
+        // Register SponsoredFPC
+        const fpcInstance = await getContractInstanceFromInstantiationParams(SponsoredFPCContract.artifact, {
+            salt: new Fr(SPONSORED_FPC_SALT),
+        });
+        await wallet.registerContract(fpcInstance, SponsoredFPCContract.artifact);
+        fpcAddress = fpcInstance.address;
+        console.log(`  SponsoredFPC registered at: ${fpcAddress}`);
+
+        // Read admin + demo accounts from deployment.json
+        if (!infra.adminAccount) {
+            throw new Error('deployment.json missing adminAccount — run deploy.ts on devnet first');
+        }
+        if (!infra.demoAccounts || infra.demoAccounts.length < 2) {
+            throw new Error('deployment.json missing demoAccounts — run deploy.ts on devnet first');
+        }
+
+        // Register admin from deployment.json keys
+        const adminManager = await wallet.createSchnorrAccount(
+            Fr.fromString(infra.adminAccount.secretKey),
+            Fr.fromString(infra.adminAccount.salt),
+            Fr.fromString(infra.adminAccount.signingKey),
+        );
+        addresses.push(adminManager.address);
+
+        // Register demo accounts from deployment.json keys
+        for (const demo of infra.demoAccounts) {
+            const manager = await wallet.createSchnorrAccount(
+                Fr.fromString(demo.secretKey),
+                Fr.fromString(demo.salt),
+                Fr.fromString(demo.signingKey),
+            );
+            addresses.push(manager.address);
+        }
+
+        // Force PXE to discover signing key notes
+        const pxeDebug = (wallet.pxe as any).debug;
+        for (let i = 0; i < addresses.length; i++) {
+            const notes = await pxeDebug.getNotes({
+                contractAddress: addresses[i],
+                scopes: [addresses[i]],
+            });
+            console.log(`  Account ${i} notes after sync: ${notes.length}`);
+        }
+    } else {
+        // Sandbox: use pre-deployed test accounts
+        const accounts = await getInitialTestAccountsData();
+        for (const account of accounts) {
+            const manager = await wallet.createSchnorrAccount(account.secret, account.salt, account.signingKey);
+            addresses.push(manager.address);
+        }
     }
+
+    const sendOpts = (from: AztecAddress) =>
+        isDevnet && fpcAddress
+            ? { from, fee: { paymentMethod: new SponsoredFeePaymentMethod(fpcAddress) } }
+            : { from };
+
     const admin = addresses[0];
-    const demoUser = addresses[2];
+    // On sandbox: demo accounts are addresses[2] and addresses[1]
+    // On devnet: demo accounts are addresses[1] and addresses[2] (from deployment.json)
+    const demoUser = isDevnet ? addresses[1] : addresses[2];
     console.log(`Admin: ${admin}`);
-    console.log(`Demo user (account[2]): ${demoUser}\n`);
+    console.log(`Demo user (winner): ${demoUser}\n`);
 
     // --- Register and attach to deployed contracts ---
     const { AztecAddress: AztecAddr } = await import('@aztec/aztec.js/addresses');
@@ -162,28 +230,32 @@ async function demoData() {
         'wAZTEC/USDC': ammAztecUsdc,
     };
 
-    // --- Deploy the 3rd test account on-chain ---
-    console.log('--- Deploying demo user account on-chain ---');
-    const demoAccountData = accounts[2];
-    const { SchnorrAccountContract } = await import('@aztec/accounts/schnorr');
-    const { AccountManager } = await import('@aztec/aztec.js/wallet');
-    const contract = new SchnorrAccountContract(demoAccountData.signingKey);
-    const accountManager = await AccountManager.create(wallet, demoAccountData.secret, contract, demoAccountData.salt);
+    // --- Deploy the demo user account on-chain (sandbox only, devnet already deployed) ---
+    if (!isDevnet) {
+        console.log('--- Deploying demo user account on-chain ---');
+        const accounts = await getInitialTestAccountsData();
+        const demoAccountData = accounts[2];
+        const { SchnorrAccountContract } = await import('@aztec/accounts/schnorr');
+        const { AccountManager } = await import('@aztec/aztec.js/wallet');
+        const contract = new SchnorrAccountContract(demoAccountData.signingKey);
+        const accountManager = await AccountManager.create(wallet, demoAccountData.secret, contract, demoAccountData.salt);
 
-    // Check if already deployed
-    const metadata = await wallet.getContractMetadata(accountManager.address);
-    if (metadata.isContractInitialized) {
-        console.log(`  Demo account already deployed at ${accountManager.address}\n`);
+        const metadata = await wallet.getContractMetadata(accountManager.address);
+        if (metadata.isContractInitialized) {
+            console.log(`  Demo account already deployed at ${accountManager.address}\n`);
+        } else {
+            const deployMethod = await accountManager.getDeployMethod();
+            await deployMethod.send({ from: admin, skipClassPublication: true, skipInstancePublication: true });
+            console.log(`  Demo account deployed at ${accountManager.address}\n`);
+        }
     } else {
-        const deployMethod = await accountManager.getDeployMethod();
-        await deployMethod.send({ from: admin, skipClassPublication: true, skipInstancePublication: true });
-        console.log(`  Demo account deployed at ${accountManager.address}\n`);
+        console.log(`  Demo user already deployed on devnet at ${demoUser}\n`);
     }
 
     // --- Mint 100,000 USDC to demo user (privately) ---
     console.log('--- Minting 100,000 USDC to demo user ---');
     const mintAmount = usdc(100_000);
-    await usdc_token.methods.mint_to_private(demoUser, mintAmount).send({ from: admin });
+    await usdc_token.methods.mint_to_private(demoUser, mintAmount).send(sendOpts(admin));
     console.log(`  Minted ${mintAmount} USDC (100,000 with 6 decimals)\n`);
 
     // --- Read actual on-chain pool reserves ---
@@ -244,7 +316,7 @@ async function demoData() {
                 ];
                 for (const [token, price] of newPrices) {
                     await priceFeed.methods.set_price(token.address.toField(), price)
-                        .send({ from: admin });
+                        .send(sendOpts(admin));
                 }
             }
         }
@@ -287,7 +359,7 @@ async function demoData() {
         await pool.methods
             .swap_exact_tokens_for_tokens(tokenIn.address, tokenOut.address, amountIn, amountOut, nonce)
             .with({ authWitnesses: [authwit] })
-            .send({ from: demoUser })
+            .send(sendOpts(demoUser))
             ;
         console.log(`    Swap ${i + 1} executed!`);
 
@@ -314,29 +386,37 @@ async function demoData() {
     // Phase 2: Account 2 (loser = accounts[1]) — 12 swaps that lose money
     // Buys tokens, prices crash, sells at loss. Repeats.
     // =====================================================================
-    console.log('=== Phase 2: Loser account (accounts[1]) — 12 losing swaps ===\n');
+    console.log('=== Phase 2: Loser account — 12 losing swaps ===\n');
 
-    const loserUser = addresses[1];
+    // On sandbox: loser is addresses[1], on devnet: addresses[2] (2nd demo account)
+    const loserUser = isDevnet ? addresses[2] : addresses[1];
 
-    // --- Deploy account 2 on-chain if needed ---
-    console.log('--- Deploying loser account on-chain ---');
-    const loserAccountData = accounts[1];
-    const loserSchnorr = new SchnorrAccountContract(loserAccountData.signingKey);
-    const loserAccountManager = await AccountManager.create(
-        wallet, loserAccountData.secret, loserSchnorr, loserAccountData.salt,
-    );
-    const loserMeta = await wallet.getContractMetadata(loserAccountManager.address);
-    if (loserMeta.isContractInitialized) {
-        console.log(`  Loser account already deployed at ${loserAccountManager.address}\n`);
+    if (!isDevnet) {
+        // --- Deploy loser account on-chain (sandbox only) ---
+        console.log('--- Deploying loser account on-chain ---');
+        const accounts = await getInitialTestAccountsData();
+        const loserAccountData = accounts[1];
+        const { SchnorrAccountContract } = await import('@aztec/accounts/schnorr');
+        const { AccountManager } = await import('@aztec/aztec.js/wallet');
+        const loserSchnorr = new SchnorrAccountContract(loserAccountData.signingKey);
+        const loserAccountManager = await AccountManager.create(
+            wallet, loserAccountData.secret, loserSchnorr, loserAccountData.salt,
+        );
+        const loserMeta = await wallet.getContractMetadata(loserAccountManager.address);
+        if (loserMeta.isContractInitialized) {
+            console.log(`  Loser account already deployed at ${loserAccountManager.address}\n`);
+        } else {
+            const loserDeploy = await loserAccountManager.getDeployMethod();
+            await loserDeploy.send({ from: admin, skipClassPublication: true, skipInstancePublication: true });
+            console.log(`  Loser account deployed at ${loserAccountManager.address}\n`);
+        }
     } else {
-        const loserDeploy = await loserAccountManager.getDeployMethod();
-        await loserDeploy.send({ from: admin, skipClassPublication: true, skipInstancePublication: true });
-        console.log(`  Loser account deployed at ${loserAccountManager.address}\n`);
+        console.log(`  Loser account already deployed on devnet at ${loserUser}\n`);
     }
 
     // --- Mint 100,000 USDC to loser ---
     console.log('--- Minting 100,000 USDC to loser ---');
-    await usdc_token.methods.mint_to_private(loserUser, usdc(100_000)).send({ from: admin });
+    await usdc_token.methods.mint_to_private(loserUser, usdc(100_000)).send(sendOpts(admin));
     console.log(`  Minted ${usdc(100_000)} USDC (100,000 with 6 decimals)\n`);
 
     // Price multipliers for the loser's 12 swaps.
@@ -402,7 +482,7 @@ async function demoData() {
                 ];
                 for (const [token, price] of newPrices) {
                     await priceFeed.methods.set_price(token.address.toField(), price)
-                        .send({ from: admin });
+                        .send(sendOpts(admin));
                 }
             }
         }
@@ -439,7 +519,7 @@ async function demoData() {
         await pool.methods
             .swap_exact_tokens_for_tokens(tokenIn.address, tokenOut.address, amountIn, amountOut, nonce)
             .with({ authWitnesses: [authwit] })
-            .send({ from: loserUser })
+            .send(sendOpts(loserUser))
             ;
         console.log(`    Swap ${i + 1} executed!`);
 
@@ -472,7 +552,7 @@ async function demoData() {
     ];
     for (const [token, price, name] of resetPrices) {
         await priceFeed.methods.set_price(token.address.toField(), price)
-            .send({ from: admin });
+            .send(sendOpts(admin));
         console.log(`  ${name} = ${price}`);
     }
 

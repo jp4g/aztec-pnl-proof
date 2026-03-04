@@ -205,8 +205,7 @@ export default function SwapCard() {
       await pool.methods
         .swap_exact_tokens_for_tokens(sellAddr, buyAddr, amountIn, amountOutMin, nonce)
         .with({ authWitnesses: [authwit] })
-        .send({ from: owner })
-        .wait();
+        .send({ from: owner });
 
       // Optimistically update balances
       const prevSellRaw = parseBalance(sellBalance);

@@ -961,7 +961,7 @@
     "@aztec/constants" "workspace:^"
     "@aztec/foundation" "workspace:^"
     "@aztec/noir-noir_codegen" "portal:../../noir/packages/noir_codegen"
-    "@aztec/noir-noir_js" "file:../../../../Library/Caches/Yarn/v6/npm-@aztec-ivc-integration-0.1.0-d6b9b045-58f2-4f86-a415-cb0391ab7dcb-1772519066818/node_modules/noir/packages/noir_js"
+    "@aztec/noir-noir_js" "file:../../../../Library/Caches/Yarn/v6/npm-@aztec-ivc-integration-0.1.0-a375e1d1-c685-4461-9d09-bc05065c8a5f-1772608765127/node_modules/noir/packages/noir_js"
     "@aztec/noir-noirc_abi" "portal:../../noir/packages/noirc_abi"
     "@aztec/noir-types" "portal:../../noir/packages/types"
     "@aztec/stdlib" "workspace:^"
@@ -3741,6 +3741,11 @@
     get-port "^6.1.2"
     http-proxy "^1.18.1"
     ws "^8.13.0"
+
+"@zkpassport/poseidon2@^0.6.2":
+  version "0.6.2"
+  resolved "https://registry.yarnpkg.com/@zkpassport/poseidon2/-/poseidon2-0.6.2.tgz#2dd865864f1afd25169b63d64eb89a634f91301a"
+  integrity sha512-6sFHX9kAcrmDmBEEndvjZ8DA9FomunirQ5oCV6oD7bqr/lP0n0OBSRn86SZgQBXwRR+vq7sk16y31OgRBIOJ5Q==
 
 abitype@1.1.0:
   version "1.1.0"

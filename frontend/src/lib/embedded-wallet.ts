@@ -95,8 +95,8 @@ interface StoredAccount {
   isDemo?: boolean;
 }
 
-// Deterministic test accounts used as non-deletable demos
-const DEMO_ACCOUNTS: StoredAccount[] = [
+// Sandbox: hardcoded test accounts pre-deployed on local sandbox
+const SANDBOX_DEMO_ACCOUNTS: StoredAccount[] = [
   {
     // accounts[2] — "winner" demo account (6 profitable swaps)
     address: "0x17d474561f3cc64c896779fad1220017139791d250cff95370d239656c4aaeae",
@@ -114,6 +114,12 @@ const DEMO_ACCOUNTS: StoredAccount[] = [
     isDemo: true,
   },
 ];
+
+// Devnet: deploy script writes NEXT_PUBLIC_DEMO_ACCOUNTS with fresh account keys.
+// On sandbox this env var is absent, so we use the hardcoded sandbox accounts.
+const DEMO_ACCOUNTS: StoredAccount[] = process.env.NEXT_PUBLIC_DEMO_ACCOUNTS
+  ? (JSON.parse(process.env.NEXT_PUBLIC_DEMO_ACCOUNTS) as StoredAccount[]).map(a => ({ ...a, isDemo: true }))
+  : SANDBOX_DEMO_ACCOUNTS;
 
 function loadStoredAccounts(): StoredAccount[] {
   // Migrate legacy single-account key if present
@@ -172,8 +178,7 @@ export class EmbeddedAuditableWallet extends BaseWallet {
   ): Promise<Account> {
     if (address.equals(AztecAddress.ZERO)) {
       const { SignerlessAccount } = await import("@aztec/aztec.js/account");
-      const chainInfo = await this.getChainInfo();
-      return new SignerlessAccount(chainInfo);
+      return new SignerlessAccount();
     }
     const account = this.accounts.get(address?.toString() ?? "");
     if (!account) {
