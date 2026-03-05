@@ -251,12 +251,10 @@ export default function PriceCard() {
     if (changedTokens.length === 0) return;
 
     setExecuting(true);
-    const totalSteps = changedTokens.length + affectedPools.length;
-    let currentStep = 0;
 
     try {
       // Ensure admin is registered
-      setProgress({ step: 0, total: totalSteps, label: "Registering admin..." });
+      setProgress({ step: 0, total: 1, label: "Registering admin..." });
       await ensureAdmin();
       if (!adminRef.current) throw new Error("Admin account not available");
 
@@ -294,7 +292,11 @@ export default function PriceCard() {
         });
       }
 
-      setProgress({ step: 1, total: totalSteps, label: "Setting oracle prices..." });
+      // Build token labels for progress display
+      const tokenLabels = new Map<string, string>();
+      for (const [symbol, addr] of Object.entries(TOKEN_ADDRESSES)) {
+        if (addr) tokenLabels.set(addr, symbol);
+      }
 
       const poolStates: PoolState[] = [];
       for (const pool of affectedPools) {
@@ -334,6 +336,10 @@ export default function PriceCard() {
         pools: poolStates,
         tokenPrices,
         sendOpts: (from) => ({ from }),
+        onProgress: (step, total, label) => {
+          setProgress({ step, total, label });
+        },
+        tokenLabels,
       });
 
       // Update current prices to new prices

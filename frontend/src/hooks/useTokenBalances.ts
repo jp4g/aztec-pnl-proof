@@ -103,11 +103,14 @@ export function useTokenBalances() {
     setBalances((prev) => ({ ...prev, [symbol]: formatted }));
   }, []);
 
+  const [refreshCounter, setRefreshCounter] = useState(0);
+
   const refreshAll = useCallback(() => {
     pendingRef.current.clear();
     setBalances({});
     setLoading({});
+    setRefreshCounter((c) => c + 1);
   }, []);
 
-  return { getBalance, isLoading, fetchBalance, refreshAll, setBalance };
+  return { getBalance, isLoading, fetchBalance, refreshAll, setBalance, refreshCounter };
 }

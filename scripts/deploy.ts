@@ -9,7 +9,7 @@
  * Fetches live prices from CoinGecko, sets oracle prices accordingly,
  * and seeds each pool with liquidity matching the real price ratio.
  *
- * Writes deployed addresses to frontend/.env.local and deployment.json.
+ * Writes deployed addresses to frontend/.env.production (devnet) or frontend/.env.local (sandbox) and deployment.json.
  *
  * Env vars:
  *   AZTEC_NODE_URL       (default: http://localhost:8080)
@@ -49,8 +49,8 @@ if (!COINGECKO_API_KEY) {
 // amounts (~2e14 base units), constraining precision to ~10,000.
 const PRICE_PRECISION = 10_000;
 
-// Pool seed: $100k USDC per pool
-const POOL_USDC_AMOUNT = 100_000n;
+// Pool seed: $10M USDC per pool (large enough to minimize slippage on $10-20k swaps)
+const POOL_USDC_AMOUNT = 10_000_000n;
 const USDC_DECIMALS = 6;
 const TOKEN_DECIMALS = 9;
 
@@ -326,7 +326,7 @@ async function setup() {
     console.log(`  wAZTEC/USDC AMM: ${ammAztecUsdc.address} (LP: ${lpAztecUsdc.address})\n`);
 
     // --- Seed pools with liquidity at correct price ratios ---
-    console.log('--- Seeding pools with liquidity ($100k USDC per pool) ---');
+    console.log('--- Seeding pools with liquidity ($10M USDC per pool) ---');
 
     const ethPool = poolAmounts(prices.wETH, TOKEN_DECIMALS);
     console.log(`  wETH/USDC: ${Number(ethPool.tokenAmount) / 1e18} wETH + ${Number(ethPool.usdcAmount) / 1e6} USDC`);
@@ -374,8 +374,9 @@ async function setup() {
     await writeFile(outPath, JSON.stringify(infra, null, 2));
     console.log(`Deployment info saved to ${outPath}`);
 
-    // --- Upsert deployed addresses into frontend/.env.local ---
-    const envPath = join(process.cwd(), 'frontend', '.env.local');
+    // --- Upsert deployed addresses into frontend env file ---
+    const envFile = isDevnet ? '.env.production' : '.env.development';
+    const envPath = join(process.cwd(), 'frontend', envFile);
     const deployedVars: Record<string, string> = {
         NEXT_PUBLIC_PRICE_FEED: priceFeed.address.toString(),
         NEXT_PUBLIC_TOKEN_USDC: usdc.address.toString(),

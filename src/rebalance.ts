@@ -63,9 +63,16 @@ export async function rebalancePools(params: {
     tokenPrices: TokenPrice[];
     setOracle?: boolean;
     sendOpts?: (from: AztecAddress) => Record<string, any>;
+    onProgress?: (step: number, total: number, label: string) => void;
+    /** Address string → display name, used in progress labels */
+    tokenLabels?: Map<string, string>;
 }): Promise<void> {
-    const { priceFeed, minter, pools, tokenPrices, setOracle = true } = params;
+    const { priceFeed, minter, pools, tokenPrices, setOracle = true, onProgress, tokenLabels } = params;
     const opts = params.sendOpts ?? ((from: AztecAddress) => ({ from }));
+
+    const oracleSteps = setOracle ? tokenPrices.length : 0;
+    const totalSteps = oracleSteps + pools.length;
+    let currentStep = 0;
 
     // Build lookup: address string -> price
     const priceMap = new Map<string, bigint>();
@@ -76,15 +83,22 @@ export async function rebalancePools(params: {
     // 1. Set oracle prices
     if (setOracle) {
         for (const tp of tokenPrices) {
+            const tokenName = tokenLabels?.get(tp.token.address.toString()) ?? `token ${currentStep + 1}`;
+            onProgress?.(currentStep, totalSteps, `Setting oracle price for ${tokenName}...`);
             await priceFeed.methods
                 .set_price(tp.token.address.toField(), tp.price)
                 .send(opts(minter))
                 ;
+            currentStep++;
         }
     }
 
     // 2. Rebalance each pool
     for (const pool of pools) {
+        const label0 = tokenLabels?.get(pool.token0.address.toString()) ?? addr0.slice(0, 10);
+        const label1 = tokenLabels?.get(pool.token1.address.toString()) ?? addr1.slice(0, 10);
+        onProgress?.(currentStep, totalSteps, `Rebalancing ${label0}/${label1} pool...`);
+
         const addr0 = pool.token0.address.toString();
         const addr1 = pool.token1.address.toString();
         const p0 = priceMap.get(addr0);
@@ -132,5 +146,7 @@ export async function rebalancePools(params: {
                 pool.reserve0 += toMint;
             }
         }
+        currentStep++;
     }
+    onProgress?.(totalSteps, totalSteps, 'Done');
 }

@@ -41,7 +41,7 @@ function isValidAmount(value: string): boolean {
 
 export default function SwapCard() {
   const { wallet, address, status: walletStatus, isDemoAccount } = useAztecWallet();
-  const { getBalance, isLoading, fetchBalance, refreshAll, setBalance } = useTokenBalances();
+  const { getBalance, isLoading, fetchBalance, refreshAll, setBalance, refreshCounter } = useTokenBalances();
   const { showToast } = useToast();
 
   const [sellToken, setSellToken] = useState<Token>(TOKENS.USDC);
@@ -167,13 +167,13 @@ export default function SwapCard() {
     }
   }, [wallet, address, sellAmount, buyAmount, activeInput, sellToken.symbol, buyToken.symbol]);
 
-  // Fetch balances when token selection changes
+  // Fetch balances when token selection changes or refresh is triggered
   useEffect(() => {
     if (connected) fetchBalance(sellToken.symbol);
-  }, [connected, sellToken.symbol, fetchBalance]);
+  }, [connected, sellToken.symbol, fetchBalance, refreshCounter]);
   useEffect(() => {
     if (connected) fetchBalance(buyToken.symbol);
-  }, [connected, buyToken.symbol, fetchBalance]);
+  }, [connected, buyToken.symbol, fetchBalance, refreshCounter]);
 
   const sellBalance = connected ? (getBalance(sellToken.symbol) ?? "\u2026") : "\u2014";
   const buyBalance = connected ? (getBalance(buyToken.symbol) ?? "\u2026") : "\u2014";

@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "deploy": "vercel build && node scripts/patch-vercel-output.mjs && vercel deploy --prebuilt",
-    "deploy:prod": "vercel build && node scripts/patch-vercel-output.mjs && vercel deploy --prebuilt --prod"
+    "deploy:prod": "vercel build --prod && node scripts/patch-vercel-output.mjs && vercel deploy --prebuilt --prod"
   },
   "dependencies": {
     "@zkpassport/poseidon2": "^0.6.2",
