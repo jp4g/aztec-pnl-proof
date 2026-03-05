@@ -8,7 +8,10 @@
  * Env vars:
  *   AZTEC_NODE_URL       (default: http://localhost:8080)
  *
- * Usage: bun scripts/demo-data.ts
+ * Usage:
+ *   bun scripts/demo-data.ts                    # full run (default)
+ *   bun scripts/demo-data.ts --resume loser:7   # skip winner, resume loser at swap 7
+ *   bun scripts/demo-data.ts --resume winner:4  # resume winner at swap 4
  */
 
 import { getInitialTestAccountsData } from '@aztec/accounts/testing';
@@ -95,7 +98,29 @@ const SWAP_DEFS: SwapDef[] = [
     { inKey: 'wAZTEC', outKey: 'USDC',   pool: 'wAZTEC/USDC', amountIn: 0n,           amountInDesc: 'all wAZTEC'  }, // filled at runtime
 ];
 
+async function getPrivateBalance(token: typeof TokenContract.prototype, owner: AztecAddress): Promise<bigint> {
+    const raw = await token.methods.balance_of_private(owner).simulate({ from: owner });
+    return typeof raw === 'bigint' ? raw : BigInt(raw.toString());
+}
+
 async function demoData() {
+    // --- Parse --resume arg ---
+    let resumePhase: 'winner' | 'loser' | null = null;
+    let resumeSwap = 0; // 0-indexed
+    const resumeArgIdx = process.argv.indexOf('--resume');
+    if (resumeArgIdx !== -1) {
+        const resumeArg = process.argv[resumeArgIdx + 1];
+        if (!resumeArg) throw new Error('--resume requires a value like winner:4 or loser:7');
+        const [phase, num] = resumeArg.split(':');
+        if (phase !== 'winner' && phase !== 'loser') throw new Error('--resume must be winner:N or loser:N');
+        resumePhase = phase;
+        resumeSwap = parseInt(num, 10) - 1; // convert to 0-indexed
+        if (isNaN(resumeSwap) || resumeSwap < 0) throw new Error('--resume swap number must be >= 1');
+        if (phase === 'winner' && resumeSwap >= 6) throw new Error('--resume winner:N — N must be 1-6');
+        if (phase === 'loser' && resumeSwap >= 12) throw new Error('--resume loser:N — N must be 1-12');
+        console.log(`=== RESUME MODE: ${phase} phase, starting at swap ${resumeSwap + 1} ===\n`);
+    }
+
     console.log('=== Demo Data: Swap History for 3rd Test Account ===\n');
 
     // --- Load deployment info ---
@@ -232,7 +257,9 @@ async function demoData() {
     };
 
     // --- Deploy the demo user account on-chain (sandbox only, devnet already deployed) ---
-    if (!isDevnet) {
+    if (resumePhase) {
+        console.log('  [resume] Skipping demo user account deployment & minting\n');
+    } else if (!isDevnet) {
         console.log('--- Deploying demo user account on-chain ---');
         const accounts = await getInitialTestAccountsData();
         const demoAccountData = accounts[2];
@@ -253,11 +280,13 @@ async function demoData() {
         console.log(`  Demo user already deployed on devnet at ${demoUser}\n`);
     }
 
-    // --- Mint 100,000 USDC to demo user (privately) ---
-    console.log('--- Minting 100,000 USDC to demo user ---');
-    const mintAmount = usdc(100_000);
-    await usdc_token.methods.mint_to_private(demoUser, mintAmount).send(sendOpts(admin));
-    console.log(`  Minted ${mintAmount} USDC (100,000 with 6 decimals)\n`);
+    if (!resumePhase) {
+        // --- Mint 100,000 USDC to demo user (privately) ---
+        console.log('--- Minting 100,000 USDC to demo user ---');
+        const mintAmount = usdc(100_000);
+        await usdc_token.methods.mint_to_private(demoUser, mintAmount).send(sendOpts(admin));
+        console.log(`  Minted ${mintAmount} USDC (100,000 with 6 decimals)\n`);
+    }
 
     // --- Read actual on-chain pool reserves ---
     // We read from chain rather than computing from deployment prices, because a
@@ -293,14 +322,40 @@ async function demoData() {
     // Track amounts received from swaps (for "sell all" swaps)
     const amountsReceived: Record<string, bigint> = {};
 
-    // --- Execute 6 swaps ---
-    console.log('--- Executing 6 swaps ---');
-    for (let i = 0; i < 6; i++) {
+    // --- Execute 6 swaps (winner) ---
+    const winnerStart = resumePhase === 'winner' ? resumeSwap : 0;
+    const skipWinner = resumePhase === 'loser';
+
+    if (skipWinner) {
+        console.log('--- [resume] Skipping winner phase entirely ---\n');
+    } else {
+        // Apply price state before entering loop when resuming
+        if (resumePhase === 'winner') {
+            const mult = PRICE_MULTIPLIERS[resumeSwap];
+            console.log(`  [resume] Applying price state for winner swap ${resumeSwap + 1} (ETH:${mult.wETH}x, ZEC:${mult.wZEC}x, AZTEC:${mult.wAZTEC}x)`);
+            await rebalancePools({
+                priceFeed,
+                minter: admin,
+                pools: Object.values(poolStates),
+                tokenPrices: [
+                    { token: usdc_token, price: BigInt(Math.round(Number(baseOraclePrices.USDC) * mult.USDC)) },
+                    { token: weth,       price: BigInt(Math.round(Number(baseOraclePrices.wETH) * mult.wETH)) },
+                    { token: wzec,       price: BigInt(Math.round(Number(baseOraclePrices.wZEC) * mult.wZEC)) },
+                    { token: waztec,     price: BigInt(Math.round(Number(baseOraclePrices.wAZTEC) * mult.wAZTEC)) },
+                ],
+                sendOpts,
+            });
+        }
+
+        console.log(`--- Executing swaps ${winnerStart + 1}-6 (winner) ---`);
+    }
+
+    for (let i = winnerStart; !skipWinner && i < 6; i++) {
         const def = SWAP_DEFS[i];
         const mult = PRICE_MULTIPLIERS[i];
 
         // Update oracle prices and rebalance pools when multipliers change
-        if (i > 0) {
+        if (i > winnerStart) {
             const prevMult = PRICE_MULTIPLIERS[i - 1];
             const changed = mult.wETH !== prevMult.wETH || mult.wZEC !== prevMult.wZEC || mult.wAZTEC !== prevMult.wAZTEC;
             if (changed) {
@@ -324,9 +379,14 @@ async function demoData() {
         let amountIn = def.amountIn;
         if (amountIn === 0n) {
             // "Sell all" - use the amount received from the referenced earlier swap
-            if (def.inKey === 'wETH') amountIn = amountsReceived['swap1_wETH']!;
-            else if (def.inKey === 'wZEC') amountIn = amountsReceived['swap2_wZEC']!;
-            else if (def.inKey === 'wAZTEC') amountIn = amountsReceived['swap4_wAZTEC']!;
+            if (def.inKey === 'wETH') amountIn = amountsReceived['swap1_wETH'] ?? 0n;
+            else if (def.inKey === 'wZEC') amountIn = amountsReceived['swap2_wZEC'] ?? 0n;
+            else if (def.inKey === 'wAZTEC') amountIn = amountsReceived['swap4_wAZTEC'] ?? 0n;
+            // Fallback: read private balance from chain (needed when resuming)
+            if (amountIn === 0n) {
+                console.log(`    [resume] Reading ${def.inKey} private balance from chain...`);
+                amountIn = await getPrivateBalance(tokenMap[def.inKey], demoUser);
+            }
         }
 
         const tokenIn = tokenMap[def.inKey];
@@ -390,7 +450,9 @@ async function demoData() {
     // On sandbox: loser is addresses[1], on devnet: addresses[2] (2nd demo account)
     const loserUser = isDevnet ? addresses[2] : addresses[1];
 
-    if (!isDevnet) {
+    if (resumePhase) {
+        console.log('  [resume] Skipping loser account deployment & minting\n');
+    } else if (!isDevnet) {
         // --- Deploy loser account on-chain (sandbox only) ---
         console.log('--- Deploying loser account on-chain ---');
         const accounts = await getInitialTestAccountsData();
@@ -413,10 +475,12 @@ async function demoData() {
         console.log(`  Loser account already deployed on devnet at ${loserUser}\n`);
     }
 
-    // --- Mint 100,000 USDC to loser ---
-    console.log('--- Minting 100,000 USDC to loser ---');
-    await usdc_token.methods.mint_to_private(loserUser, usdc(100_000)).send(sendOpts(admin));
-    console.log(`  Minted ${usdc(100_000)} USDC (100,000 with 6 decimals)\n`);
+    if (!resumePhase) {
+        // --- Mint 100,000 USDC to loser ---
+        console.log('--- Minting 100,000 USDC to loser ---');
+        await usdc_token.methods.mint_to_private(loserUser, usdc(100_000)).send(sendOpts(admin));
+        console.log(`  Minted ${usdc(100_000)} USDC (100,000 with 6 decimals)\n`);
+    }
 
     // Price multipliers for the loser's 12 swaps.
     // Starts at account 1's final oracle state (ETH=0.95x, ZEC=1.25x, AZTEC=1.80x).
@@ -462,13 +526,33 @@ async function demoData() {
     // Track token balances for "sell all" swaps
     const loserHoldings: Record<string, bigint> = {};
 
-    console.log('--- Executing 12 swaps for loser account ---');
-    for (let i = 0; i < 12; i++) {
+    const loserStart = resumePhase === 'loser' ? resumeSwap : 0;
+
+    // Apply price state before entering loser loop when resuming
+    if (resumePhase === 'loser') {
+        const mult = LOSER_PRICE_MULTIPLIERS[resumeSwap];
+        console.log(`  [resume] Applying price state for loser swap ${resumeSwap + 1} (ETH:${mult.wETH}x, ZEC:${mult.wZEC}x, AZTEC:${mult.wAZTEC}x)`);
+        await rebalancePools({
+            priceFeed,
+            minter: admin,
+            pools: Object.values(poolStates),
+            tokenPrices: [
+                { token: usdc_token, price: BigInt(Math.round(Number(baseOraclePrices.USDC) * mult.USDC)) },
+                { token: weth,       price: BigInt(Math.round(Number(baseOraclePrices.wETH) * mult.wETH)) },
+                { token: wzec,       price: BigInt(Math.round(Number(baseOraclePrices.wZEC) * mult.wZEC)) },
+                { token: waztec,     price: BigInt(Math.round(Number(baseOraclePrices.wAZTEC) * mult.wAZTEC)) },
+            ],
+            sendOpts,
+        });
+    }
+
+    console.log(`--- Executing swaps ${loserStart + 1}-12 for loser account ---`);
+    for (let i = loserStart; i < 12; i++) {
         const def = LOSER_SWAP_DEFS[i];
         const mult = LOSER_PRICE_MULTIPLIERS[i];
 
         // Update oracle prices and rebalance pools when multipliers change
-        if (i > 0) {
+        if (i > loserStart) {
             const prevMult = LOSER_PRICE_MULTIPLIERS[i - 1];
             const changed = mult.wETH !== prevMult.wETH || mult.wZEC !== prevMult.wZEC || mult.wAZTEC !== prevMult.wAZTEC;
             if (changed) {
@@ -491,8 +575,13 @@ async function demoData() {
         // Resolve amountIn for "sell all" swaps
         let amountIn = def.amountIn;
         if (amountIn === 0n) {
-            amountIn = loserHoldings[def.inKey]!;
-            if (!amountIn) throw new Error(`No tracked holdings for ${def.inKey} at swap ${i + 1}`);
+            amountIn = loserHoldings[def.inKey] ?? 0n;
+            // Fallback: read private balance from chain (needed when resuming)
+            if (amountIn === 0n) {
+                console.log(`    [resume] Reading ${def.inKey} private balance from chain...`);
+                amountIn = await getPrivateBalance(tokenMap[def.inKey], loserUser);
+            }
+            if (amountIn === 0n) throw new Error(`No holdings for ${def.inKey} at loser swap ${i + 1} (checked chain)`);
         }
 
         const tokenIn = tokenMap[def.inKey];

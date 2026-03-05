@@ -86,14 +86,25 @@ export default function PriceCard() {
     }
     adminRegistering.current = true;
     try {
-      const { getInitialTestAccountsData } = await import("@aztec/accounts/testing");
-      const testAccounts = await getInitialTestAccountsData();
-      const admin = testAccounts[0];
-      adminRef.current = await wallet.registerAccountFromCredentials(
-        admin.secret,
-        admin.salt,
-        admin.signingKey
-      );
+      const adminEnv = process.env.NEXT_PUBLIC_ADMIN_ACCOUNT;
+      if (adminEnv) {
+        const { Fr, Fq } = await import("@aztec/aztec.js/fields");
+        const parsed = JSON.parse(adminEnv) as { secretKey: string; salt: string; signingKey: string };
+        adminRef.current = await wallet.registerAccountFromCredentials(
+          Fr.fromString(parsed.secretKey),
+          Fr.fromString(parsed.salt),
+          Fq.fromString(parsed.signingKey),
+        );
+      } else {
+        const { getInitialTestAccountsData } = await import("@aztec/accounts/testing");
+        const testAccounts = await getInitialTestAccountsData();
+        const admin = testAccounts[0];
+        adminRef.current = await wallet.registerAccountFromCredentials(
+          admin.secret,
+          admin.salt,
+          admin.signingKey
+        );
+      }
     } catch (err) {
       console.warn("Failed to register admin account:", err);
     } finally {
@@ -330,12 +341,28 @@ export default function PriceCard() {
         });
       }
 
+      // Build sendOpts with FPC on devnet
+      let buildSendOpts: (from: import("@aztec/aztec.js/addresses").AztecAddress) => Record<string, unknown> = (from) => ({ from });
+      if (process.env.NEXT_PUBLIC_ADMIN_ACCOUNT) {
+        const { SponsoredFeePaymentMethod } = await import("@aztec/aztec.js/fee");
+        const { getContractInstanceFromInstantiationParams } = await import("@aztec/aztec.js/contracts");
+        const { SponsoredFPCContractArtifact } = await import("@aztec/noir-contracts.js/SponsoredFPC");
+        const { SPONSORED_FPC_SALT } = await import("@aztec/constants");
+        const { Fr: FrField } = await import("@aztec/aztec.js/fields");
+        const fpcInstance = await getContractInstanceFromInstantiationParams(
+          SponsoredFPCContractArtifact,
+          { salt: new FrField(SPONSORED_FPC_SALT) },
+        );
+        const fpcAddress = fpcInstance.address;
+        buildSendOpts = (from) => ({ from, fee: { paymentMethod: new SponsoredFeePaymentMethod(fpcAddress) } });
+      }
+
       await rebalancePools({
         priceFeed: priceFeed as unknown as Parameters<typeof rebalancePools>[0]["priceFeed"],
         minter: adminRef.current,
         pools: poolStates,
         tokenPrices,
-        sendOpts: (from) => ({ from }),
+        sendOpts: buildSendOpts,
         onProgress: (step, total, label) => {
           setProgress({ step, total, label });
         },

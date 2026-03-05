@@ -41,7 +41,7 @@ function isValidAmount(value: string): boolean {
 
 export default function SwapCard() {
   const { wallet, address, status: walletStatus, isDemoAccount } = useAztecWallet();
-  const { getBalance, isLoading, fetchBalance, refreshAll, setBalance, refreshCounter } = useTokenBalances();
+  const { getBalance, getRawBalance, isLoading, fetchBalance, refreshAll, setBalance, refreshCounter } = useTokenBalances();
   const { showToast } = useToast();
 
   const [sellToken, setSellToken] = useState<Token>(TOKENS.USDC);
@@ -208,14 +208,17 @@ export default function SwapCard() {
   }, []);
 
   const handleMax = useCallback(() => {
-    const bal = getBalance(sellToken.symbol);
-    if (!bal) return;
-    const parsed = parseBalance(bal);
-    if (parsed > 0) {
-      setActiveInput("sell");
-      setSellAmount(String(parsed));
-    }
-  }, [getBalance, sellToken.symbol]);
+    const raw = getRawBalance(sellToken.symbol);
+    if (!raw || raw <= 0n) return;
+    const decimals = TOKEN_DECIMALS[sellToken.symbol] ?? 9;
+    // Use full precision so the exact raw amount is sent
+    const whole = raw / 10n ** BigInt(decimals);
+    const frac = raw % 10n ** BigInt(decimals);
+    const fracStr = frac.toString().padStart(decimals, "0").replace(/0+$/, "");
+    const fullPrecision = fracStr ? `${whole}.${fracStr}` : `${whole}`;
+    setActiveInput("sell");
+    setSellAmount(fullPrecision);
+  }, [getRawBalance, sellToken.symbol]);
 
   const flipTokens = useCallback(() => {
     const newSell = buyToken;

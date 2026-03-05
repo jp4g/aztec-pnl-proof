@@ -30,12 +30,14 @@ export function formatTokenBalance(raw: bigint, decimals: number): string {
 export function useTokenBalances() {
   const { wallet, address } = useAztecWallet();
   const [balances, setBalances] = useState<Record<string, string>>({});
+  const [rawBalances, setRawBalances] = useState<Record<string, bigint>>({});
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const pendingRef = useRef(new Set<string>());
 
   // Reset when address changes
   useEffect(() => {
     setBalances({});
+    setRawBalances({});
     setLoading({});
     pendingRef.current.clear();
   }, [address]);
@@ -73,6 +75,7 @@ export function useTokenBalances() {
           const decimals = TOKEN_DECIMALS[symbol] ?? 18;
           const formatted = formatTokenBalance(raw, decimals);
           setBalances((prev) => ({ ...prev, [symbol]: formatted }));
+          setRawBalances((prev) => ({ ...prev, [symbol]: raw }));
         } catch (err) {
           console.warn(`Failed to fetch ${symbol} balance:`, err);
           setBalances((prev) => ({ ...prev, [symbol]: "0" }));
@@ -92,6 +95,14 @@ export function useTokenBalances() {
     [address, balances]
   );
 
+  const getRawBalance = useCallback(
+    (symbol: string): bigint | null => {
+      if (!address) return null;
+      return rawBalances[symbol] ?? null;
+    },
+    [address, rawBalances]
+  );
+
   const isLoading = useCallback(
     (symbol: string): boolean => {
       return loading[symbol] ?? false;
@@ -108,9 +119,10 @@ export function useTokenBalances() {
   const refreshAll = useCallback(() => {
     pendingRef.current.clear();
     setBalances({});
+    setRawBalances({});
     setLoading({});
     setRefreshCounter((c) => c + 1);
   }, []);
 
-  return { getBalance, isLoading, fetchBalance, refreshAll, setBalance, refreshCounter };
+  return { getBalance, getRawBalance, isLoading, fetchBalance, refreshAll, setBalance, refreshCounter };
 }
