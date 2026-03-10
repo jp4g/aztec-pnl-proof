@@ -4,6 +4,7 @@
   "license": "MIT",
   "private": true,
   "type": "module",
+  "workspaces": ["packages/*", "apps/*"],
   "scripts": {
     "postinstall": "bun scripts/postinstall.ts",
     "deploy": "bun scripts/deploy.ts",
@@ -84,6 +85,5 @@
     "@aztec/wallet-sdk": "file:../aztec-packages/yarn-project/wallet-sdk",
     "@aztec/wallets": "file:../aztec-packages/yarn-project/wallets",
     "@aztec/world-state": "file:../aztec-packages/yarn-project/world-state"
-  },
-  "packageManager": "yarn@1.22.22"
+  }
 }

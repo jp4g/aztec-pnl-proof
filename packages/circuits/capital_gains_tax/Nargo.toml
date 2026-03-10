@@ -1,0 +1,8 @@
+[package]
+name = "capital_gains_tax"
+type = "bin"
+authors = [""]
+
+[dependencies]
+bb_proof_verification = { path = "../../../../aztec-packages/barretenberg/noir/bb_proof_verification" }
+protocol_types = { path = "../../../../aztec-packages/noir-projects/noir-protocol-circuits/crates/types" }

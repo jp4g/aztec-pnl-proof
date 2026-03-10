@@ -1,0 +1,49 @@
+import type { Metadata } from "next";
+import { Inter, JetBrains_Mono } from "next/font/google";
+import Navbar from "@/components/layout/Navbar";
+import Footer from "@/components/layout/Footer";
+import { AztecWalletProvider } from "@/contexts/AztecWalletContext";
+import { TokenProvider } from "@/contexts/TokenContext";
+import { ToastProvider } from "@/contexts/ToastContext";
+import "./globals.css";
+
+const inter = Inter({
+  variable: "--font-inter",
+  subsets: ["latin"],
+  weight: ["300", "400", "500", "600"],
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  variable: "--font-jetbrains-mono",
+  subsets: ["latin"],
+  weight: ["400", "500"],
+});
+
+export const metadata: Metadata = {
+  title: "PrivPNL - Private PnL Proofs",
+  description: "Prove your trading PnL and tax obligations without revealing your assets or trades",
+};
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html lang="en">
+      <body
+        className={`${inter.variable} ${jetbrainsMono.variable} font-sans bg-neutral-50 text-neutral-800 antialiased selection:bg-orange-100 selection:text-orange-600 min-h-screen flex flex-col`}
+      >
+        <AztecWalletProvider>
+          <TokenProvider>
+            <ToastProvider>
+              <Navbar />
+              {children}
+              <Footer />
+            </ToastProvider>
+          </TokenProvider>
+        </AztecWalletProvider>
+      </body>
+    </html>
+  );
+}

@@ -1,0 +1,20 @@
+{
+  "name": "@privpnl/proof",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./swap-prover": "./src/swap-prover.ts",
+    "./swap-proof-tree": "./src/swap-proof-tree.ts",
+    "./tax-prover": "./src/tax-prover.ts",
+    "./lot-state-tree": "./src/lot-state-tree.ts",
+    "./imt": "./src/imt.ts",
+    "./utils": "./src/utils.ts",
+    "./decrypt": "./src/decrypt.ts",
+    "./event-reader": "./src/event-reader.ts",
+    "./rebalance": "./src/rebalance.ts",
+    "./auditor": "./src/auditor/index.ts"
+  }
+}

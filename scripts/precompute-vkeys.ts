@@ -14,7 +14,7 @@ async function main() {
     console.log('=== Precomputing verification keys ===\n');
 
     // Load circuit artifacts
-    const circuitsDir = join(process.cwd(), 'circuits');
+    const circuitsDir = join(process.cwd(), 'packages', 'circuits');
     const leafCircuit = JSON.parse(
         await readFile(join(circuitsDir, 'individual_swap/target/individual_swap.json'), 'utf-8'),
     );
@@ -47,7 +47,7 @@ async function main() {
     console.log(`  Summary vkey fields: ${summaryArtifacts.vkAsFields.length}`);
 
     // Save to disk
-    const outDir = join(process.cwd(), 'circuits', 'vkeys');
+    const outDir = join(process.cwd(), 'packages', 'circuits', 'vkeys');
     await mkdir(outDir, { recursive: true });
 
     const vkeys = {
@@ -66,7 +66,7 @@ async function main() {
     console.log(`\nSaved to ${outPath}`);
 
     // Also copy to frontend public dir for browser access
-    const publicDir = join(process.cwd(), 'frontend', 'public', 'circuits');
+    const publicDir = join(process.cwd(), 'apps', 'web', 'public', 'circuits');
     await mkdir(publicDir, { recursive: true });
     await writeFile(join(publicDir, 'vkeys.json'), JSON.stringify(vkeys));
     console.log(`Copied to ${join(publicDir, 'vkeys.json')}`);

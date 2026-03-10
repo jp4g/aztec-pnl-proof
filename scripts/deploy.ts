@@ -22,8 +22,8 @@ import { getInitialTestAccountsData } from '@aztec/accounts/testing';
 import { AztecAddress } from '@aztec/aztec.js/addresses';
 import { createAztecNodeClient, type AztecNode } from '@aztec/aztec.js/node';
 import { PriceFeedContract } from '@aztec/noir-contracts.js/PriceFeed';
-import { TokenContract } from '../src/artifacts/Token';
-import { AMMContract } from '../src/artifacts/AMM';
+import { TokenContract } from '@privpnl/contracts/Token';
+import { AMMContract } from '@privpnl/contracts/AMM';
 import { EmbeddedWallet } from '@aztec/wallets/embedded';
 import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
@@ -54,12 +54,12 @@ const POOL_USDC_AMOUNT = 10_000_000n;
 const USDC_DECIMALS = 6;
 const TOKEN_DECIMALS = 9;
 
-// CoinGecko IDs — no listed AZTEC token, use fallback
+// CoinGecko IDs
 const COINGECKO_IDS = {
     wETH: 'ethereum',
     wZEC: 'zcash',
+    wAZTEC: 'aztec',
 } as const;
-const WAZTEC_FALLBACK_USD = 0.10;
 
 interface CoinGeckoPrices {
     [id: string]: { usd: number };
@@ -78,7 +78,8 @@ async function fetchPrices(): Promise<{ wETH: number; wZEC: number; wAZTEC: numb
 
     const ethPrice = data[COINGECKO_IDS.wETH]?.usd;
     const zecPrice = data[COINGECKO_IDS.wZEC]?.usd;
-    if (!ethPrice || !zecPrice) {
+    const aztecPrice = data[COINGECKO_IDS.wAZTEC]?.usd;
+    if (!ethPrice || !zecPrice || !aztecPrice) {
         throw new Error(`Missing prices from CoinGecko: ${JSON.stringify(data)}`);
     }
 
@@ -86,7 +87,7 @@ async function fetchPrices(): Promise<{ wETH: number; wZEC: number; wAZTEC: numb
         USDC: 1.0,
         wETH: ethPrice,
         wZEC: zecPrice,
-        wAZTEC: WAZTEC_FALLBACK_USD,
+        wAZTEC: aztecPrice,
     };
 }
 
@@ -141,7 +142,7 @@ async function setup() {
     console.log(`  USDC   = $${prices.USDC}`);
     console.log(`  wETH   = $${prices.wETH}`);
     console.log(`  wZEC   = $${prices.wZEC}`);
-    console.log(`  wAZTEC = $${prices.wAZTEC} (fallback)\n`);
+    console.log(`  wAZTEC = $${prices.wAZTEC}\n`);
 
     const oraclePrices = {
         USDC: toOraclePrice(prices.USDC),
@@ -376,7 +377,7 @@ async function setup() {
 
     // --- Upsert deployed addresses into frontend env file ---
     const envFile = isDevnet ? '.env.production' : '.env.development';
-    const envPath = join(process.cwd(), 'frontend', envFile);
+    const envPath = join(process.cwd(), 'apps', 'web', envFile);
     const deployedVars: Record<string, string> = {
         NEXT_PUBLIC_PRICE_FEED: priceFeed.address.toString(),
         NEXT_PUBLIC_TOKEN_USDC: usdc.address.toString(),
