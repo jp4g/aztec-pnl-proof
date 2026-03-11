@@ -12,6 +12,7 @@
     "deploy": "tsx scripts/deploy.ts",
     "demo-data": "tsx scripts/demo-data.ts",
     "setup": "tsx scripts/deploy.ts && tsx scripts/demo-data.ts",
+    "push-env": "tsx scripts/push-env.ts",
     "test": "node --env-file=.env --import tsx --test test/pnl.test.ts"
   },
   "dependencies": {
@@ -28,7 +29,6 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.1",
-    "@zkpassport/poseidon2": "^0.6.2",
     "dotenv": "^16",
     "tsx": "^4",
     "typescript": "^5.4.4"

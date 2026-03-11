@@ -10,12 +10,13 @@
     "./swap-proof-tree": "./src/swap-proof-tree.ts",
     "./tax-prover": "./src/tax-prover.ts",
     "./lot-state-tree": "./src/lot-state-tree.ts",
-    "./imt": "./src/imt.ts",
-    "./utils": "./src/utils.ts",
-    "./decrypt": "./src/decrypt.ts",
-    "./event-reader": "./src/event-reader.ts",
-    "./rebalance": "./src/rebalance.ts",
     "./auditor": "./src/auditor/index.ts",
+    "./auditor/browser": "./src/auditor/browser.ts",
+    "./rebalance": "./src/rebalance.ts",
+    "./utils": "./src/utils.ts",
     "./constants": "./src/constants.ts"
+  },
+  "dependencies": {
+    "@zkpassport/poseidon2": "^0.6.2"
   }
 }

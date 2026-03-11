@@ -12,7 +12,7 @@ import { Barretenberg } from '@aztec/bb.js';
 import type { CompiledCircuit } from '@aztec/noir-types';
 import { Fr } from '@aztec/foundation/curves/bn254';
 import { poseidon2Hash, poseidon2HashWithSeparator } from '@aztec/foundation/crypto/poseidon';
-import { retrieveEncryptedEvents } from '@privpnl/proof/event-reader';
+import { retrieveEncryptedEvents } from '@privpnl/proof/auditor';
 import { SwapProver } from '@privpnl/proof/swap-prover';
 import { SwapProofTree } from '@privpnl/proof/swap-proof-tree';
 import { LotStateTree } from '@privpnl/proof/lot-state-tree';

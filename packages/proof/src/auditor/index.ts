@@ -1,5 +1,3 @@
-export { NoteHashCollector } from './collector';
-export { NoteMapper } from './note-mapper';
 export { TagGenerator } from './tag-generator';
 export {
   serializeTaggingSecretExport,
@@ -13,7 +11,8 @@ export type {
   TaggingSecretExport,
   SerializedTaggingSecretEntry,
   SerializedTaggingSecretExport,
-  ScanOptions,
-  NoteHashMapping,
-  ScanResult,
 } from './types';
+
+// Node entry point
+export { retrieveEncryptedEvents } from './event-reader';
+export type { EventRetrievalResult, EventSecretResult, RetrievedEvent } from './event-reader';

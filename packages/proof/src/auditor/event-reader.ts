@@ -1,7 +1,8 @@
 import type { AztecNode } from "@aztec/aztec.js/node";
-import { TagGenerator, type TaggingSecretExport, type TaggingSecretEntry } from "./auditor/index";
+import { TagGenerator, type TaggingSecretExport, type TaggingSecretEntry } from "./index";
 import { Tag, SiloedTag } from "@aztec/stdlib/logs";
 import { AztecAddress } from "@aztec/aztec.js/addresses";
+import { log } from '../logger';
 
 /**
  * Scan for encrypted event logs using tagging secrets.
@@ -66,7 +67,7 @@ async function processSecret(
 ): Promise<EventSecretResult> {
     const events: RetrievedEvent[] = [];
 
-    console.log(`[EventReader] Processing secret: counterparty: ${secretEntry.counterparty.toString().slice(0, 16)}...`);
+    log(`[EventReader] Processing secret: counterparty: ${secretEntry.counterparty.toString().slice(0, 16)}...`);
 
     for (let index = startIndex; index < startIndex + maxIndices; index += batchSize) {
         const count = Math.min(batchSize, startIndex + maxIndices - index);
@@ -82,13 +83,13 @@ async function processSecret(
             })
         );
 
-        console.log(`[EventReader] Generated ${siloedTags.length} siloed tags for indices ${index}-${index + count - 1}`);
+        log(`[EventReader] Generated ${siloedTags.length} siloed tags for indices ${index}-${index + count - 1}`);
 
         // Query logs by siloed tags (v4 API)
         const logsPerTag = await node.getPrivateLogsByTags(siloedTags);
 
         const totalLogs = logsPerTag.reduce((sum, logs) => sum + logs.length, 0);
-        console.log(`[EventReader] Received ${totalLogs} logs from node`);
+        log(`[EventReader] Received ${totalLogs} logs from node`);
 
         // Process each tag's logs - no NoteMapper needed for events
         for (let i = 0; i < logsPerTag.length; i++) {

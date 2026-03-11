@@ -15,11 +15,8 @@ export { precision, parseSignedHex, proofBytesToFields } from './utils.js';
 
 export { decryptLog } from './decrypt.js';
 
-export { retrieveEncryptedEvents } from './event-reader.js';
-export type { EventRetrievalResult, EventSecretResult, RetrievedEvent } from './event-reader.js';
+export { retrieveEncryptedEvents } from './auditor/event-reader.js';
+export type { EventRetrievalResult, EventSecretResult, RetrievedEvent } from './auditor/event-reader.js';
 
 export { rebalancePools } from './rebalance.js';
 export type { PoolState, TokenPrice } from './rebalance.js';
-
-export { retrieveEncryptedNotes } from './auditor.js';
-export type { RetrievalResult, SecretResult, RetrievedNote } from './auditor.js';
