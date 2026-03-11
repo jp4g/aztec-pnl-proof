@@ -12,7 +12,7 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 ## Deploy to Vercel
 
-The project uses local `file:` dependencies on `aztec-packages`, so it must be built locally and deployed as pre-built output.
+The project must be built locally and deployed as pre-built output.
 
 ### One-time setup
 
@@ -34,7 +34,7 @@ vercel deploy --prebuilt --prod
 
 Or use the shortcut: `yarn deploy:prod`
 
-The patch script copies the API route bundle into the serverless function directory — Vercel's file tracing can't follow symlinked dependencies outside the project root.
+The patch script copies the API route bundle into the serverless function directory.
 
 ## Known Issues
 

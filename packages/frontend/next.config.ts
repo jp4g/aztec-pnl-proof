@@ -1,7 +1,5 @@
 import type { NextConfig } from "next";
 import { createRequire } from "module";
-import path from "path";
-
 const require = createRequire(import.meta.url);
 
 const nextConfig: NextConfig = {
@@ -16,11 +14,7 @@ const nextConfig: NextConfig = {
       },
     ];
   },
-  turbopack: {
-    // Extend root to include aztec-packages so Turbopack can resolve
-    // file:-linked dependencies outside the default project root
-    root: path.resolve(import.meta.dirname, "../../.."),
-  },
+  turbopack: {},
   transpilePackages: ['@privpnl/proof', '@privpnl/contracts', '@privpnl/circuits'],
   webpack: (config, { isServer, webpack }) => {
     config.resolve = config.resolve ?? {};

@@ -49,7 +49,7 @@ if (existsSync(wpRuntime)) {
 }
 
 // 2. Copy pino ecosystem into function's node_modules
-const pinoSource = resolve(root, "../../aztec-packages/yarn-project/node_modules");
+const pinoSource = resolve(root, "node_modules");
 const destNodeModules = resolve(funcDir, "node_modules");
 
 const pinoPackages = [
