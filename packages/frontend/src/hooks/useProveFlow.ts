@@ -1,17 +1,14 @@
 "use client";
 
-console.log("[prove] useProveFlow MODULE LOADED");
-
 import { useState, useCallback, useRef } from "react";
 import { useAztecWallet } from "@/hooks/useAztecWallet";
 import type {
   ProveFlowState,
   DecodedSwap,
   DownloadableProof,
-  TreeNode,
-  TreeNodeStatus,
 } from "@/types";
 import { TOKENS } from "@/data/dummy";
+import { buildTreeNodes } from "@/lib/tree-utils";
 
 /** Map token contract addresses to symbols for display.
  *  Next.js requires literal `process.env.NEXT_PUBLIC_*` for static replacement —
@@ -78,90 +75,12 @@ function makeInitialState(): ProveFlowState {
   };
 }
 
-/**
- * Build tree visualization nodes for an arbitrary number of leaves.
- * Returns `treeLevels` bottom-up: [leaves, ...intermediates, root].
- *
- * @param totalLeaves - number of real swap leaves
- * @param provenCount - how many leaf proofs are done
- * @param currentProving - index of leaf currently being proven (null if not proving a leaf)
- * @param aggregation - aggregation progress:
- *   "complete": all intermediate levels verified
- *   number: how many viz levels are fully done (0 = none)
- *   object: granular per-node progress { level, nodeIndex }
- */
-function buildTreeNodes(
-  totalLeaves: number,
-  provenCount: number,
-  currentProving: number | null,
-  aggregation: number | { level: number; nodeIndex: number } | "complete" = 0,
-): { treeLevels: TreeNode[][] } {
-  if (totalLeaves === 0) return { treeLevels: [] };
-
-  // Pad to next power of 2, min 2
-  const padded = Math.max(2, Math.pow(2, Math.ceil(Math.log2(Math.max(totalLeaves, 1)))));
-  const numIntermediateLevels = Math.log2(padded); // e.g. 8 leaves → 3 levels above
-
-  function intermediateStatus(vizLevel: number, nodeIndex: number, isUnused: boolean): TreeNodeStatus {
-    if (isUnused) return "unused";
-    if (aggregation === "complete") return "verified";
-    if (typeof aggregation === "number") {
-      return vizLevel < aggregation ? "verified" : "pending";
-    }
-    const { level: aggLevel, nodeIndex: aggNode } = aggregation;
-    if (vizLevel < aggLevel) return "verified";
-    if (vizLevel > aggLevel) return "pending";
-    if (nodeIndex < aggNode) return "verified";
-    if (nodeIndex === aggNode) return "proving";
-    return "pending";
-  }
-
-  // Build leaves
-  const leaves: TreeNode[] = [];
-  for (let i = 0; i < padded; i++) {
-    let status: TreeNodeStatus;
-    if (i >= totalLeaves) status = "unused";
-    else if (i < provenCount) status = "verified";
-    else if (currentProving !== null && i === currentProving) status = "proving";
-    else status = "pending";
-    leaves.push({
-      id: `leaf-${i}`,
-      status,
-      label: i < totalLeaves ? `Tx ${i + 1}` : "Pad",
-    });
-  }
-
-  const levels: TreeNode[][] = [leaves];
-
-  // Build intermediate levels (including root)
-  for (let lvl = 0; lvl < numIntermediateLevels; lvl++) {
-    const prev = levels[lvl];
-    const count = prev.length / 2;
-    const isRoot = lvl === numIntermediateLevels - 1;
-    const nodes: TreeNode[] = [];
-    for (let i = 0; i < count; i++) {
-      const bothUnused =
-        prev[i * 2].status === "unused" &&
-        prev[i * 2 + 1].status === "unused";
-      nodes.push({
-        id: isRoot ? "root" : `int-${lvl}-${i}`,
-        status: intermediateStatus(lvl, i, isRoot ? false : bothUnused),
-        label: isRoot ? "Root" : undefined,
-      });
-    }
-    levels.push(nodes);
-  }
-
-  return { treeLevels: levels };
-}
-
 export function useProveFlow() {
   const { wallet, address } = useAztecWallet();
   const [state, setState] = useState<ProveFlowState>(makeInitialState());
   const abortRef = useRef(false);
 
   const startProving = useCallback(async () => {
-    console.log("[prove] startProving CALLED, wallet:", !!wallet, "address:", address);
     if (!wallet || !address) return;
     abortRef.current = false;
 
@@ -173,7 +92,6 @@ export function useProveFlow() {
     });
 
     try {
-      console.log("[prove] === Starting prove flow ===");
       // --- Step 1: Get audit inputs from wallet ---
       const { AztecAddress } = await import("@aztec/aztec.js/addresses");
       const account = AztecAddress.fromString(address);
@@ -266,13 +184,6 @@ export function useProveFlow() {
         }
       }
 
-      console.log(`[prove] Discovered ${encryptedEvents.length} events, decoded ${decodedSwaps.length} swaps`);
-      decodedSwaps.forEach((s, i) => {
-        const tIn = resolveToken(s.tokenIn);
-        const tOut = resolveToken(s.tokenOut);
-        console.log(`  [${i}] ${tIn.symbol} -> ${tOut.symbol}: in=${s.amountIn} out=${s.amountOut} block=${s.blockNumber}`);
-      });
-
       // Build initial tree visualization
       const treeViz = buildTreeNodes(totalSwaps, 0, null);
 
@@ -289,7 +200,6 @@ export function useProveFlow() {
       if (abortRef.current) return;
 
       // --- Step 3: Load circuit artifacts + precomputed vkeys ---
-      console.log("[prove] Step 3a: fetching circuits...");
       const [individualSwapJson, swapSummaryTreeJson, capitalGainsTaxJson, vkeysJson] =
         await Promise.all([
           fetch("/circuits/individual_swap.json").then((r) => r.json()),
@@ -297,8 +207,6 @@ export function useProveFlow() {
           fetch("/circuits/capital_gains_tax.json").then((r) => r.json()),
           fetch("/circuits/vkeys.json").then((r) => r.json()),
         ]);
-      console.log("[prove] Step 3b: circuits loaded, vkeys leaf hash:", vkeysJson?.leaf?.vkHash);
-
       setState((prev) => ({
         ...prev,
         statusText: "Initializing proof engine...",
@@ -308,19 +216,13 @@ export function useProveFlow() {
       if (abortRef.current) return;
 
       // --- Step 4: Initialize Barretenberg ---
-      console.log("[prove] Step 4a: importing bb.js...");
       const { Barretenberg } = await import("@aztec/bb.js");
-      console.log("[prove] Step 4b: creating Barretenberg...");
       const numThreads = navigator.hardwareConcurrency || 1;
-      console.log(`[prove] Step 4b: threads: ${numThreads}`);
       const bb = await Barretenberg.new({ threads: numThreads });
-      console.log("[prove] Step 4c: loading larger CRS...");
       // Summary circuit (recursive proof verification) needs > 2^20 CRS points
       await bb.initSRSChonk(2 ** 21);
-      console.log("[prove] Step 4d: CRS loaded");
 
       // --- Step 5: Create provers ---
-      console.log("[prove] Step 5: Creating provers...");
       const { SwapProver } = await import("@privpnl/proof/swap-prover");
       const { LotStateTree } = await import("@privpnl/proof/lot-state-tree");
       const { Fr } = await import("@aztec/aztec.js/fields");
@@ -357,14 +259,12 @@ export function useProveFlow() {
       if (abortRef.current) return;
 
       // --- Step 6: Convert events to Buffer format ---
-      console.log("[prove] Step 6: Converting events...");
       const swapEvents = encryptedEvents.map((e) => ({
         encryptedLog: Buffer.from(e.ciphertext, "hex"),
         blockNumber: BigInt(e.blockNumber),
       }));
 
       // --- Step 7: Full SwapProofTree + Tax ---
-      console.log("[prove] Step 7: Starting proof pipeline...");
       setState((prev) => ({
         ...prev,
         status: "proving",

@@ -15,6 +15,7 @@
     "./decrypt": "./src/decrypt.ts",
     "./event-reader": "./src/event-reader.ts",
     "./rebalance": "./src/rebalance.ts",
-    "./auditor": "./src/auditor/index.ts"
+    "./auditor": "./src/auditor/index.ts",
+    "./constants": "./src/constants.ts"
   }
 }

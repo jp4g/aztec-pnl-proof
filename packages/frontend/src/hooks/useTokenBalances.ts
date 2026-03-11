@@ -2,21 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAztecWallet } from "@/hooks/useAztecWallet";
+import { TOKEN_ADDRESSES, TOKEN_DECIMALS } from "@/config/contracts";
 
-// Next.js requires static process.env access for build-time replacement
-export const TOKEN_ADDRESSES: Record<string, string | undefined> = {
-  USDC: process.env.NEXT_PUBLIC_TOKEN_USDC,
-  wETH: process.env.NEXT_PUBLIC_TOKEN_WETH,
-  wZEC: process.env.NEXT_PUBLIC_TOKEN_WZEC,
-  wAZTEC: process.env.NEXT_PUBLIC_TOKEN_WAZTEC,
-};
-
-export const TOKEN_DECIMALS: Record<string, number> = {
-  USDC: 6,
-  wETH: 9,
-  wZEC: 9,
-  wAZTEC: 9,
-};
+// Re-export so existing consumers keep working
+export { TOKEN_ADDRESSES, TOKEN_DECIMALS } from "@/config/contracts";
 
 export function formatTokenBalance(raw: bigint, decimals: number): string {
   const value = Number(raw) / 10 ** decimals;

@@ -18,82 +18,70 @@ import { getPXEConfig } from "@aztec/pxe/config";
 import { BaseWallet, type FeeOptions } from "@aztec/wallet-sdk/base-wallet";
 import { GasSettings } from "@aztec/stdlib/gas";
 
+import {
+  TOKEN_ADDRESSES,
+  POOL_ADDRESSES,
+  LP_ADDRESSES,
+  PRICE_FEED_ADDRESS,
+} from "@/config/contracts";
+import {
+  type StoredAccount,
+  loadStoredAccounts,
+  saveStoredAccounts,
+  getStoredActiveAddress,
+  setStoredActiveAddress,
+  removeStoredActiveAddress,
+  clearAllStoredAccounts,
+} from "@/lib/storage";
+
 const logger = createLogger("privpnl:wallet");
-const ACCOUNTS_KEY = "privpnl-aztec-accounts";
-const ACTIVE_ACCOUNT_KEY = "privpnl-aztec-active-account";
-const LEGACY_KEY = "privpnl-aztec-account";
+
 interface ContractRegistryEntry {
   label: string;
   address: string | undefined;
   loadArtifact: () => Promise<import("@aztec/aztec.js/abi").ContractArtifact>;
 }
 
-// Next.js requires static process.env.NEXT_PUBLIC_* access for build-time replacement
-const CONTRACT_REGISTRY: ContractRegistryEntry[] = [
-  {
-    label: "Token (USDC)",
-    address: process.env.NEXT_PUBLIC_TOKEN_USDC,
-    loadArtifact: () => import("@aztec/noir-contracts.js/Token").then((m) => m.TokenContractArtifact),
-  },
-  {
-    label: "Token (wETH)",
-    address: process.env.NEXT_PUBLIC_TOKEN_WETH,
-    loadArtifact: () => import("@aztec/noir-contracts.js/Token").then((m) => m.TokenContractArtifact),
-  },
-  {
-    label: "Token (wZEC)",
-    address: process.env.NEXT_PUBLIC_TOKEN_WZEC,
-    loadArtifact: () => import("@aztec/noir-contracts.js/Token").then((m) => m.TokenContractArtifact),
-  },
-  {
-    label: "Token (wAZTEC)",
-    address: process.env.NEXT_PUBLIC_TOKEN_WAZTEC,
-    loadArtifact: () => import("@aztec/noir-contracts.js/Token").then((m) => m.TokenContractArtifact),
-  },
-  {
-    label: "PriceFeed",
-    address: process.env.NEXT_PUBLIC_PRICE_FEED,
-    loadArtifact: () => import("@aztec/noir-contracts.js/PriceFeed").then((m) => m.PriceFeedContractArtifact),
-  },
-  {
-    label: "AMM (ETH/USDC)",
-    address: process.env.NEXT_PUBLIC_AMM_ETH_USDC,
-    loadArtifact: () => import("@privpnl/contracts/AMM").then((m) => m.AMMContractArtifact),
-  },
-  {
-    label: "AMM (ZEC/USDC)",
-    address: process.env.NEXT_PUBLIC_AMM_ZEC_USDC,
-    loadArtifact: () => import("@privpnl/contracts/AMM").then((m) => m.AMMContractArtifact),
-  },
-  {
-    label: "AMM (AZTEC/USDC)",
-    address: process.env.NEXT_PUBLIC_AMM_AZTEC_USDC,
-    loadArtifact: () => import("@privpnl/contracts/AMM").then((m) => m.AMMContractArtifact),
-  },
-  {
-    label: "LP (ETH/USDC)",
-    address: process.env.NEXT_PUBLIC_LP_ETH_USDC,
-    loadArtifact: () => import("@aztec/noir-contracts.js/Token").then((m) => m.TokenContractArtifact),
-  },
-  {
-    label: "LP (ZEC/USDC)",
-    address: process.env.NEXT_PUBLIC_LP_ZEC_USDC,
-    loadArtifact: () => import("@aztec/noir-contracts.js/Token").then((m) => m.TokenContractArtifact),
-  },
-  {
-    label: "LP (AZTEC/USDC)",
-    address: process.env.NEXT_PUBLIC_LP_AZTEC_USDC,
-    loadArtifact: () => import("@aztec/noir-contracts.js/Token").then((m) => m.TokenContractArtifact),
-  },
-];
+const loadTokenArtifact = () =>
+  import("@aztec/noir-contracts.js/Token").then((m) => m.TokenContractArtifact);
+const loadAMMArtifact = () =>
+  import("@privpnl/contracts/AMM").then((m) => m.AMMContractArtifact);
 
-interface StoredAccount {
-  address: string;
-  signingKey: string;
-  secretKey: string;
-  salt: string;
-  isDemo?: boolean;
-}
+// Build CONTRACT_REGISTRY from config data instead of manual repetition
+const TOKEN_NAMES = ["USDC", "wETH", "wZEC", "wAZTEC"] as const;
+const POOL_KEYS = ["ETH/USDC", "ZEC/USDC", "AZTEC/USDC"] as const;
+
+const tokenEntries: ContractRegistryEntry[] = TOKEN_NAMES.map((name) => ({
+  label: `Token (${name})`,
+  address: TOKEN_ADDRESSES[name],
+  loadArtifact: loadTokenArtifact,
+}));
+
+const priceFeedEntry: ContractRegistryEntry = {
+  label: "PriceFeed",
+  address: PRICE_FEED_ADDRESS,
+  loadArtifact: () =>
+    import("@aztec/noir-contracts.js/PriceFeed").then((m) => m.PriceFeedContractArtifact),
+};
+
+const ammEntries: ContractRegistryEntry[] = POOL_KEYS.map((key) => ({
+  label: `AMM (${key})`,
+  address: POOL_ADDRESSES[`w${key}`],
+  loadArtifact: loadAMMArtifact,
+}));
+
+const lpEntries: ContractRegistryEntry[] = POOL_KEYS.map((key) => ({
+  label: `LP (${key})`,
+  address: LP_ADDRESSES[key],
+  loadArtifact: loadTokenArtifact,
+}));
+
+const CONTRACT_REGISTRY: ContractRegistryEntry[] = [
+  ...tokenEntries,
+  priceFeedEntry,
+  ...ammEntries,
+  ...lpEntries,
+];
 
 // Sandbox: hardcoded test accounts pre-deployed on local sandbox
 const SANDBOX_DEMO_ACCOUNTS: StoredAccount[] = [
@@ -120,42 +108,6 @@ const SANDBOX_DEMO_ACCOUNTS: StoredAccount[] = [
 const DEMO_ACCOUNTS: StoredAccount[] = process.env.NEXT_PUBLIC_DEMO_ACCOUNTS
   ? (JSON.parse(process.env.NEXT_PUBLIC_DEMO_ACCOUNTS) as StoredAccount[]).map(a => ({ ...a, isDemo: true }))
   : SANDBOX_DEMO_ACCOUNTS;
-
-function loadStoredAccounts(): StoredAccount[] {
-  // Migrate legacy single-account key if present
-  const legacy = localStorage.getItem(LEGACY_KEY);
-  if (legacy) {
-    try {
-      const parsed = JSON.parse(legacy) as StoredAccount;
-      const arr = [parsed];
-      localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(arr));
-      localStorage.setItem(ACTIVE_ACCOUNT_KEY, parsed.address);
-      localStorage.removeItem(LEGACY_KEY);
-      return arr;
-    } catch {
-      localStorage.removeItem(LEGACY_KEY);
-    }
-  }
-  const raw = localStorage.getItem(ACCOUNTS_KEY);
-  if (!raw) return [];
-  try {
-    return JSON.parse(raw) as StoredAccount[];
-  } catch {
-    return [];
-  }
-}
-
-function saveStoredAccounts(accounts: StoredAccount[]) {
-  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
-}
-
-function getStoredActiveAddress(): string | null {
-  return localStorage.getItem(ACTIVE_ACCOUNT_KEY);
-}
-
-function setStoredActiveAddress(address: string) {
-  localStorage.setItem(ACTIVE_ACCOUNT_KEY, address);
-}
 
 
 
@@ -498,14 +450,12 @@ export class EmbeddedAuditableWallet extends BaseWallet {
       if (next) {
         setStoredActiveAddress(next.toString());
       } else {
-        localStorage.removeItem(ACTIVE_ACCOUNT_KEY);
+        removeStoredActiveAddress();
       }
     }
   }
 
   static clearAllSavedAccounts() {
-    localStorage.removeItem(ACCOUNTS_KEY);
-    localStorage.removeItem(ACTIVE_ACCOUNT_KEY);
-    localStorage.removeItem(LEGACY_KEY);
+    clearAllStoredAccounts();
   }
 }

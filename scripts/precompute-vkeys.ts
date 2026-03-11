@@ -3,7 +3,7 @@
  * These are deterministic (depend only on circuit bytecode) and expensive to compute,
  * so we save them to disk for reuse by the test and frontend.
  *
- * Usage: bun scripts/precompute-vkeys.ts
+ * Usage: tsx scripts/precompute-vkeys.ts
  */
 
 import { Barretenberg, UltraHonkBackend } from '@aztec/bb.js';

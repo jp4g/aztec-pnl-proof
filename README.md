@@ -380,7 +380,7 @@ contracts/
 Requires a running local Aztec network.
 
 ```sh
-bun install
+yarn install
 aztec start --sandbox    # separate terminal
-bun test test/pnl.test.ts
+yarn test
 ```

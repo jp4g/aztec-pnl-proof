@@ -2,50 +2,28 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Icon } from "@iconify/react";
-import { TOKENS } from "@/data/dummy";
-import { Token } from "@/types";
-import TokenIcon from "@/components/ui/TokenIcon";
 import ProgressBar from "@/components/ui/ProgressBar";
 import { useAztecWallet } from "@/hooks/useAztecWallet";
-import { TOKEN_ADDRESSES, TOKEN_DECIMALS } from "@/hooks/useTokenBalances";
+import { useAdminAccount } from "@/hooks/useAdminAccount";
+import { TOKEN_ADDRESSES, TOKEN_DECIMALS, POOL_DEFS } from "@/config/contracts";
 import { rebalancePools, type PoolState, type TokenPrice } from "@privpnl/proof/rebalance";
 import { useToast } from "@/hooks/useToast";
+import { PRICE_PRECISION } from "@privpnl/proof/constants";
+import { buildSponsoredFeePaymentMethod } from "@/lib/fee-utils";
+import PriceRowList, {
+  AVAILABLE_TOKENS,
+  isValidPrice,
+  type TokenPriceRow,
+} from "./PriceRowList";
+import AddAssetSearch from "./AddAssetSearch";
+import ChangesPreview from "./ChangesPreview";
 
-const PRICE_PRECISION = 10_000;
 const STORAGE_KEY = "privpnl-price-assets";
-
-const AVAILABLE_TOKENS = Object.entries(TOKENS)
-  .filter(([sym]) => TOKEN_ADDRESSES[sym])
-  .map(([symbol, token]) => ({ symbol, token: token as Token }));
-
-const POOL_DEFS = [
-  { label: "wETH/USDC", token0: "wETH", token1: "USDC", address: process.env.NEXT_PUBLIC_AMM_ETH_USDC },
-  { label: "wZEC/USDC", token0: "wZEC", token1: "USDC", address: process.env.NEXT_PUBLIC_AMM_ZEC_USDC },
-  { label: "wAZTEC/USDC", token0: "wAZTEC", token1: "USDC", address: process.env.NEXT_PUBLIC_AMM_AZTEC_USDC },
-];
-
-interface TokenPriceRow {
-  symbol: string;
-  currentPrice: string;
-  newPrice: string;
-  loading: boolean;
-}
-
-function formatUsd(value: number): string {
-  if (value >= 1) {
-    return value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  }
-  return value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
-}
-
-function isValidPrice(value: string): boolean {
-  if (value === "") return true;
-  return /^\d*\.?\d*$/.test(value) && !(value.startsWith("0") && value.length > 1 && value[1] !== ".");
-}
 
 export default function PriceCard() {
   const { wallet, address, status: walletStatus, isDemoAccount } = useAztecWallet();
   const { showToast } = useToast();
+  const { adminRef, ensureAdmin } = useAdminAccount(wallet);
   const isDemo = walletStatus === "connected" && address ? isDemoAccount(address) : false;
 
   const [rows, setRows] = useState<TokenPriceRow[]>(() => {
@@ -63,54 +41,12 @@ export default function PriceCard() {
   });
   const [executing, setExecuting] = useState(false);
   const [progress, setProgress] = useState({ step: 0, total: 0, label: "" });
-  const [showSearch, setShowSearch] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
 
-  const adminRef = useRef<import("@aztec/aztec.js/addresses").AztecAddress | null>(null);
-  const adminRegistering = useRef(false);
   const fetchedRef = useRef(false);
-  const searchRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
 
   const connected = walletStatus === "connected";
-
-  const ensureAdmin = useCallback(async () => {
-    if (adminRef.current || !wallet) return;
-    if (adminRegistering.current) {
-      // Wait for ongoing registration
-      while (adminRegistering.current) {
-        await new Promise((r) => setTimeout(r, 100));
-      }
-      return;
-    }
-    adminRegistering.current = true;
-    try {
-      const adminEnv = process.env.NEXT_PUBLIC_ADMIN_ACCOUNT;
-      if (adminEnv) {
-        const { Fr, Fq } = await import("@aztec/aztec.js/fields");
-        const parsed = JSON.parse(adminEnv) as { secretKey: string; salt: string; signingKey: string };
-        adminRef.current = await wallet.registerAccountFromCredentials(
-          Fr.fromString(parsed.secretKey),
-          Fr.fromString(parsed.salt),
-          Fq.fromString(parsed.signingKey),
-        );
-      } else {
-        const { getInitialTestAccountsData } = await import("@aztec/accounts/testing");
-        const testAccounts = await getInitialTestAccountsData();
-        const admin = testAccounts[0];
-        adminRef.current = await wallet.registerAccountFromCredentials(
-          admin.secret,
-          admin.salt,
-          admin.signingKey
-        );
-      }
-    } catch (err) {
-      console.warn("Failed to register admin account:", err);
-    } finally {
-      adminRegistering.current = false;
-    }
-  }, [wallet]);
 
   const fetchPrices = useCallback(async () => {
     if (!wallet || !address) return;
@@ -209,8 +145,6 @@ export default function PriceCard() {
         persistSymbols(next);
         return next;
       });
-      setShowSearch(false);
-      setSearchQuery("");
       // Fetch price for newly added token if connected
       if (wallet && connected) {
         fetchedRef.current = false;
@@ -231,23 +165,7 @@ export default function PriceCard() {
     [persistSymbols]
   );
 
-  // Close search dropdown when clicking outside
-  useEffect(() => {
-    if (!showSearch) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
-        setShowSearch(false);
-        setSearchQuery("");
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [showSearch]);
-
   const addedSymbols = new Set(rows.map((r) => r.symbol));
-  const filteredAvailable = AVAILABLE_TOKENS.filter(
-    (t) => !addedSymbols.has(t.symbol) && t.symbol.toLowerCase().includes(searchQuery.toLowerCase())
-  );
 
   const changedTokens = rows.filter(
     (r) => r.currentPrice !== "" && r.newPrice !== "" && r.newPrice !== r.currentPrice
@@ -266,8 +184,8 @@ export default function PriceCard() {
     try {
       // Ensure admin is registered
       setProgress({ step: 0, total: 1, label: "Registering admin..." });
-      await ensureAdmin();
-      if (!adminRef.current) throw new Error("Admin account not available");
+      const admin = await ensureAdmin();
+      if (!admin) throw new Error("Admin account not available");
 
       const { AztecAddress } = await import("@aztec/aztec.js/addresses");
       const { Contract } = await import("@aztec/aztec.js/contracts");
@@ -341,28 +259,18 @@ export default function PriceCard() {
         });
       }
 
-      // Build sendOpts with FPC on devnet
-      let buildSendOpts: (from: import("@aztec/aztec.js/addresses").AztecAddress) => Record<string, unknown> = (from) => ({ from });
-      if (process.env.NEXT_PUBLIC_ADMIN_ACCOUNT) {
-        const { SponsoredFeePaymentMethod } = await import("@aztec/aztec.js/fee");
-        const { getContractInstanceFromInstantiationParams } = await import("@aztec/aztec.js/contracts");
-        const { SponsoredFPCContractArtifact } = await import("@aztec/noir-contracts.js/SponsoredFPC");
-        const { SPONSORED_FPC_SALT } = await import("@aztec/constants");
-        const { Fr: FrField } = await import("@aztec/aztec.js/fields");
-        const fpcInstance = await getContractInstanceFromInstantiationParams(
-          SponsoredFPCContractArtifact,
-          { salt: new FrField(SPONSORED_FPC_SALT) },
-        );
-        const fpcAddress = fpcInstance.address;
-        buildSendOpts = (from) => ({ from, fee: { paymentMethod: new SponsoredFeePaymentMethod(fpcAddress) } });
-      }
+      // Pre-resolve the payment method so the sendOpts closure is synchronous
+      const paymentMethod = await buildSponsoredFeePaymentMethod();
+      const makeSendOpts = paymentMethod
+        ? (from: import("@aztec/aztec.js/addresses").AztecAddress) => ({ from, fee: { paymentMethod } })
+        : (from: import("@aztec/aztec.js/addresses").AztecAddress) => ({ from });
 
       await rebalancePools({
         priceFeed: priceFeed as unknown as Parameters<typeof rebalancePools>[0]["priceFeed"],
-        minter: adminRef.current,
+        minter: adminRef.current!,
         pools: poolStates,
         tokenPrices,
-        sendOpts: buildSendOpts,
+        sendOpts: makeSendOpts,
         onProgress: (step, total, label) => {
           setProgress({ step, total, label });
         },
@@ -386,7 +294,7 @@ export default function PriceCard() {
       setExecuting(false);
       setProgress({ step: 0, total: 0, label: "" });
     }
-  }, [wallet, address, executing, changedTokens, affectedPools, rows, ensureAdmin, showToast]);
+  }, [wallet, address, executing, changedTokens, affectedPools, rows, ensureAdmin, adminRef, showToast]);
 
   const handleRefresh = useCallback(() => {
     if (!wallet || !connected) return;
@@ -436,114 +344,26 @@ export default function PriceCard() {
       </div>
 
       {/* Token rows */}
-      <div className="space-y-2">
-        {rows.length === 0 && (
-          <div className="text-center py-6 text-sm text-neutral-400">
-            Add tokens to set their oracle prices
-          </div>
-        )}
-        {rows.map((row) => {
-          const tokenDef = AVAILABLE_TOKENS.find((t) => t.symbol === row.symbol);
-          const isChanged = row.currentPrice !== "" && row.newPrice !== "" && row.newPrice !== row.currentPrice;
-
-          return (
-            <div
-              key={row.symbol}
-              className="flex items-center gap-3 rounded-xl bg-neutral-50 border border-neutral-100 px-4 py-3"
-            >
-              {tokenDef && <TokenIcon token={tokenDef.token} size="sm" />}
-              <span className="text-sm font-medium text-neutral-800 w-16">{row.symbol}</span>
-              <span className="text-xs text-neutral-400 flex-shrink-0">
-                {row.loading ? (
-                  <span className="inline-block w-3 h-3 border border-neutral-300 border-t-transparent rounded-full animate-spin align-middle" />
-                ) : row.currentPrice ? (
-                  `$${formatUsd(parseFloat(row.currentPrice))}`
-                ) : (
-                  "--"
-                )}
-              </span>
-              <input
-                type="text"
-                inputMode="decimal"
-                placeholder="0.00"
-                value={row.newPrice}
-                onChange={(e) => handlePriceChange(row.symbol, e.target.value)}
-                disabled={!connected || executing || isDemo}
-                className="flex-1 text-right text-sm font-mono bg-white border border-neutral-200 rounded-lg px-2 py-1.5 outline-none focus:border-orange-400 disabled:bg-neutral-100 disabled:text-neutral-400"
-              />
-              {isChanged && (
-                <span className="text-orange-500 text-sm font-bold flex-shrink-0">*</span>
-              )}
-              {!executing && (
-                <button
-                  onClick={() => removeToken(row.symbol)}
-                  className="w-5 h-5 flex items-center justify-center rounded-full text-neutral-400 hover:text-neutral-600 hover:bg-neutral-200 transition-colors flex-shrink-0"
-                >
-                  <Icon icon="lucide:x" width={12} />
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      <PriceRowList
+        rows={rows}
+        connected={connected}
+        executing={executing}
+        isDemo={isDemo}
+        onPriceChange={handlePriceChange}
+        onRemove={removeToken}
+      />
 
       {/* Add Asset */}
-      {!executing && addedSymbols.size < AVAILABLE_TOKENS.length && (
-        <div className="relative mt-2" ref={searchRef}>
-          <button
-            onClick={() => setShowSearch((v) => !v)}
-            className="w-full py-2 rounded-xl border border-dashed border-neutral-300 text-sm text-neutral-500 hover:border-neutral-400 hover:text-neutral-700 transition-colors flex items-center justify-center gap-1.5"
-          >
-            <Icon icon="lucide:plus" width={14} />
-            Add Asset
-          </button>
-          {showSearch && (
-            <div className="absolute left-0 right-0 mt-1 bg-white border border-neutral-200 rounded-xl shadow-lg z-10 overflow-hidden">
-              <div className="flex items-center gap-2 px-3 py-2 border-b border-neutral-100">
-                <Icon icon="lucide:search" width={14} className="text-neutral-400" />
-                <input
-                  type="text"
-                  placeholder="Search tokens..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  autoFocus
-                  className="flex-1 text-sm outline-none bg-transparent placeholder:text-neutral-400"
-                />
-              </div>
-              <div className="max-h-40 overflow-y-auto">
-                {filteredAvailable.length === 0 ? (
-                  <div className="px-3 py-2 text-xs text-neutral-400">No matches</div>
-                ) : (
-                  filteredAvailable.map((t) => (
-                    <button
-                      key={t.symbol}
-                      onClick={() => addToken(t.symbol)}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-neutral-50 transition-colors"
-                    >
-                      <TokenIcon token={t.token} size="sm" />
-                      <span className="text-sm font-medium text-neutral-800">{t.symbol}</span>
-                    </button>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
-        </div>
+      {!executing && (
+        <AddAssetSearch
+          availableTokens={AVAILABLE_TOKENS}
+          addedSymbols={addedSymbols}
+          onAdd={addToken}
+        />
       )}
 
       {/* Changes preview */}
-      {changedTokens.length > 0 && !executing && (
-        <div className="mt-4 px-1">
-          <span className="text-xs text-neutral-500 font-medium">Changes:</span>
-          <div className="mt-1 space-y-0.5">
-            {changedTokens.map((t) => (
-              <div key={t.symbol} className="text-xs text-neutral-600">
-                {t.symbol}: ${formatUsd(parseFloat(t.currentPrice))} &rarr; ${formatUsd(parseFloat(t.newPrice))}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {!executing && <ChangesPreview changedTokens={changedTokens} />}
 
       {/* Progress */}
       {executing && progress.total > 0 && (

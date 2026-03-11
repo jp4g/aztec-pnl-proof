@@ -15,23 +15,22 @@
  *   AZTEC_NODE_URL       (default: http://localhost:8080)
  *   COINGECKO_API_KEY    (required for price fetch)
  *
- * Usage: bun scripts/deploy.ts
+ * Usage: yarn deploy
  */
 
-import { getInitialTestAccountsData } from '@aztec/accounts/testing';
 import { AztecAddress } from '@aztec/aztec.js/addresses';
-import { createAztecNodeClient, type AztecNode } from '@aztec/aztec.js/node';
 import { PriceFeedContract } from '@aztec/noir-contracts.js/PriceFeed';
 import { TokenContract } from '@privpnl/contracts/Token';
 import { AMMContract } from '@privpnl/contracts/AMM';
-import { EmbeddedWallet } from '@aztec/wallets/embedded';
 import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { SponsoredFeePaymentMethod } from '@aztec/aztec.js/fee';
-import { getContractInstanceFromInstantiationParams } from '@aztec/aztec.js/contracts';
-import { SPONSORED_FPC_SALT } from '@aztec/constants';
-import { SponsoredFPCContract } from '@aztec/noir-contracts.js/SponsoredFPC';
 import { Fr } from '@aztec/foundation/curves/bn254';
+import { PRICE_PRECISION, USDC_DECIMALS, TOKEN_DECIMALS } from '@privpnl/proof/constants';
+import {
+    type AccountInfo, type DeployedInfra,
+    initializeWallet, makeSendOpts, registerSandboxAccounts,
+} from './utils';
 
 const {
     AZTEC_NODE_URL = 'http://localhost:8080',
@@ -43,16 +42,8 @@ if (!COINGECKO_API_KEY) {
     process.exit(1);
 }
 
-// Oracle price precision: 1 USD = 10,000 units (4 decimals)
-// Limited by i64 overflow in PnL circuit: token_amount(9 decimals) * price_diff
-// must fit in i64 (max ~9.2e18). Cheap tokens like wAZTEC ($0.10) yield large
-// amounts (~2e14 base units), constraining precision to ~10,000.
-const PRICE_PRECISION = 10_000;
-
 // Pool seed: $10M USDC per pool (large enough to minimize slippage on $10-20k swaps)
 const POOL_USDC_AMOUNT = 10_000_000n;
-const USDC_DECIMALS = 6;
-const TOKEN_DECIMALS = 9;
 
 // CoinGecko IDs
 const COINGECKO_IDS = {
@@ -106,32 +97,6 @@ function poolAmounts(tokenPriceUsd: number, tokenDecimals: number) {
     return { usdcAmount, tokenAmount };
 }
 
-interface AccountInfo {
-    address: string;
-    secretKey: string;
-    signingKey: string;
-    salt: string;
-}
-
-interface DeployedInfra {
-    admin: string;
-    adminAccount?: AccountInfo;
-    priceFeed: string;
-    tokens: {
-        USDC: string;
-        wETH: string;
-        wZEC: string;
-        wAZTEC: string;
-    };
-    pools: {
-        'wETH/USDC': { amm: string; lp: string };
-        'wZEC/USDC': { amm: string; lp: string };
-        'wAZTEC/USDC': { amm: string; lp: string };
-    };
-    prices: { USDC: number; wETH: number; wZEC: number; wAZTEC: number };
-    oraclePrices: { USDC: string; wETH: string; wZEC: string; wAZTEC: string };
-    demoAccounts?: AccountInfo[];
-}
 
 async function setup() {
     console.log('=== PnL Proof Infrastructure Setup ===\n');
@@ -151,38 +116,16 @@ async function setup() {
         wAZTEC: toOraclePrice(prices.wAZTEC),
     };
 
-    // Connect to node
-    const node: AztecNode = createAztecNodeClient(AZTEC_NODE_URL);
-    console.log(`Connected to Aztec node at "${AZTEC_NODE_URL}"`);
+    const { node, wallet, isDevnet, fpcAddress } = await initializeWallet(AZTEC_NODE_URL);
+    const sendOpts = makeSendOpts(isDevnet, fpcAddress);
 
-    // Detect devnet vs sandbox
-    const nodeInfo = await node.getNodeInfo();
-    const isDevnet = nodeInfo.l1ChainId === 11155111;
-    console.log(`  Chain ID: ${nodeInfo.l1ChainId}, isDevnet: ${isDevnet}`);
-
-    // Create wallet — enable proving on devnet
-    const wallet = await EmbeddedWallet.create(node, { ephemeral: true, pxeConfig: { proverEnabled: isDevnet } });
-
-    let fpcAddress: AztecAddress | undefined;
     const addresses: AztecAddress[] = [];
     const demoAccounts: AccountInfo[] = [];
     let adminAccount: AccountInfo | undefined;
 
-    const sendOpts = (from: AztecAddress) =>
-        isDevnet && fpcAddress
-            ? { from, fee: { paymentMethod: new SponsoredFeePaymentMethod(fpcAddress) } }
-            : { from };
-
     if (isDevnet) {
-        // Register SponsoredFPC
-        console.log('Devnet detected — registering SponsoredFPC and deploying fresh accounts...');
-        const fpcInstance = await getContractInstanceFromInstantiationParams(SponsoredFPCContract.artifact, {
-            salt: new Fr(SPONSORED_FPC_SALT),
-        });
-        await wallet.registerContract(fpcInstance, SponsoredFPCContract.artifact);
-        fpcAddress = fpcInstance.address;
-        console.log(`  SponsoredFPC registered at: ${fpcAddress}`);
-        const fpcPaymentMethod = new SponsoredFeePaymentMethod(fpcAddress);
+        console.log('Devnet detected — deploying fresh accounts...');
+        const fpcPaymentMethod = new SponsoredFeePaymentMethod(fpcAddress!);
 
         // Deploy 3 fresh accounts: admin + 2 demo accounts
         for (let i = 0; i < 3; i++) {
@@ -231,11 +174,7 @@ async function setup() {
         }
     } else {
         // Sandbox: use pre-deployed test accounts
-        const accounts = await getInitialTestAccountsData();
-        for (const account of accounts) {
-            const manager = await wallet.createSchnorrAccount(account.secret, account.salt, account.signingKey);
-            addresses.push(manager.address);
-        }
+        addresses.push(...await registerSandboxAccounts(wallet));
     }
 
     const admin = addresses[0];
@@ -377,7 +316,7 @@ async function setup() {
 
     // --- Upsert deployed addresses into frontend env file ---
     const envFile = isDevnet ? '.env.production' : '.env.development';
-    const envPath = join(process.cwd(), 'apps', 'web', envFile);
+    const envPath = join(process.cwd(), 'packages', 'frontend', envFile);
     const deployedVars: Record<string, string> = {
         NEXT_PUBLIC_PRICE_FEED: priceFeed.address.toString(),
         NEXT_PUBLIC_TOKEN_USDC: usdc.address.toString(),

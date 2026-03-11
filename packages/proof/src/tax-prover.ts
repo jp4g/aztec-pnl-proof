@@ -1,8 +1,9 @@
 import { Noir } from '@aztec/noir-noir_js';
 import { Barretenberg, UltraHonkBackend } from '@aztec/bb.js';
 import type { CompiledCircuit } from '@aztec/noir-types';
-import { parseSignedHex, fieldToI64, i64ToField } from './swap-proof-tree';
+import { fieldToI64, i64ToField } from './swap-proof-tree';
 import type { SwapProofTreeResult, VkeyArtifacts } from './swap-proof-tree';
+import { parseSignedHex, proofBytesToFields } from './utils';
 
 export interface TaxProofResult {
     proof: Uint8Array;
@@ -48,7 +49,7 @@ export class TaxProver {
 
         console.log('\n=== TaxProver: Computing capital gains tax ===');
 
-        const proofAsFields = this.proofBytesToFields(summaryResult.proof);
+        const proofAsFields = proofBytesToFields(summaryResult.proof);
 
         const publicInputs = [
             summaryResult.publicInputs.root,
@@ -100,13 +101,4 @@ export class TaxProver {
         };
     }
 
-    private proofBytesToFields(proofBytes: Uint8Array): string[] {
-        const fields: string[] = [];
-        for (let i = 0; i < proofBytes.length; i += 32) {
-            const chunk = proofBytes.slice(i, i + 32);
-            const hex = '0x' + Buffer.from(chunk).toString('hex');
-            fields.push(hex);
-        }
-        return fields;
-    }
 }

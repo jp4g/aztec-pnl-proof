@@ -4,13 +4,15 @@
   "license": "MIT",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "postinstall": "bun scripts/postinstall.ts",
-    "deploy": "bun scripts/deploy.ts",
-    "demo-data": "bun scripts/demo-data.ts",
-    "setup": "bun scripts/deploy.ts && bun scripts/demo-data.ts",
-    "test": "bun test test/"
+    "postinstall": "tsx scripts/postinstall.ts",
+    "deploy": "tsx scripts/deploy.ts",
+    "demo-data": "tsx scripts/demo-data.ts",
+    "setup": "tsx scripts/deploy.ts && tsx scripts/demo-data.ts",
+    "test": "node --env-file=.env --import tsx --test test/pnl.test.ts"
   },
   "dependencies": {
     "@aztec/accounts": "file:../aztec-packages/yarn-project/accounts",
@@ -28,6 +30,8 @@
   "devDependencies": {
     "@types/node": "^22.15.1",
     "@zkpassport/poseidon2": "^0.6.2",
+    "dotenv": "^16",
+    "tsx": "^4",
     "typescript": "^5.4.4"
   },
   "resolutions": {

@@ -8,22 +8,8 @@ import { decryptLog } from './decrypt';
 import { computeAddressSecret } from '@aztec/stdlib/keys';
 import type { CompleteAddress } from '@aztec/stdlib/contract';
 import { LotStateTree } from './lot-state-tree';
-
-/** Parse a potentially negative hex string like "-0x1a" into a BigInt */
-function parseSignedHex(s: string): bigint {
-    if (s.startsWith('-0x') || s.startsWith('-0X')) {
-        return -BigInt(s.slice(1));
-    }
-    return BigInt(s);
-}
-
-/** Max concurrent lots (must match circuit MAX_LOTS) */
-const MAX_LOTS = 32;
-
-/** Domain separator for siloing public leaf slots (v4: DOM_SEP__PUBLIC_LEAF_SLOT) */
-const DOM_SEP__PUBLIC_LEAF_SLOT = 1247650290;
-/** Domain separator for map storage slot derivation (v4: DOM_SEP__PUBLIC_STORAGE_MAP_SLOT) */
-const DOM_SEP__PUBLIC_STORAGE_MAP_SLOT = 4015149901;
+import { MAX_LOTS, DOM_SEP__PUBLIC_LEAF_SLOT, DOM_SEP__PUBLIC_STORAGE_MAP_SLOT } from './constants';
+import { parseSignedHex } from './utils';
 
 /**
  * A FIFO cost basis lot: amount of tracked token acquired at a given oracle price.
@@ -412,6 +398,7 @@ export class SwapProver {
         this.backend = new UltraHonkBackend(this.config.circuit.bytecode, this.config.bb);
 
         const preaddress = await this.config.recipientCompleteAddress.getPreaddress();
+        // Fr from @aztec/foundation vs @aztec/stdlib — structurally identical but nominally distinct
         this.addressSecret = await computeAddressSecret(preaddress, this.config.ivskM as any) as any;
 
         console.log('SwapProver initialized');

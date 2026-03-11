@@ -1,15 +1,7 @@
 import { Fr } from '@aztec/foundation/curves/bn254';
 import { poseidon2Hash } from '@aztec/foundation/crypto/poseidon';
 import type { Lot } from './swap-prover';
-
-/** Max lots per token (must match circuit MAX_LOTS) */
-const MAX_LOTS = 32;
-
-/** Outer tree height (must match circuit LOT_TREE_HEIGHT) */
-const LOT_TREE_HEIGHT = 3;
-
-/** Number of token slots = 2^LOT_TREE_HEIGHT */
-const NUM_SLOTS = 1 << LOT_TREE_HEIGHT;
+import { MAX_LOTS, LOT_TREE_HEIGHT, NUM_SLOTS } from './constants';
 
 /**
  * Per-token lot data stored at each leaf of the lot state tree.
@@ -64,27 +56,33 @@ export class LotStateTree {
     }
 
     /**
+     * Compute all tree layers from leaves up to root.
+     */
+    private async computeLayers(): Promise<Fr[][]> {
+        const layers: Fr[][] = [this.leaves.slice()];
+        for (let level = 0; level < LOT_TREE_HEIGHT; level++) {
+            const prev = layers[level];
+            const next: Fr[] = [];
+            for (let i = 0; i < prev.length; i += 2) {
+                next.push(await poseidon2Hash([prev[i], prev[i + 1]]));
+            }
+            layers.push(next);
+        }
+        return layers;
+    }
+
+    /**
      * Get the sibling path for a leaf index.
      * Computes the merkle path bottom-up.
      */
     async getSiblingPath(leafIndex: number): Promise<Fr[]> {
+        const layers = await this.computeLayers();
         const path: Fr[] = [];
-        // Build the full tree layer by layer
-        let currentLayer = [...this.leaves];
-
         for (let level = 0; level < LOT_TREE_HEIGHT; level++) {
             const idx = leafIndex >> level;
             const siblingIdx = idx ^ 1;
-            path.push(currentLayer[siblingIdx]);
-
-            // Compute next layer
-            const nextLayer: Fr[] = [];
-            for (let i = 0; i < currentLayer.length; i += 2) {
-                nextLayer.push(await poseidon2Hash([currentLayer[i], currentLayer[i + 1]]));
-            }
-            currentLayer = nextLayer;
+            path.push(layers[level][siblingIdx]);
         }
-
         return path;
     }
 
@@ -99,15 +97,8 @@ export class LotStateTree {
      * Get the current root of the tree.
      */
     async getRoot(): Promise<Fr> {
-        let currentLayer = [...this.leaves];
-        for (let level = 0; level < LOT_TREE_HEIGHT; level++) {
-            const nextLayer: Fr[] = [];
-            for (let i = 0; i < currentLayer.length; i += 2) {
-                nextLayer.push(await poseidon2Hash([currentLayer[i], currentLayer[i + 1]]));
-            }
-            currentLayer = nextLayer;
-        }
-        return currentLayer[0];
+        const layers = await this.computeLayers();
+        return layers[layers.length - 1][0];
     }
 
     /**

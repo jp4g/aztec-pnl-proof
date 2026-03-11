@@ -9,51 +9,25 @@
  *   AZTEC_NODE_URL       (default: http://localhost:8080)
  *
  * Usage:
- *   bun scripts/demo-data.ts                    # full run (default)
- *   bun scripts/demo-data.ts --resume loser:7   # skip winner, resume loser at swap 7
- *   bun scripts/demo-data.ts --resume winner:4  # resume winner at swap 4
+ *   yarn demo-data                    # full run (default)
+ *   yarn demo-data --resume loser:7   # skip winner, resume loser at swap 7
+ *   yarn demo-data --resume winner:4  # resume winner at swap 4
  */
 
 import { getInitialTestAccountsData } from '@aztec/accounts/testing';
 import { AztecAddress } from '@aztec/aztec.js/addresses';
-import { createAztecNodeClient, type AztecNode } from '@aztec/aztec.js/node';
 import { Fr } from '@aztec/aztec.js/fields';
 import { PriceFeedContract, PriceFeedContractArtifact } from '@aztec/noir-contracts.js/PriceFeed';
 import { TokenContract, TokenContractArtifact } from '@privpnl/contracts/Token';
 import { AMMContract, AMMContractArtifact } from '@privpnl/contracts/AMM';
-import { EmbeddedWallet } from '@aztec/wallets/embedded';
-import { readFile } from 'fs/promises';
-import { join } from 'path';
 import { rebalancePools, type PoolState } from '@privpnl/proof/rebalance';
-import { SponsoredFeePaymentMethod } from '@aztec/aztec.js/fee';
-import { getContractInstanceFromInstantiationParams } from '@aztec/aztec.js/contracts';
-import { SPONSORED_FPC_SALT } from '@aztec/constants';
-import { SponsoredFPCContract } from '@aztec/noir-contracts.js/SponsoredFPC';
+import { USDC_DECIMALS, TOKEN_DECIMALS } from '@privpnl/proof/constants';
+import {
+    type DeployedInfra,
+    initializeWallet, makeSendOpts, registerSandboxAccounts, loadDeployment,
+} from './utils';
 
 const { AZTEC_NODE_URL = 'http://localhost:8080' } = process.env;
-
-const USDC_DECIMALS = 6;
-const TOKEN_DECIMALS = 9;
-
-interface DeployedInfra {
-    admin: string;
-    priceFeed: string;
-    tokens: {
-        USDC: string;
-        wETH: string;
-        wZEC: string;
-        wAZTEC: string;
-    };
-    pools: {
-        'wETH/USDC': { amm: string; lp: string };
-        'wZEC/USDC': { amm: string; lp: string };
-        'wAZTEC/USDC': { amm: string; lp: string };
-    };
-    prices: { USDC: number; wETH: number; wZEC: number; wAZTEC: number };
-    oraclePrices: { USDC: string; wETH: string; wZEC: string; wAZTEC: string };
-    adminAccount?: { address: string; secretKey: string; signingKey: string; salt: string };
-    demoAccounts?: { address: string; secretKey: string; signingKey: string; salt: string }[];
-}
 
 // Price multipliers per swap phase
 // Swaps 1-2: baseline (1.0x)
@@ -124,33 +98,16 @@ async function demoData() {
     console.log('=== Demo Data: Swap History for 3rd Test Account ===\n');
 
     // --- Load deployment info ---
-    const deployPath = join(process.cwd(), 'deployment.json');
-    const infra: DeployedInfra = JSON.parse(await readFile(deployPath, 'utf-8'));
+    const infra = await loadDeployment();
     console.log('Loaded deployment.json');
 
     // --- Connect to node ---
-    const node: AztecNode = createAztecNodeClient(AZTEC_NODE_URL);
-    console.log(`Connected to Aztec node at "${AZTEC_NODE_URL}"`);
+    const { node, wallet, isDevnet, fpcAddress } = await initializeWallet(AZTEC_NODE_URL);
+    const sendOpts = makeSendOpts(isDevnet, fpcAddress);
 
-    // Detect devnet vs sandbox
-    const nodeInfo = await node.getNodeInfo();
-    const isDevnet = nodeInfo.l1ChainId === 11155111;
-    console.log(`  Chain ID: ${nodeInfo.l1ChainId}, isDevnet: ${isDevnet}`);
-
-    const wallet = await EmbeddedWallet.create(node, { ephemeral: true, pxeConfig: { proverEnabled: isDevnet } });
-
-    let fpcAddress: AztecAddress | undefined;
     const addresses: AztecAddress[] = [];
 
     if (isDevnet) {
-        // Register SponsoredFPC
-        const fpcInstance = await getContractInstanceFromInstantiationParams(SponsoredFPCContract.artifact, {
-            salt: new Fr(SPONSORED_FPC_SALT),
-        });
-        await wallet.registerContract(fpcInstance, SponsoredFPCContract.artifact);
-        fpcAddress = fpcInstance.address;
-        console.log(`  SponsoredFPC registered at: ${fpcAddress}`);
-
         // Read admin + demo accounts from deployment.json
         if (!infra.adminAccount) {
             throw new Error('deployment.json missing adminAccount — run deploy.ts on devnet first');
@@ -188,17 +145,8 @@ async function demoData() {
         }
     } else {
         // Sandbox: use pre-deployed test accounts
-        const accounts = await getInitialTestAccountsData();
-        for (const account of accounts) {
-            const manager = await wallet.createSchnorrAccount(account.secret, account.salt, account.signingKey);
-            addresses.push(manager.address);
-        }
+        addresses.push(...await registerSandboxAccounts(wallet));
     }
-
-    const sendOpts = (from: AztecAddress) =>
-        isDevnet && fpcAddress
-            ? { from, fee: { paymentMethod: new SponsoredFeePaymentMethod(fpcAddress) } }
-            : { from };
 
     const admin = addresses[0];
     // On sandbox: demo accounts are addresses[2] and addresses[1]

@@ -4,11 +4,12 @@ import {
   createContext,
   useCallback,
   useEffect,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
 import { useAztecWallet } from "@/hooks/useAztecWallet";
+import { useAdminAccount } from "@/hooks/useAdminAccount";
+import { buildSponsoredFeePaymentMethod } from "@/lib/fee-utils";
 
 const MINTED_KEY = "privpnl-usdc-minted";
 
@@ -37,9 +38,8 @@ export const TokenContext = createContext<TokenContextValue | null>(null);
 
 export function TokenProvider({ children }: { children: ReactNode }) {
   const { wallet, address, status } = useAztecWallet();
+  const { adminRef, ensureAdmin, resetAdmin } = useAdminAccount(wallet);
 
-  const adminRef = useRef<import("@aztec/aztec.js/addresses").AztecAddress | null>(null);
-  const adminRegistering = useRef(false);
   const [isMinting, setIsMinting] = useState(false);
   const [hasMintedUsdc, setHasMintedUsdc] = useState(false);
 
@@ -52,53 +52,19 @@ export function TokenProvider({ children }: { children: ReactNode }) {
     }
   }, [address]);
 
-  const registerAdmin = useCallback(async () => {
-    if (adminRef.current || adminRegistering.current || !wallet) return;
-    adminRegistering.current = true;
-    try {
-      const adminEnv = process.env.NEXT_PUBLIC_ADMIN_ACCOUNT;
-      if (adminEnv) {
-        // Devnet: use admin from env
-        const { Fr, Fq } = await import("@aztec/aztec.js/fields");
-        const parsed = JSON.parse(adminEnv) as { secretKey: string; salt: string; signingKey: string };
-        adminRef.current = await wallet.registerAccountFromCredentials(
-          Fr.fromString(parsed.secretKey),
-          Fr.fromString(parsed.salt),
-          Fq.fromString(parsed.signingKey),
-        );
-      } else {
-        // Sandbox: use test accounts
-        const { getInitialTestAccountsData } = await import(
-          "@aztec/accounts/testing"
-        );
-        const testAccounts = await getInitialTestAccountsData();
-        const admin = testAccounts[0];
-        adminRef.current = await wallet.registerAccountFromCredentials(
-          admin.secret,
-          admin.salt,
-          admin.signingKey
-        );
-      }
-    } catch (err) {
-      adminRegistering.current = false;
-      console.warn("Failed to register admin account:", err);
-    }
-  }, [wallet]);
-
   // Register admin in background when wallet connects
   useEffect(() => {
     if (status === "connected" && wallet) {
-      registerAdmin();
+      ensureAdmin();
     }
-  }, [status, wallet, registerAdmin]);
+  }, [status, wallet, ensureAdmin]);
 
   // Reset admin ref when wallet disconnects
   useEffect(() => {
     if (status === "disconnected") {
-      adminRef.current = null;
-      adminRegistering.current = false;
+      resetAdmin();
     }
-  }, [status]);
+  }, [status, resetAdmin]);
 
   const mintUsdc = useCallback(async () => {
     if (!wallet || !address) throw new Error("Wallet not connected");
@@ -106,7 +72,7 @@ export function TokenProvider({ children }: { children: ReactNode }) {
 
     setIsMinting(true);
     try {
-      await registerAdmin();
+      await ensureAdmin();
       if (!adminRef.current) throw new Error("Admin account not available");
 
       const { AztecAddress } = await import("@aztec/aztec.js/addresses");
@@ -122,19 +88,8 @@ export function TokenProvider({ children }: { children: ReactNode }) {
       const amount = BigInt(100_000) * BigInt(10 ** 6); // 100,000 USDC (6 decimals)
 
       // On devnet, admin is an internal account so the wallet won't auto-inject FPC.
-      let feeOpt: { paymentMethod: InstanceType<typeof import("@aztec/aztec.js/fee").SponsoredFeePaymentMethod> } | undefined;
-      if (process.env.NEXT_PUBLIC_ADMIN_ACCOUNT) {
-        const { SponsoredFeePaymentMethod } = await import("@aztec/aztec.js/fee");
-        const { getContractInstanceFromInstantiationParams } = await import("@aztec/aztec.js/contracts");
-        const { SponsoredFPCContractArtifact } = await import("@aztec/noir-contracts.js/SponsoredFPC");
-        const { SPONSORED_FPC_SALT } = await import("@aztec/constants");
-        const { Fr: FrField } = await import("@aztec/aztec.js/fields");
-        const fpcInstance = await getContractInstanceFromInstantiationParams(
-          SponsoredFPCContractArtifact,
-          { salt: new FrField(SPONSORED_FPC_SALT) },
-        );
-        feeOpt = { paymentMethod: new SponsoredFeePaymentMethod(fpcInstance.address) };
-      }
+      const paymentMethod = await buildSponsoredFeePaymentMethod();
+      const feeOpt = paymentMethod ? { paymentMethod } : undefined;
 
       await token.methods
         .mint_to_private(recipient, amount)
@@ -145,7 +100,7 @@ export function TokenProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsMinting(false);
     }
-  }, [wallet, address, isMinting, registerAdmin]);
+  }, [wallet, address, isMinting, ensureAdmin, adminRef]);
 
   return (
     <TokenContext.Provider value={{ mintUsdc, hasMintedUsdc, isMinting }}>

@@ -7,37 +7,21 @@ import {
   getSwappableTokens,
 } from "@/data/dummy";
 import { Token } from "@/types";
-import TokenIcon from "@/components/ui/TokenIcon";
 import { useAztecWallet } from "@/hooks/useAztecWallet";
-import { useTokenBalances, TOKEN_ADDRESSES, TOKEN_DECIMALS, formatTokenBalance } from "@/hooks/useTokenBalances";
+import { useTokenBalances, formatTokenBalance } from "@/hooks/useTokenBalances";
+import { useQuoteSwap } from "@/hooks/useQuoteSwap";
+import { TOKEN_ADDRESSES, TOKEN_DECIMALS, POOL_ADDRESSES } from "@/config/contracts";
 import { useToast } from "@/hooks/useToast";
+import { toTokenAmount, parseBalance, isValidAmount } from "@/lib/token-utils";
+import TokenSection from "./TokenSection";
 
 const tokenList = Object.values(TOKENS) as Token[];
-
-const POOL_ADDRESSES: Record<string, string | undefined> = {
-  "wETH/USDC": process.env.NEXT_PUBLIC_AMM_ETH_USDC,
-  "wZEC/USDC": process.env.NEXT_PUBLIC_AMM_ZEC_USDC,
-  "wAZTEC/USDC": process.env.NEXT_PUBLIC_AMM_AZTEC_USDC,
-};
 
 function getPoolAddress(a: string, b: string): string | null {
   const nonUsdc = a === "USDC" ? b : a;
   return POOL_ADDRESSES[`${nonUsdc}/USDC`] ?? null;
 }
 
-function toTokenAmount(amount: string, decimals: number): bigint {
-  const [whole = "0", frac = ""] = amount.split(".");
-  const padded = frac.padEnd(decimals, "0").slice(0, decimals);
-  return BigInt(whole + padded);
-}
-
-function parseBalance(s: string): number {
-  return parseFloat(s.replace(/,/g, ""));
-}
-
-function isValidAmount(value: string): boolean {
-  return /^\d*\.?\d*$/.test(value);
-}
 
 export default function SwapCard() {
   const { wallet, address, status: walletStatus, isDemoAccount } = useAztecWallet();
@@ -49,7 +33,6 @@ export default function SwapCard() {
   const [sellAmount, setSellAmount] = useState("");
   const [buyAmount, setBuyAmount] = useState("");
   const [activeInput, setActiveInput] = useState<"sell" | "buy">("sell");
-  const [quoting, setQuoting] = useState(false);
   const [slippage, setSlippage] = useState(1);
   const [swapping, setSwapping] = useState(false);
 
@@ -62,110 +45,29 @@ export default function SwapCard() {
   );
 
   // Quote the other side when user types in either input
+  const { quoting, quotedSellAmount, quotedBuyAmount } = useQuoteSwap({
+    wallet,
+    address,
+    sellToken,
+    buyToken,
+    sellAmount,
+    buyAmount,
+    activeInput,
+  });
+
+  // Sync quoted buy amount into local state (sell-side quoting)
   useEffect(() => {
-    if (!wallet || !address) return;
-
-    const poolAddrHex = getPoolAddress(sellToken.symbol, buyToken.symbol);
-    if (!poolAddrHex) return;
-
-    if (activeInput === "sell") {
-      const amt = parseFloat(sellAmount);
-      if (!amt || amt <= 0) { setBuyAmount(""); return; }
-
-      let cancelled = false;
-      setQuoting(true);
-      (async () => {
-        try {
-          const { AztecAddress } = await import("@aztec/aztec.js/addresses");
-          const { Contract } = await import("@aztec/aztec.js/contracts");
-          const { TokenContractArtifact } = await import("@aztec/noir-contracts.js/Token");
-          const { AMMContractArtifact } = await import("@privpnl/contracts/AMM");
-
-          const poolAddr = AztecAddress.fromString(poolAddrHex);
-          const sellAddr = AztecAddress.fromString(TOKEN_ADDRESSES[sellToken.symbol]!);
-          const buyAddr = AztecAddress.fromString(TOKEN_ADDRESSES[buyToken.symbol]!);
-          const owner = AztecAddress.fromString(address!);
-
-          const tokenSell = await Contract.at(sellAddr, TokenContractArtifact, wallet);
-          const tokenBuy = await Contract.at(buyAddr, TokenContractArtifact, wallet);
-          const pool = await Contract.at(poolAddr, AMMContractArtifact, wallet);
-
-          const [reserveIn, reserveOut] = await Promise.all([
-            tokenSell.methods.balance_of_public(poolAddr).simulate({ from: owner }),
-            tokenBuy.methods.balance_of_public(poolAddr).simulate({ from: owner }),
-          ]);
-
-          const sellDecimals = TOKEN_DECIMALS[sellToken.symbol] ?? 9;
-          const buyDecimals = TOKEN_DECIMALS[buyToken.symbol] ?? 9;
-          const amountIn = toTokenAmount(sellAmount, sellDecimals);
-
-          const amountOut = await pool.methods
-            .get_amount_out_for_exact_in(reserveIn, reserveOut, amountIn)
-            .simulate({ from: owner });
-
-          if (!cancelled) {
-            const outBig = typeof amountOut === "bigint" ? amountOut : BigInt(amountOut.toString());
-            const formatted = formatTokenBalance(outBig, buyDecimals);
-            setBuyAmount(formatted.replace(/,/g, ""));
-          }
-        } catch (err) {
-          console.warn("Quote failed:", err);
-          if (!cancelled) setBuyAmount("");
-        } finally {
-          if (!cancelled) setQuoting(false);
-        }
-      })();
-      return () => { cancelled = true; };
-    } else {
-      const amt = parseFloat(buyAmount);
-      if (!amt || amt <= 0) { setSellAmount(""); return; }
-
-      let cancelled = false;
-      setQuoting(true);
-      (async () => {
-        try {
-          const { AztecAddress } = await import("@aztec/aztec.js/addresses");
-          const { Contract } = await import("@aztec/aztec.js/contracts");
-          const { TokenContractArtifact } = await import("@aztec/noir-contracts.js/Token");
-          const { AMMContractArtifact } = await import("@privpnl/contracts/AMM");
-
-          const poolAddr = AztecAddress.fromString(poolAddrHex);
-          const sellAddr = AztecAddress.fromString(TOKEN_ADDRESSES[sellToken.symbol]!);
-          const buyAddr = AztecAddress.fromString(TOKEN_ADDRESSES[buyToken.symbol]!);
-          const owner = AztecAddress.fromString(address!);
-
-          const tokenSell = await Contract.at(sellAddr, TokenContractArtifact, wallet);
-          const tokenBuy = await Contract.at(buyAddr, TokenContractArtifact, wallet);
-          const pool = await Contract.at(poolAddr, AMMContractArtifact, wallet);
-
-          const [reserveIn, reserveOut] = await Promise.all([
-            tokenSell.methods.balance_of_public(poolAddr).simulate({ from: owner }),
-            tokenBuy.methods.balance_of_public(poolAddr).simulate({ from: owner }),
-          ]);
-
-          const sellDecimals = TOKEN_DECIMALS[sellToken.symbol] ?? 9;
-          const buyDecimals = TOKEN_DECIMALS[buyToken.symbol] ?? 9;
-          const amountOut = toTokenAmount(buyAmount, buyDecimals);
-
-          const amountIn = await pool.methods
-            .get_amount_in_for_exact_out(reserveIn, reserveOut, amountOut)
-            .simulate({ from: owner });
-
-          if (!cancelled) {
-            const inBig = typeof amountIn === "bigint" ? amountIn : BigInt(amountIn.toString());
-            const formatted = formatTokenBalance(inBig, sellDecimals);
-            setSellAmount(formatted.replace(/,/g, ""));
-          }
-        } catch (err) {
-          console.warn("Reverse quote failed:", err);
-          if (!cancelled) setSellAmount("");
-        } finally {
-          if (!cancelled) setQuoting(false);
-        }
-      })();
-      return () => { cancelled = true; };
+    if (activeInput === "sell" && quotedBuyAmount !== undefined) {
+      setBuyAmount(quotedBuyAmount);
     }
-  }, [wallet, address, sellAmount, buyAmount, activeInput, sellToken.symbol, buyToken.symbol]);
+  }, [activeInput, quotedBuyAmount]);
+
+  // Sync quoted sell amount into local state (buy-side quoting)
+  useEffect(() => {
+    if (activeInput === "buy" && quotedSellAmount !== undefined) {
+      setSellAmount(quotedSellAmount);
+    }
+  }, [activeInput, quotedSellAmount]);
 
   // Fetch balances when token selection changes or refresh is triggered
   useEffect(() => {
@@ -319,7 +221,7 @@ export default function SwapCard() {
       const authwit = await wallet.createAuthWit(owner, {
         caller: poolAddr,
         action: tokenSell.methods.transfer_to_public(owner, poolAddr, amountIn, nonce),
-      } as any);
+      } as any); // AuthWit generic param mismatch between Contract.at and EmbeddedWallet
 
       // Execute swap
       await pool.methods
@@ -427,126 +329,6 @@ export default function SwapCard() {
         )}
         {buttonLabel}
       </button>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-
-function TokenSection({
-  label,
-  token,
-  onTokenChange,
-  amount,
-  onAmountChange,
-  balance,
-  balanceLoading,
-  onRefresh,
-  onMax,
-  tokenOptions,
-  readOnly,
-  dimmed,
-}: {
-  label: string;
-  token: Token;
-  onTokenChange: (t: Token) => void;
-  amount: string;
-  onAmountChange: (v: string) => void;
-  balance: string;
-  balanceLoading?: boolean;
-  onRefresh?: () => void;
-  onMax?: () => void;
-  tokenOptions: Token[];
-  readOnly: boolean;
-  dimmed?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <div className="rounded-xl bg-neutral-50 border border-neutral-100 p-4 mb-1">
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-1">
-          <span className="text-xs text-neutral-500 font-medium">{label}</span>
-          {onRefresh && (
-            <button
-              onClick={onRefresh}
-              className="w-5 h-5 flex items-center justify-center rounded hover:bg-neutral-200 text-neutral-400 hover:text-neutral-600 transition-colors"
-            >
-              <Icon icon="lucide:refresh-cw" className="w-3 h-3" />
-            </button>
-          )}
-        </div>
-        <span className="text-xs text-neutral-400 font-mono flex items-center gap-1.5">
-          Balance:{" "}
-          {balanceLoading ? (
-            <span className="inline-block w-3 h-3 border border-neutral-300 border-t-transparent rounded-full animate-spin align-middle" />
-          ) : (
-            balance
-          )}
-          {onMax && (
-            <button
-              onClick={onMax}
-              className="text-[10px] font-semibold text-orange-500 hover:text-orange-600 uppercase"
-            >
-              Max
-            </button>
-          )}
-        </span>
-      </div>
-
-      <div className="flex items-center gap-3">
-        {/* Token selector */}
-        <div className="relative">
-          <button
-            onClick={() => setOpen(!open)}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white border border-neutral-200 hover:border-neutral-300 transition-colors"
-          >
-            <TokenIcon token={token} size="sm" />
-            <span className="text-sm font-medium text-neutral-800">
-              {token.symbol}
-            </span>
-            <Icon
-              icon="lucide:chevron-down"
-              className="w-3.5 h-3.5 text-neutral-400"
-            />
-          </button>
-
-          {open && (
-            <div className="absolute top-full left-0 mt-1 w-36 bg-white border border-neutral-200 rounded-lg shadow-lg py-1 z-20">
-              {tokenOptions.map((t) => (
-                <button
-                  key={t.symbol}
-                  onClick={() => {
-                    onTokenChange(t);
-                    setOpen(false);
-                  }}
-                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-neutral-50 transition-colors ${
-                    t.symbol === token.symbol
-                      ? "text-orange-600 font-medium"
-                      : "text-neutral-700"
-                  }`}
-                >
-                  <TokenIcon token={t} size="sm" />
-                  {t.symbol}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Amount input */}
-        <input
-          type="text"
-          inputMode="decimal"
-          placeholder="0.00"
-          value={amount}
-          onChange={(e) => onAmountChange(e.target.value)}
-          readOnly={readOnly}
-          className={`flex-1 text-right text-xl font-mono bg-transparent outline-none placeholder:text-neutral-300 ${
-            dimmed ? "text-neutral-400" : "text-neutral-900"
-          } ${readOnly ? "cursor-default" : ""}`}
-        />
-      </div>
     </div>
   );
 }

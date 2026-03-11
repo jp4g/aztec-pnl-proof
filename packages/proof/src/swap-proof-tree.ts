@@ -6,14 +6,7 @@ import { getZeroHashes } from './imt';
 import type { SwapProver, SwapProofResult, SwapData } from './swap-prover';
 import { LotStateTree } from './lot-state-tree';
 import { writeFileSync } from 'fs';
-
-/** Parse a potentially negative hex string like "-0x1a" into a BigInt */
-export function parseSignedHex(s: string): bigint {
-    if (s.startsWith('-0x') || s.startsWith('-0X')) {
-        return -BigInt(s.slice(1));
-    }
-    return BigInt(s);
-}
+import { parseSignedHex, proofBytesToFields } from './utils';
 
 /** Encode a signed i64 bigint as its two's complement u64 Field string */
 export function i64ToField(val: bigint): string {
@@ -196,7 +189,7 @@ export class SwapProofTree {
                 previousBlockNumber,
             );
 
-            const proofAsFields = this.proofBytesToFields(result.proof);
+            const proofAsFields = proofBytesToFields(result.proof);
 
             const pubInputs = [
                 result.publicInputs.leaf,
@@ -381,7 +374,7 @@ export class SwapProofTree {
             throw new Error('Invalid summary proof');
         }
 
-        const proofAsFields = this.proofBytesToFields(proof.proof);
+        const proofAsFields = proofBytesToFields(proof.proof);
         const pnl = parseSignedHex(pnlStr);
 
         console.log(`  Root: ${root}`);
@@ -409,19 +402,6 @@ export class SwapProofTree {
             proofAsFields,
             publicInputs: combinedPublicInputs,
         };
-    }
-
-    /**
-     * Convert proof bytes to field array (32 bytes per field)
-     */
-    private proofBytesToFields(proofBytes: Uint8Array): string[] {
-        const fields: string[] = [];
-        for (let i = 0; i < proofBytes.length; i += 32) {
-            const chunk = proofBytes.slice(i, i + 32);
-            const hex = '0x' + Buffer.from(chunk).toString('hex');
-            fields.push(hex);
-        }
-        return fields;
     }
 
 }
