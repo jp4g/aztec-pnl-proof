@@ -3,12 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "main": "./src/index.ts",
+  "main": "./ts/artifacts.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./individual_swap": "./individual_swap/target/individual_swap.json",
-    "./swap_summary_tree": "./swap_summary_tree/target/swap_summary_tree.json",
-    "./capital_gains_tax": "./capital_gains_tax/target/capital_gains_tax.json",
-    "./vkeys": "./vkeys/vkeys.json"
+    ".": "./ts/artifacts.ts",
+    "./individual_swap": "./ts/individual_swap.json",
+    "./swap_summary_tree": "./ts/swap_summary_tree.json",
+    "./capital_gains_tax": "./ts/capital_gains_tax.json",
+    "./vkeys": "./ts/vkeys.json"
   }
 }

@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "individual_swap",
+    "swap_summary_tree",
+    "capital_gains_tax",
+]
