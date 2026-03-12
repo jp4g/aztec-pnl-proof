@@ -14,7 +14,8 @@
     "./auditor/browser": "./src/auditor/browser.ts",
     "./rebalance": "./src/rebalance.ts",
     "./utils": "./src/utils.ts",
-    "./constants": "./src/constants.ts"
+    "./constants": "./src/constants.ts",
+    "./types": "./src/types.ts"
   },
   "dependencies": {
     "@zkpassport/poseidon2": "^0.6.2"

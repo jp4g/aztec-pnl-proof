@@ -8,16 +8,10 @@ import { decryptLog } from './decrypt';
 import { computeAddressSecret } from '@aztec/stdlib/keys';
 import type { CompleteAddress } from '@aztec/stdlib/contract';
 import { LotStateTree } from './lot-state-tree';
-import { MAX_LOTS, DOM_SEP__PUBLIC_LEAF_SLOT, DOM_SEP__PUBLIC_STORAGE_MAP_SLOT } from './constants';
+import { MAX_LOTS, MESSAGE_CIPHERTEXT_LEN, TAG_SIZE, DOM_SEP__PUBLIC_LEAF_SLOT, DOM_SEP__PUBLIC_STORAGE_MAP_SLOT } from './constants';
 import { parseSignedHex } from './utils';
-
-/**
- * A FIFO cost basis lot: amount of tracked token acquired at a given oracle price.
- */
-export interface Lot {
-    amount: bigint;
-    costPerUnit: bigint;
-}
+import { log, warn } from './logger';
+import type { Lot } from './types';
 
 /**
  * Configuration for SwapProver
@@ -108,7 +102,7 @@ export class SwapProver {
     ): Promise<SwapProofResult> {
         await this.initialize();
 
-        console.log(`\n--- SwapProver: Proving swap at block ${event.blockNumber} ---`);
+        log(`\n--- SwapProver: Proving swap at block ${event.blockNumber} ---`);
 
         // Decrypt event
         const plaintext = await decryptLog(
@@ -124,8 +118,8 @@ export class SwapProver {
         const amountIn = plaintext[4].toBigInt();
         const amountOut = plaintext[5].toBigInt();
 
-        console.log(`  token_in: ${tokenIn}, token_out: ${tokenOut}`);
-        console.log(`  amount_in: ${amountIn}, amount_out: ${amountOut}`);
+        log(`  token_in: ${tokenIn}, token_out: ${tokenOut}`);
+        log(`  amount_in: ${amountIn}, amount_out: ${amountOut}`);
 
         // Ensure both tokens have slots in the tree
         const sellIndex = lotStateTree.assignSlot(tokenIn);
@@ -144,19 +138,18 @@ export class SwapProver {
             priceFeedAddress, priceFeedAssetsSlot, tokenOut, event.blockNumber,
         );
 
-        console.log(`  sell token price: ${sellPriceWitness.leafPreimage.leaf.value}`);
-        console.log(`  buy token price: ${buyPriceWitness.leafPreimage.leaf.value}`);
+        log(`  sell token price: ${sellPriceWitness.leafPreimage.leaf.value}`);
+        log(`  buy token price: ${buyPriceWitness.leafPreimage.leaf.value}`);
 
         // Get sell-side lots and sibling path from INITIAL tree state
         const sellData = lotStateTree.getLots(tokenIn);
-        console.log(`  Sell-side lots for ${tokenIn}: numLots=${sellData.numLots}, total=${sellData.lots.slice(0, sellData.numLots).reduce((s, l) => s + l.amount, 0n)}, amountIn=${amountIn}`);
+        log(`  Sell-side lots for ${tokenIn}: numLots=${sellData.numLots}, total=${sellData.lots.slice(0, sellData.numLots).reduce((s: bigint, l: Lot) => s + l.amount, 0n)}, amountIn=${amountIn}`);
         const sellSiblingPath = await lotStateTree.getSiblingPath(sellIndex);
         const initialRoot = await lotStateTree.getRoot();
 
         // Mirror circuit sell-side logic in TS to update the tree
-        const sellPrice = sellPriceWitness.leafPreimage.leaf.value.toBigInt();
         const { lots: newSellLots, numLots: newSellNum } =
-            this.consumeLotsFIFO(sellData.lots, sellData.numLots, amountIn, sellPrice);
+            this.consumeLotsFIFO(sellData.lots, sellData.numLots, amountIn);
 
         // Update sell leaf in local tree
         await lotStateTree.setLots(tokenIn, newSellLots, newSellNum);
@@ -189,17 +182,17 @@ export class SwapProver {
         );
 
         // Execute circuit
-        console.log('  Generating witness...');
+        log('  Generating witness...');
         const { witness: circuitWitness, returnValue } = await this.noir!.execute(circuitInputs as any);
         const [leaf, pnlStr, remainingRoot, initRoot, provenPriceFeed, provenBlockNumber] =
             returnValue as [string, string, string, string, string, string];
 
         const pnl = parseSignedHex(pnlStr);
 
-        console.log(`  leaf: ${leaf}, pnl: ${pnl}`);
+        log(`  leaf: ${leaf}, pnl: ${pnl}`);
 
         // Generate proof
-        console.log('  Generating proof...');
+        log('  Generating proof...');
         const proof = await this.backend!.generateProof(circuitWitness, {
             verifierTarget: 'noir-recursive',
         });
@@ -207,11 +200,11 @@ export class SwapProver {
             verifierTarget: 'noir-recursive',
         });
         if (!isValid) throw new Error('Swap proof verification failed');
-        console.log('  Proof verified!');
+        log('  Proof verified!');
 
         const swapData: SwapData = {
-            tokenIn: plaintext[2].toString(),
-            tokenOut: plaintext[3].toString(),
+            tokenIn: tokenIn.toString(),
+            tokenOut: tokenOut.toString(),
             amountIn,
             amountOut,
             isExactInput: plaintext[6].toBigInt(),
@@ -301,7 +294,6 @@ export class SwapProver {
         lots: Lot[],
         numLots: number,
         sellAmount: bigint,
-        _sellPrice: bigint,
     ): { lots: Lot[]; numLots: number } {
         const lotsCopy: Lot[] = [];
         for (let i = 0; i < MAX_LOTS; i++) {
@@ -325,7 +317,7 @@ export class SwapProver {
         // so remaining > 0 is expected. PnL is correctly computed on consumed lots only.
         if (remaining > 0n) {
             const totalAvailable = lots.slice(0, numLots).reduce((s, l) => s + l.amount, 0n);
-            console.warn(
+            warn(
                 `  Lot shortfall (expected for exact-output swaps): sell=${sellAmount}, ` +
                 `available=${totalAvailable}, deficit=${remaining}`
             );
@@ -345,8 +337,7 @@ export class SwapProver {
      * Skips the 32-byte tag, then reads 15 x 32-byte chunks as Fr fields.
      */
     private parseCiphertextFields(encryptedLog: Buffer): Fr[] {
-        const MESSAGE_CIPHERTEXT_LEN = 15;
-        const ciphertextWithoutTag = encryptedLog.slice(32);
+        const ciphertextWithoutTag = encryptedLog.slice(TAG_SIZE);
         const paddedBuffer = Buffer.alloc(MESSAGE_CIPHERTEXT_LEN * 32);
         ciphertextWithoutTag.copy(paddedBuffer, 0, 0, Math.min(ciphertextWithoutTag.length, paddedBuffer.length));
 
@@ -392,7 +383,7 @@ export class SwapProver {
     private async initialize(): Promise<void> {
         if (this.noir) return;
 
-        console.log('Initializing SwapProver...');
+        log('Initializing SwapProver...');
         this.noir = new Noir(this.config.circuit);
         await this.noir.init();
         this.backend = new UltraHonkBackend(this.config.circuit.bytecode, this.config.bb);
@@ -401,6 +392,6 @@ export class SwapProver {
         // Fr from @aztec/foundation vs @aztec/stdlib — structurally identical but nominally distinct
         this.addressSecret = await computeAddressSecret(preaddress, this.config.ivskM as any) as any;
 
-        console.log('SwapProver initialized');
+        log('SwapProver initialized');
     }
 }

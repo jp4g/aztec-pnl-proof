@@ -1,5 +1,7 @@
+export type { Lot } from './types.js';
+
 export { SwapProver } from './swap-prover.js';
-export type { Lot, SwapProverConfig, SwapData, SwapProofResult } from './swap-prover.js';
+export type { SwapProverConfig, SwapData, SwapProofResult } from './swap-prover.js';
 
 export { SwapProofTree, i64ToField, fieldToI64 } from './swap-proof-tree.js';
 export type { VkeyArtifacts, SwapProofTreeConfig, DebugCombineCall, DebugProofTreeData, SwapProofTreeResult } from './swap-proof-tree.js';

@@ -6,6 +6,8 @@ import { DomainSeparator } from '@aztec/constants';
 import { deriveEcdhSharedSecret } from '@aztec/stdlib/logs';
 import { computeAddressSecret } from '@aztec/stdlib/keys';
 import type { CompleteAddress } from '@aztec/stdlib/contract';
+import { TAG_SIZE } from './constants';
+import { error as logError } from './logger';
 
 /**
  * Decrypt an encrypted log (note or event).
@@ -27,7 +29,7 @@ export async function decryptLog(
         // Step 1: Parse ciphertext structure
         // Format: [tag (32 bytes) | eph_pk.x (32 bytes) | rest as fields (31 bytes each)]
         // Skip the tag (first 32 bytes)
-        const ciphertextWithoutTag = encryptedLog.slice(32);
+        const ciphertextWithoutTag = encryptedLog.slice(TAG_SIZE);
         const ephPkX = Fr.fromBuffer(ciphertextWithoutTag.slice(0, 32));
 
         // The rest are fields packed with 31 bytes per field
@@ -41,7 +43,7 @@ export async function decryptLog(
         // Reconstruct ephemeral public key
         const ephPk = await reconstructPublicKey(ephPkX, ephPkSign);
         if (!ephPk) {
-            console.error('Failed to reconstruct ephemeral public key');
+            logError('Failed to reconstruct ephemeral public key');
             return null;
         }
 
@@ -89,7 +91,7 @@ export async function decryptLog(
 
         return fields;
     } catch (error) {
-        console.error('Decryption failed:', error);
+        logError('Decryption failed:', error);
         return null;
     }
 }
@@ -174,7 +176,7 @@ async function reconstructPublicKey(x: Fr, signBit: boolean): Promise<Point | nu
         const point = await Point.fromXAndSign(x, signBit);
         return point;
     } catch (error) {
-        console.error('Failed to reconstruct point from x-coordinate:', error);
+        logError('Failed to reconstruct point from x-coordinate:', error);
         return null;
     }
 }

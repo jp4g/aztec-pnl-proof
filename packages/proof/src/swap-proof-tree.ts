@@ -7,6 +7,7 @@ import type { SwapProver, SwapProofResult, SwapData } from './swap-prover';
 import { LotStateTree } from './lot-state-tree';
 import { writeFileSync } from 'fs';
 import { parseSignedHex, proofBytesToFields } from './utils';
+import { log } from './logger';
 
 /** Encode a signed i64 bigint as its two's complement u64 Field string */
 export function i64ToField(val: bigint): string {
@@ -107,7 +108,7 @@ export interface SwapProofTreeResult {
 interface ProofArtifact {
     proof: Uint8Array;
     proofAsFields: string[];
-    publicInputs: string[]; // 7 fields
+    publicInputs: string[]; // 6 fields
 }
 
 /**
@@ -144,7 +145,7 @@ export class SwapProofTree {
     private saveDebug(): void {
         if (!this.debugData || !this.config.debugOutputPath) return;
         writeFileSync(this.config.debugOutputPath, JSON.stringify(this.debugData, null, 2));
-        console.log(`[debug] Saved proof tree data to ${this.config.debugOutputPath}`);
+        log(`[debug] Saved proof tree data to ${this.config.debugOutputPath}`);
     }
 
     /**
@@ -169,7 +170,7 @@ export class SwapProofTree {
         await this.initialize();
         this.initDebug();
 
-        console.log(`\n=== SwapProofTree: Aggregating ${events.length} swap proofs ===`);
+        log(`\n=== SwapProofTree: Aggregating ${events.length} swap proofs ===`);
 
         // Step 1: Prove each swap individually, chaining lot state tree
         const swapResults: SwapProofResult[] = [];
@@ -178,7 +179,7 @@ export class SwapProofTree {
         let previousBlockNumber = 0n;
 
         for (let i = 0; i < events.length; i++) {
-            console.log(`\n--- Proving swap ${i + 1}/${events.length} ---`);
+            log(`\n--- Proving swap ${i + 1}/${events.length} ---`);
             onProgress?.('swap', i + 1, events.length);
 
             const result = await this.config.swapProver.prove(
@@ -222,11 +223,11 @@ export class SwapProofTree {
             previousBlockNumber = events[i].blockNumber;
         }
 
-        console.log(`\nIndividual proofs generated: ${swapArtifacts.length}`);
+        log(`\nIndividual proofs generated: ${swapArtifacts.length}`);
 
         // Step 2: Build recursive tree from individual proofs
         const finalProof = await this.buildTree(swapArtifacts, onProgress);
-        console.log(`\nFinal proof generated!`);
+        log(`\nFinal proof generated!`);
 
         const [root, pnlStr, remainingLotStateRoot, initialLotStateRoot, priceFeedAddr, blockNum] =
             finalProof.publicInputs;
@@ -251,7 +252,7 @@ export class SwapProofTree {
     private async initialize(): Promise<void> {
         if (this.summaryNoir) return;
 
-        console.log('Initializing SwapProofTree...');
+        log('Initializing SwapProofTree...');
 
         this.summaryNoir = new Noir(this.config.summaryCircuit);
         await this.summaryNoir.init();
@@ -263,9 +264,9 @@ export class SwapProofTree {
 
         this.zeroHashes = await getZeroHashes(20);
 
-        console.log(`  Leaf vkey hash: ${this.config.vkeys.leaf.vkHash}`);
-        console.log(`  Summary vkey hash: ${this.config.vkeys.summary.vkHash}`);
-        console.log('SwapProofTree initialized');
+        log(`  Leaf vkey hash: ${this.config.vkeys.leaf.vkHash}`);
+        log(`  Summary vkey hash: ${this.config.vkeys.summary.vkHash}`);
+        log('SwapProofTree initialized');
     }
 
     /**
@@ -287,7 +288,7 @@ export class SwapProofTree {
 
         while (currentLevel.length > 1) {
             const pairsInLevel = Math.ceil(currentLevel.length / 2);
-            console.log(
+            log(
                 `\n=== Building level ${level + 1} (${currentLevel.length} proofs -> ${pairsInLevel}) ===`,
             );
 
@@ -298,7 +299,7 @@ export class SwapProofTree {
                 const left = currentLevel[i];
                 const right = i + 1 < currentLevel.length ? currentLevel[i + 1] : null;
 
-                console.log(
+                log(
                     `\n--- Combining pair ${pairIndex + 1}/${pairsInLevel} (${right ? 'full' : 'odd, using zero hash'}) ---`,
                 );
 
@@ -315,7 +316,7 @@ export class SwapProofTree {
 
         // If only 1 proof, still wrap it in the summary tree for uniform structure
         if (proofs.length === 1) {
-            console.log('\n=== Wrapping single proof in summary tree ===');
+            log('\n=== Wrapping single proof in summary tree ===');
             onProgress?.('aggregate', 0, 1, { level: 0, nodeIndex: 0, nodesInLevel: 1 });
             return await this.combineProofs(proofs[0], null, 0);
         }
@@ -377,9 +378,9 @@ export class SwapProofTree {
         const proofAsFields = proofBytesToFields(proof.proof);
         const pnl = parseSignedHex(pnlStr);
 
-        console.log(`  Root: ${root}`);
-        console.log(`  PnL so far: ${pnl}`);
-        console.log(`  Proof: valid`);
+        log(`  Root: ${root}`);
+        log(`  PnL so far: ${pnl}`);
+        log(`  Proof: valid`);
 
         const combinedPublicInputs = [root, i64ToField(pnl), remainingLotStateRoot, initialLotStateRoot, priceFeedAddr, blockNum];
 
@@ -394,7 +395,7 @@ export class SwapProofTree {
                 proof: Buffer.from(proof.proof).toString('hex'),
                 publicInputs: combinedPublicInputs,
             });
-            await this.saveDebug();
+            this.saveDebug();
         }
 
         return {

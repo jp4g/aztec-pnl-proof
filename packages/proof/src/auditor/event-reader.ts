@@ -1,7 +1,7 @@
 import type { AztecNode } from "@aztec/aztec.js/node";
-import { TagGenerator, type TaggingSecretExport, type TaggingSecretEntry } from "./index";
+import { TagGenerator } from "./tag-generator";
+import type { TaggingSecretExport, TaggingSecretEntry } from "./types";
 import { Tag, SiloedTag } from "@aztec/stdlib/logs";
-import { AztecAddress } from "@aztec/aztec.js/addresses";
 import { log } from '../logger';
 
 /**
@@ -76,7 +76,7 @@ async function processSecret(
         const baseTags = await TagGenerator.generateTags(secretEntry.secret, index, count);
 
         // Step 2: Silo each tag with the contract address (v4 uses domain-separated hash)
-        const app = AztecAddress.fromString(secretEntry.app.toString());
+        const app = secretEntry.app;
         const siloedTags = await Promise.all(
             baseTags.map(async baseTag => {
                 return await SiloedTag.compute(new Tag(baseTag), app);
@@ -96,13 +96,13 @@ async function processSecret(
             const logs = logsPerTag[i];
             if (logs.length === 0) continue;
 
-            for (const log of logs) {
+            for (const logEntry of logs) {
                 // v4: logData is Fr[], concatenate to buffer
-                const encryptedLog = Buffer.concat(log.logData.map(f => f.toBuffer()));
+                const encryptedLog = Buffer.concat(logEntry.logData.map(f => f.toBuffer()));
 
                 events.push({
-                    txHash: log.txHash.toString(),
-                    blockNumber: log.blockNumber.toString(),
+                    txHash: logEntry.txHash.toString(),
+                    blockNumber: logEntry.blockNumber.toString(),
                     ciphertext: encryptedLog.toString('hex'),
                     ciphertextBuffer: encryptedLog,
                     ciphertextBytes: encryptedLog.length,

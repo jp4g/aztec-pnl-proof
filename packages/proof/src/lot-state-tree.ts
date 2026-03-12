@@ -1,6 +1,6 @@
 import { Fr } from '@aztec/foundation/curves/bn254';
 import { poseidon2Hash } from '@aztec/foundation/crypto/poseidon';
-import type { Lot } from './swap-prover';
+import type { Lot } from './types';
 import { MAX_LOTS, LOT_TREE_HEIGHT, NUM_SLOTS } from './constants';
 
 /**
@@ -21,6 +21,8 @@ export class LotStateTree {
     private leaves: Fr[];
     private tokenMap: Map<string, number>; // token address string -> leaf index
     private lotData: Map<string, TokenLotData>; // token address string -> lot data
+    private cachedLayers: Fr[][] | null = null;
+    private claimedSlots = new Set<number>();
 
     constructor() {
         this.leaves = new Array(NUM_SLOTS).fill(Fr.ZERO);
@@ -59,6 +61,7 @@ export class LotStateTree {
      * Compute all tree layers from leaves up to root.
      */
     private async computeLayers(): Promise<Fr[][]> {
+        if (this.cachedLayers) return this.cachedLayers;
         const layers: Fr[][] = [this.leaves.slice()];
         for (let level = 0; level < LOT_TREE_HEIGHT; level++) {
             const prev = layers[level];
@@ -68,6 +71,7 @@ export class LotStateTree {
             }
             layers.push(next);
         }
+        this.cachedLayers = layers;
         return layers;
     }
 
@@ -91,6 +95,7 @@ export class LotStateTree {
      */
     updateLeaf(leafIndex: number, newHash: Fr): void {
         this.leaves[leafIndex] = newHash;
+        this.cachedLayers = null;
     }
 
     /**
@@ -112,8 +117,9 @@ export class LotStateTree {
 
         // Find next empty slot
         for (let i = 0; i < NUM_SLOTS; i++) {
-            if (this.leaves[i].equals(Fr.ZERO) && !this.isSlotClaimed(i)) {
+            if (this.leaves[i].equals(Fr.ZERO) && !this.claimedSlots.has(i)) {
                 this.tokenMap.set(key, i);
+                this.claimedSlots.add(i);
                 this.lotData.set(key, {
                     tokenAddress,
                     lots: [],
@@ -136,6 +142,7 @@ export class LotStateTree {
         }
         this.lotData.set(key, { tokenAddress, lots: lots.slice(0, numLots), numLots });
         this.leaves[index] = await LotStateTree.hashLots(tokenAddress, numLots, lots);
+        this.cachedLayers = null;
     }
 
     /**
@@ -159,13 +166,4 @@ export class LotStateTree {
         return poseidon2Hash(preimage);
     }
 
-    /**
-     * Check if a slot index is already claimed by a token.
-     */
-    private isSlotClaimed(index: number): boolean {
-        for (const [, idx] of this.tokenMap) {
-            if (idx === index) return true;
-        }
-        return false;
-    }
 }

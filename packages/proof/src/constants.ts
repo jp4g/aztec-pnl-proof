@@ -13,6 +13,12 @@ export const DOM_SEP__PUBLIC_LEAF_SLOT = 1247650290;
 /** Domain separator for map storage slot derivation (v4: DOM_SEP__PUBLIC_STORAGE_MAP_SLOT) */
 export const DOM_SEP__PUBLIC_STORAGE_MAP_SLOT = 4015149901;
 
+/** Size of the encrypted log tag prefix in bytes */
+export const TAG_SIZE = 32;
+
+/** Number of 32-byte ciphertext fields in an encrypted swap event */
+export const MESSAGE_CIPHERTEXT_LEN = 15;
+
 /** Oracle price precision: 1 USD = 10,000 units (4 decimals) */
 export const PRICE_PRECISION = 10_000;
 
