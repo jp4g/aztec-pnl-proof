@@ -83,31 +83,10 @@ const CONTRACT_REGISTRY: ContractRegistryEntry[] = [
   ...lpEntries,
 ];
 
-// Sandbox: hardcoded test accounts pre-deployed on local sandbox
-const SANDBOX_DEMO_ACCOUNTS: StoredAccount[] = [
-  {
-    // accounts[2] — "winner" demo account (6 profitable swaps)
-    address: "0x17d474561f3cc64c896779fad1220017139791d250cff95370d239656c4aaeae",
-    secretKey: "0x0f6addf0da06c33293df974a565b03d1ab096090d907d98055a8b7f4954e120c",
-    signingKey: "0x22a37cf85375a80c4c462062586179e0543473dec7e43f2f10b81198fc7e9b07",
-    salt: "0x0000000000000000000000000000000000000000000000000000000000000000",
-    isDemo: true,
-  },
-  {
-    // accounts[1] — "loser" demo account (12 losing swaps)
-    address: "0x1b755492d6dd51deb08b7e51a33133186687ea13527f07921fd74640dc8dec24",
-    secretKey: "0x0aebd1b4be76efa44f5ee655c20bf9ea60f7ae44b9a7fd1fd9f189c7a0b0cdae",
-    signingKey: "0x06eee295d74d9d4e6aec5e3106d7ba7b2c0c3ec2873e7e9149449aae96696270",
-    salt: "0x0000000000000000000000000000000000000000000000000000000000000000",
-    isDemo: true,
-  },
-];
-
-// Devnet: deploy script writes NEXT_PUBLIC_DEMO_ACCOUNTS with fresh account keys.
-// On sandbox this env var is absent, so we use the hardcoded sandbox accounts.
+// Deploy script writes NEXT_PUBLIC_DEMO_ACCOUNTS for both devnet and sandbox.
 const DEMO_ACCOUNTS: StoredAccount[] = process.env.NEXT_PUBLIC_DEMO_ACCOUNTS
   ? (JSON.parse(process.env.NEXT_PUBLIC_DEMO_ACCOUNTS) as StoredAccount[]).map(a => ({ ...a, isDemo: true }))
-  : SANDBOX_DEMO_ACCOUNTS;
+  : [];
 
 
 

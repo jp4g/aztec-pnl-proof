@@ -31,23 +31,12 @@ export function useAdminAccount(wallet: EmbeddedAuditableWallet | null) {
     try {
       const adminEnv = process.env.NEXT_PUBLIC_ADMIN_ACCOUNT;
       if (adminEnv) {
-        // Devnet: use admin from env
         const { Fr, Fq } = await import("@aztec/aztec.js/fields");
         const parsed = JSON.parse(adminEnv) as { secretKey: string; salt: string; signingKey: string };
         adminRef.current = await wallet.registerAccountFromCredentials(
           Fr.fromString(parsed.secretKey),
           Fr.fromString(parsed.salt),
           Fq.fromString(parsed.signingKey),
-        );
-      } else {
-        // Sandbox: use test accounts
-        const { getInitialTestAccountsData } = await import("@aztec/accounts/testing");
-        const testAccounts = await getInitialTestAccountsData();
-        const admin = testAccounts[0];
-        adminRef.current = await wallet.registerAccountFromCredentials(
-          admin.secret,
-          admin.salt,
-          admin.signingKey,
         );
       }
     } catch (err) {

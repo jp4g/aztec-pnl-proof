@@ -5,6 +5,7 @@ import { useTokens } from "@/hooks/useTokens";
 import { useToast } from "@/hooks/useToast";
 import { Icon } from "@iconify/react";
 import { useState } from "react";
+import { truncateAddress } from "@/lib/token-utils";
 
 interface ConnectModalProps {
   onClose: () => void;
@@ -37,11 +38,6 @@ export default function ConnectModal({ onClose }: ConnectModalProps) {
     await navigator.clipboard.writeText(addr);
     setCopied(addr);
     setTimeout(() => setCopied(null), 2000);
-  };
-
-  const truncateAddress = (addr: string) => {
-    if (addr.length <= 16) return addr;
-    return `${addr.slice(0, 8)}...${addr.slice(-6)}`;
   };
 
   return (
@@ -145,7 +141,7 @@ export default function ConnectModal({ onClose }: ConnectModalProps) {
                       }`}
                     />
                     <span className="text-xs font-mono text-neutral-600 flex-1 truncate">
-                      {truncateAddress(acc)}
+                      {truncateAddress(acc, 8, 6)}
                     </span>
                     {isDemo && (
                       <span className="text-[10px] font-medium text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded-full shrink-0">
@@ -264,7 +260,7 @@ export default function ConnectModal({ onClose }: ConnectModalProps) {
               Are you sure you want to remove this account?
             </p>
             <p className="text-xs font-mono text-neutral-400 mb-6 break-all">
-              {truncateAddress(confirmRemove)}
+              {truncateAddress(confirmRemove, 8, 6)}
             </p>
             <div className="flex gap-3">
               <button

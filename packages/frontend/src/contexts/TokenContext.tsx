@@ -10,23 +10,7 @@ import {
 import { useAztecWallet } from "@/hooks/useAztecWallet";
 import { useAdminAccount } from "@/hooks/useAdminAccount";
 import { buildSponsoredFeePaymentMethod } from "@/lib/fee-utils";
-
-const MINTED_KEY = "privpnl-usdc-minted";
-
-function loadMintedAddresses(): Set<string> {
-  try {
-    const raw = localStorage.getItem(MINTED_KEY);
-    return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
-  } catch {
-    return new Set();
-  }
-}
-
-function saveMintedAddress(addr: string) {
-  const set = loadMintedAddresses();
-  set.add(addr);
-  localStorage.setItem(MINTED_KEY, JSON.stringify([...set]));
-}
+import { loadMintedAddresses, saveMintedAddress } from "@/lib/storage";
 
 export interface TokenContextValue {
   mintUsdc: () => Promise<void>;
@@ -85,7 +69,7 @@ export function TokenProvider({ children }: { children: ReactNode }) {
       const usdcAddress = AztecAddress.fromString(usdcAddressStr);
       const token = await Contract.at(usdcAddress, TokenContractArtifact, wallet);
       const recipient = AztecAddress.fromString(address);
-      const amount = BigInt(100_000) * BigInt(10 ** 6); // 100,000 USDC (6 decimals)
+      const amount = 100_000n * 10n ** 6n; // 100,000 USDC (6 decimals)
 
       // On devnet, admin is an internal account so the wallet won't auto-inject FPC.
       const paymentMethod = await buildSponsoredFeePaymentMethod();
@@ -100,7 +84,7 @@ export function TokenProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsMinting(false);
     }
-  }, [wallet, address, isMinting, ensureAdmin, adminRef]);
+  }, [wallet, address, isMinting, ensureAdmin]);
 
   return (
     <TokenContext.Provider value={{ mintUsdc, hasMintedUsdc, isMinting }}>

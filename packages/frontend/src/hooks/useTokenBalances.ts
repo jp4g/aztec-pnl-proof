@@ -2,19 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAztecWallet } from "@/hooks/useAztecWallet";
-import { TOKEN_ADDRESSES, TOKEN_DECIMALS } from "@/config/contracts";
-
-// Re-export so existing consumers keep working
-export { TOKEN_ADDRESSES, TOKEN_DECIMALS } from "@/config/contracts";
-
-export function formatTokenBalance(raw: bigint, decimals: number): string {
-  const value = Number(raw) / 10 ** decimals;
-  const displayDecimals = decimals <= 6 ? 2 : 4;
-  return value.toLocaleString("en-US", {
-    minimumFractionDigits: displayDecimals,
-    maximumFractionDigits: displayDecimals,
-  });
-}
+import { TOKEN_ADDRESSES, TOKEN_DECIMALS, DEFAULT_TOKEN_DECIMALS } from "@/config/contracts";
+import { formatTokenBalance } from "@/lib/token-utils";
 
 export function useTokenBalances() {
   const { wallet, address } = useAztecWallet();
@@ -61,7 +50,7 @@ export function useTokenBalances() {
           const result = await token.methods.balance_of_private(owner).simulate({ from: owner });
           const raw =
             typeof result === "bigint" ? result : BigInt(result.toString());
-          const decimals = TOKEN_DECIMALS[symbol] ?? 18;
+          const decimals = TOKEN_DECIMALS[symbol] ?? DEFAULT_TOKEN_DECIMALS;
           const formatted = formatTokenBalance(raw, decimals);
           setBalances((prev) => ({ ...prev, [symbol]: formatted }));
           setRawBalances((prev) => ({ ...prev, [symbol]: raw }));

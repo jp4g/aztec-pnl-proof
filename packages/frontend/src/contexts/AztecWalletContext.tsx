@@ -17,7 +17,6 @@ export interface AztecWalletContextValue {
   accounts: string[];
   status: WalletStatus;
   error: string | null;
-  isDevnet: boolean | null;
   connect: () => Promise<void>;
   createAccount: () => Promise<void>;
   switchAccount: (address: string) => Promise<void>;
@@ -40,14 +39,11 @@ export function AztecWalletProvider({ children }: { children: ReactNode }) {
   const [accounts, setAccounts] = useState<string[]>([]);
   const [status, setStatus] = useState<WalletStatus>("disconnected");
   const [error, setError] = useState<string | null>(null);
-  const [isDevnet, setIsDevnet] = useState<boolean | null>(null);
 
   const ensureWallet = useCallback(async () => {
     const { EmbeddedAuditableWallet } = await import("@/lib/embedded-wallet");
     if (!walletRef.current) {
       walletRef.current = await EmbeddedAuditableWallet.initialize(NODE_URL);
-      const nodeInfo = await walletRef.current.getNode().getNodeInfo();
-      setIsDevnet(nodeInfo.l1ChainId === 11155111);
     }
     return walletRef.current;
   }, []);
@@ -137,7 +133,6 @@ export function AztecWalletProvider({ children }: { children: ReactNode }) {
     setAccounts([]);
     setStatus("disconnected");
     setError(null);
-    setIsDevnet(null);
   }, []);
 
   const isDemoAccount = useCallback((addr: string) => {
@@ -152,7 +147,6 @@ export function AztecWalletProvider({ children }: { children: ReactNode }) {
     setAccounts([]);
     setStatus("disconnected");
     setError(null);
-    setIsDevnet(null);
   }, []);
 
   return (
@@ -163,7 +157,6 @@ export function AztecWalletProvider({ children }: { children: ReactNode }) {
         accounts,
         status,
         error,
-        isDevnet,
         connect,
         createAccount,
         switchAccount,

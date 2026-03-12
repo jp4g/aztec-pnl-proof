@@ -4,7 +4,7 @@ import { Icon } from "@iconify/react";
 import type { DecodedSwap, ProveFlowStatus, Token } from "@/types";
 import StatusBadge from "@/components/ui/StatusBadge";
 import TokenIcon from "@/components/ui/TokenIcon";
-import { TOKEN_DECIMALS } from "@/hooks/useTokenBalances";
+import { TOKEN_DECIMALS, DEFAULT_TOKEN_DECIMALS } from "@/config/contracts";
 
 interface TransactionTableProps {
   swaps: DecodedSwap[];
@@ -120,7 +120,7 @@ export default function TransactionTable({
                       </div>
                     </td>
                     <td className="py-4 px-6 text-neutral-600 font-mono text-right">
-                      {formatAmount(swap.amountIn, TOKEN_DECIMALS[tokenIn.symbol] ?? 9)}
+                      {formatAmount(swap.amountIn, TOKEN_DECIMALS[tokenIn.symbol] ?? DEFAULT_TOKEN_DECIMALS)}
                     </td>
                     <td className="py-4 px-6 text-center text-neutral-300">
                       <Icon icon="solar:arrow-right-linear" width={16} />
@@ -132,7 +132,7 @@ export default function TransactionTable({
                       </div>
                     </td>
                     <td className="py-4 px-6 text-neutral-600 font-mono text-right">
-                      {formatAmount(swap.amountOut, TOKEN_DECIMALS[tokenOut.symbol] ?? 9)}
+                      {formatAmount(swap.amountOut, TOKEN_DECIMALS[tokenOut.symbol] ?? DEFAULT_TOKEN_DECIMALS)}
                     </td>
                     <td className="py-4 px-6 text-neutral-500 text-right font-mono">
                       #{swap.blockNumber.toString()}

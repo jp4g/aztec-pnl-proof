@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { Icon } from "@iconify/react";
 import ProgressBar from "@/components/ui/ProgressBar";
 import { useAztecWallet } from "@/hooks/useAztecWallet";
 import { useAdminAccount } from "@/hooks/useAdminAccount";
-import { TOKEN_ADDRESSES, TOKEN_DECIMALS, POOL_DEFS } from "@/config/contracts";
+import { TOKEN_ADDRESSES, TOKEN_DECIMALS, DEFAULT_TOKEN_DECIMALS, POOL_DEFS } from "@/config/contracts";
 import { rebalancePools, type PoolState, type TokenPrice } from "@privpnl/proof/rebalance";
 import { useToast } from "@/hooks/useToast";
 import { PRICE_PRECISION } from "@privpnl/proof/constants";
@@ -165,14 +165,20 @@ export default function PriceCard() {
     [persistSymbols]
   );
 
-  const addedSymbols = new Set(rows.map((r) => r.symbol));
+  const addedSymbols = useMemo(() => new Set(rows.map((r) => r.symbol)), [rows]);
 
-  const changedTokens = rows.filter(
-    (r) => r.currentPrice !== "" && r.newPrice !== "" && r.newPrice !== r.currentPrice
+  const changedTokens = useMemo(
+    () => rows.filter(
+      (r) => r.currentPrice !== "" && r.newPrice !== "" && r.newPrice !== r.currentPrice
+    ),
+    [rows],
   );
 
-  const affectedPools = POOL_DEFS.filter((pool) =>
-    changedTokens.some((t) => t.symbol === pool.token0 || t.symbol === pool.token1)
+  const affectedPools = useMemo(
+    () => POOL_DEFS.filter((pool) =>
+      changedTokens.some((t) => t.symbol === pool.token0 || t.symbol === pool.token1)
+    ),
+    [changedTokens],
   );
 
   const handleApply = useCallback(async () => {
@@ -254,8 +260,8 @@ export default function PriceCard() {
           token1: token1Contract as unknown as PoolState["token1"],
           reserve0: typeof reserve0Raw === "bigint" ? reserve0Raw : BigInt(reserve0Raw.toString()),
           reserve1: typeof reserve1Raw === "bigint" ? reserve1Raw : BigInt(reserve1Raw.toString()),
-          decimals0: TOKEN_DECIMALS[pool.token0] ?? 9,
-          decimals1: TOKEN_DECIMALS[pool.token1] ?? 9,
+          decimals0: TOKEN_DECIMALS[pool.token0] ?? DEFAULT_TOKEN_DECIMALS,
+          decimals1: TOKEN_DECIMALS[pool.token1] ?? DEFAULT_TOKEN_DECIMALS,
         });
       }
 
@@ -294,7 +300,7 @@ export default function PriceCard() {
       setExecuting(false);
       setProgress({ step: 0, total: 0, label: "" });
     }
-  }, [wallet, address, executing, changedTokens, affectedPools, rows, ensureAdmin, adminRef, showToast]);
+  }, [wallet, address, executing, changedTokens, affectedPools, rows, ensureAdmin, showToast]);
 
   const handleRefresh = useCallback(() => {
     if (!wallet || !connected) return;

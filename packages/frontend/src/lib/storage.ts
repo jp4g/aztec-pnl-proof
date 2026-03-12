@@ -60,3 +60,22 @@ export function clearAllStoredAccounts() {
   localStorage.removeItem(ACTIVE_ACCOUNT_KEY);
   localStorage.removeItem(LEGACY_KEY);
 }
+
+// --- USDC minting tracking ---
+
+const MINTED_KEY = "privpnl-usdc-minted";
+
+export function loadMintedAddresses(): Set<string> {
+  try {
+    const raw = localStorage.getItem(MINTED_KEY);
+    return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+export function saveMintedAddress(addr: string) {
+  const set = loadMintedAddresses();
+  set.add(addr);
+  localStorage.setItem(MINTED_KEY, JSON.stringify([...set]));
+}

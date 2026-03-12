@@ -1,3 +1,5 @@
+import { POOL_ADDRESSES } from "@/config/contracts";
+
 /**
  * Utility functions for token amount parsing and validation.
  */
@@ -25,4 +27,32 @@ export function parseBalance(s: string): number {
  */
 export function isValidAmount(value: string): boolean {
   return /^\d*\.?\d*$/.test(value);
+}
+
+/**
+ * Format a raw token amount (bigint) to a human-readable string.
+ */
+export function formatTokenBalance(raw: bigint, decimals: number): string {
+  const value = Number(raw) / 10 ** decimals;
+  const displayDecimals = decimals <= 6 ? 2 : 4;
+  return value.toLocaleString("en-US", {
+    minimumFractionDigits: displayDecimals,
+    maximumFractionDigits: displayDecimals,
+  });
+}
+
+/**
+ * Look up the pool address for a token pair (all pools are paired with USDC).
+ */
+export function getPoolAddress(a: string, b: string): string | null {
+  const nonUsdc = a === "USDC" ? b : a;
+  return POOL_ADDRESSES[`${nonUsdc}/USDC`] ?? null;
+}
+
+/**
+ * Truncate a hex address for display: "0x1234...abcd".
+ */
+export function truncateAddress(address: string, prefix = 6, suffix = 4): string {
+  if (address.length <= prefix + suffix + 3) return address;
+  return `${address.slice(0, prefix)}...${address.slice(-suffix)}`;
 }

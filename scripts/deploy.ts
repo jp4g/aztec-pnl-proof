@@ -174,7 +174,10 @@ async function setup() {
         }
     } else {
         // Sandbox: use pre-deployed test accounts
-        addresses.push(...await registerSandboxAccounts(wallet));
+        const { addresses: sbAddresses, accounts: sbAccounts } = await registerSandboxAccounts(wallet);
+        addresses.push(...sbAddresses);
+        adminAccount = sbAccounts[0];
+        demoAccounts.push(...sbAccounts.slice(1));
     }
 
     const admin = addresses[0];
@@ -330,6 +333,9 @@ async function setup() {
         NEXT_PUBLIC_LP_ZEC_USDC: lpZecUsdc.address.toString(),
         NEXT_PUBLIC_LP_AZTEC_USDC: lpAztecUsdc.address.toString(),
     };
+    if (adminAccount) {
+        deployedVars.NEXT_PUBLIC_ADMIN_ACCOUNT = JSON.stringify(adminAccount);
+    }
     if (demoAccounts.length > 0) {
         deployedVars.NEXT_PUBLIC_DEMO_ACCOUNTS = JSON.stringify(demoAccounts);
     }

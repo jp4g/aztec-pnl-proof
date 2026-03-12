@@ -10,6 +10,8 @@ export const TOKEN_ADDRESSES: Record<string, string | undefined> = {
   wAZTEC: process.env.NEXT_PUBLIC_TOKEN_WAZTEC,
 };
 
+export const DEFAULT_TOKEN_DECIMALS = 9;
+
 export const TOKEN_DECIMALS: Record<string, number> = {
   USDC: 6,
   wETH: 9,

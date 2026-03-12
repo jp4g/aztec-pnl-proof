@@ -5,23 +5,17 @@ import { Icon } from "@iconify/react";
 import {
   TOKENS,
   getSwappableTokens,
-} from "@/data/dummy";
+} from "@/config/tokens";
 import { Token } from "@/types";
 import { useAztecWallet } from "@/hooks/useAztecWallet";
-import { useTokenBalances, formatTokenBalance } from "@/hooks/useTokenBalances";
+import { useTokenBalances } from "@/hooks/useTokenBalances";
 import { useQuoteSwap } from "@/hooks/useQuoteSwap";
-import { TOKEN_ADDRESSES, TOKEN_DECIMALS, POOL_ADDRESSES } from "@/config/contracts";
+import { TOKEN_ADDRESSES, TOKEN_DECIMALS, DEFAULT_TOKEN_DECIMALS } from "@/config/contracts";
 import { useToast } from "@/hooks/useToast";
-import { toTokenAmount, parseBalance, isValidAmount } from "@/lib/token-utils";
+import { toTokenAmount, parseBalance, isValidAmount, formatTokenBalance, getPoolAddress } from "@/lib/token-utils";
 import TokenSection from "./TokenSection";
 
 const tokenList = Object.values(TOKENS) as Token[];
-
-function getPoolAddress(a: string, b: string): string | null {
-  const nonUsdc = a === "USDC" ? b : a;
-  return POOL_ADDRESSES[`${nonUsdc}/USDC`] ?? null;
-}
-
 
 export default function SwapCard() {
   const { wallet, address, status: walletStatus, isDemoAccount } = useAztecWallet();
@@ -112,7 +106,7 @@ export default function SwapCard() {
   const handleMax = useCallback(() => {
     const raw = getRawBalance(sellToken.symbol);
     if (!raw || raw <= 0n) return;
-    const decimals = TOKEN_DECIMALS[sellToken.symbol] ?? 9;
+    const decimals = TOKEN_DECIMALS[sellToken.symbol] ?? DEFAULT_TOKEN_DECIMALS;
     // Use full precision so the exact raw amount is sent
     const whole = raw / 10n ** BigInt(decimals);
     const frac = raw % 10n ** BigInt(decimals);
@@ -193,8 +187,8 @@ export default function SwapCard() {
       const buyAddr = AztecAddress.fromString(buyTokenAddr);
       const owner = AztecAddress.fromString(address);
 
-      const sellDecimals = TOKEN_DECIMALS[sellToken.symbol] ?? 18;
-      const buyDecimals = TOKEN_DECIMALS[buyToken.symbol] ?? 18;
+      const sellDecimals = TOKEN_DECIMALS[sellToken.symbol] ?? DEFAULT_TOKEN_DECIMALS;
+      const buyDecimals = TOKEN_DECIMALS[buyToken.symbol] ?? DEFAULT_TOKEN_DECIMALS;
       const amountIn = toTokenAmount(sellAmount, sellDecimals);
 
       const tokenSell = await Contract.at(sellAddr, TokenContractArtifact, wallet);
@@ -229,18 +223,18 @@ export default function SwapCard() {
         .with({ authWitnesses: [authwit] })
         .send({ from: owner });
 
-      // Optimistically update balances
-      const prevSellRaw = parseBalance(sellBalance);
-      const prevBuyRaw = parseBalance(buyBalance);
-      const sellDelta = Number(amountIn) / 10 ** sellDecimals;
-      const buyDelta = Number(amountOutBig) / 10 ** buyDecimals;
-      setBalance(sellToken.symbol, formatTokenBalance(BigInt(Math.round((prevSellRaw - sellDelta) * 10 ** sellDecimals)), sellDecimals));
-      setBalance(buyToken.symbol, formatTokenBalance(BigInt(Math.round((prevBuyRaw + buyDelta) * 10 ** buyDecimals)), buyDecimals));
+      // Optimistically update balances using bigint arithmetic to avoid float precision loss
+      const prevSellRaw = getRawBalance(sellToken.symbol) ?? 0n;
+      const prevBuyRaw = getRawBalance(buyToken.symbol) ?? 0n;
+      const newSellRaw = prevSellRaw > amountIn ? prevSellRaw - amountIn : 0n;
+      const newBuyRaw = prevBuyRaw + amountOutBig;
+      setBalance(sellToken.symbol, formatTokenBalance(newSellRaw, sellDecimals));
+      setBalance(buyToken.symbol, formatTokenBalance(newBuyRaw, buyDecimals));
 
       setSellAmount("");
       setBuyAmount("");
       setActiveInput("sell");
-      showToast(`Swapped ${sellAmount} ${sellToken.symbol} for ~${formatTokenBalance(amountOutBig, buyDecimals)} ${buyToken.symbol}`, "success");
+      showToast(`Swapped ${formatTokenBalance(amountIn, sellDecimals)} ${sellToken.symbol} for ~${formatTokenBalance(amountOutBig, buyDecimals)} ${buyToken.symbol}`, "success");
     } catch (err) {
       console.error("Swap failed:", err);
       const msg = err instanceof Error ? err.message : "Swap failed";
@@ -248,7 +242,7 @@ export default function SwapCard() {
     } finally {
       setSwapping(false);
     }
-  }, [wallet, address, swapping, sellToken, buyToken, sellAmount, slippage, sellBalance, buyBalance, showToast, setBalance]);
+  }, [wallet, address, swapping, sellToken, buyToken, sellAmount, slippage, getRawBalance, showToast, setBalance]);
 
   return (
     <div className="w-full max-w-md bg-white rounded-2xl border border-neutral-200 shadow-sm p-6">

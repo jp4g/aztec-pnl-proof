@@ -145,7 +145,8 @@ async function demoData() {
         }
     } else {
         // Sandbox: use pre-deployed test accounts
-        addresses.push(...await registerSandboxAccounts(wallet));
+        const { addresses: sbAddresses } = await registerSandboxAccounts(wallet);
+        addresses.push(...sbAddresses);
     }
 
     const admin = addresses[0];

@@ -1,5 +1,5 @@
 import { Icon } from "@iconify/react";
-import { TOKENS } from "@/data/dummy";
+import { TOKENS } from "@/config/tokens";
 import { TOKEN_ADDRESSES } from "@/config/contracts";
 import { Token } from "@/types";
 import TokenIcon from "@/components/ui/TokenIcon";

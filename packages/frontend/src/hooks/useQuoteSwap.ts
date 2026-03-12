@@ -2,14 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { Token } from "@/types";
-import { TOKEN_ADDRESSES, TOKEN_DECIMALS, POOL_ADDRESSES } from "@/config/contracts";
-import { formatTokenBalance } from "@/hooks/useTokenBalances";
-import { toTokenAmount } from "@/lib/token-utils";
-
-function getPoolAddress(a: string, b: string): string | null {
-  const nonUsdc = a === "USDC" ? b : a;
-  return POOL_ADDRESSES[`${nonUsdc}/USDC`] ?? null;
-}
+import { TOKEN_ADDRESSES, TOKEN_DECIMALS, DEFAULT_TOKEN_DECIMALS } from "@/config/contracts";
+import { toTokenAmount, formatTokenBalance, getPoolAddress } from "@/lib/token-utils";
 
 interface UseQuoteSwapArgs {
   wallet: any;
@@ -82,8 +76,8 @@ export function useQuoteSwap({
           tokenBuy.methods.balance_of_public(poolAddr).simulate({ from: owner }),
         ]);
 
-        const sellDecimals = TOKEN_DECIMALS[sellToken.symbol] ?? 9;
-        const buyDecimals = TOKEN_DECIMALS[buyToken.symbol] ?? 9;
+        const sellDecimals = TOKEN_DECIMALS[sellToken.symbol] ?? DEFAULT_TOKEN_DECIMALS;
+        const buyDecimals = TOKEN_DECIMALS[buyToken.symbol] ?? DEFAULT_TOKEN_DECIMALS;
 
         if (activeInput === "sell") {
           const amountIn = toTokenAmount(sellAmount, sellDecimals);

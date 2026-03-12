@@ -2,12 +2,8 @@
 
 import { useState } from "react";
 import { useAztecWallet } from "@/hooks/useAztecWallet";
+import { truncateAddress } from "@/lib/token-utils";
 import ConnectModal from "./ConnectModal";
-
-function truncateAddress(address: string) {
-  if (address.length <= 12) return address;
-  return `${address.slice(0, 6)}...${address.slice(-4)}`;
-}
 
 const STATUS_DOT: Record<string, string> = {
   disconnected: "bg-neutral-400",

@@ -1,4 +1,3 @@
-import type { AztecAddress } from "@aztec/aztec.js/addresses";
 import type { SponsoredFeePaymentMethod } from "@aztec/aztec.js/fee";
 
 /**
@@ -23,18 +22,4 @@ export async function buildSponsoredFeePaymentMethod(): Promise<SponsoredFeePaym
     { salt: new Fr(SPONSORED_FPC_SALT) },
   );
   return new SponsoredFeePaymentMethod(fpcInstance.address);
-}
-
-/**
- * Build send options that include sponsored fee payment on devnet.
- * On sandbox (no NEXT_PUBLIC_ADMIN_ACCOUNT) the returned opts only contain `from`.
- */
-export async function buildSendOpts(
-  from: AztecAddress,
-): Promise<Record<string, unknown>> {
-  const paymentMethod = await buildSponsoredFeePaymentMethod();
-  if (paymentMethod) {
-    return { from, fee: { paymentMethod } };
-  }
-  return { from };
 }

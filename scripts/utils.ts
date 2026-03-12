@@ -92,14 +92,21 @@ export function makeSendOpts(isDevnet: boolean, fpcAddress: AztecAddress | undef
 /**
  * Register sandbox test accounts on the wallet. Returns their addresses.
  */
-export async function registerSandboxAccounts(wallet: EmbeddedWallet): Promise<AztecAddress[]> {
-    const accounts = await getInitialTestAccountsData();
+export async function registerSandboxAccounts(wallet: EmbeddedWallet): Promise<{ addresses: AztecAddress[]; accounts: AccountInfo[] }> {
+    const testData = await getInitialTestAccountsData();
     const addresses: AztecAddress[] = [];
-    for (const account of accounts) {
+    const accounts: AccountInfo[] = [];
+    for (const account of testData) {
         const manager = await wallet.createSchnorrAccount(account.secret, account.salt, account.signingKey);
         addresses.push(manager.address);
+        accounts.push({
+            address: manager.address.toString(),
+            secretKey: account.secret.toString(),
+            signingKey: account.signingKey.toString(),
+            salt: account.salt.toString(),
+        });
     }
-    return addresses;
+    return { addresses, accounts };
 }
 
 /**
