@@ -27,6 +27,8 @@ export interface SwapProverConfig {
     ivskM: Fr;
     /** Aztec node client for fetching price witnesses */
     node: AztecNode;
+    /** Optional archival node for historical state queries (getBlockHeader, getPublicDataWitness) */
+    archivalNode?: AztecNode;
 }
 
 /**
@@ -73,6 +75,10 @@ export interface SwapProofResult {
  */
 export class SwapProver {
     private config: SwapProverConfig;
+    /** Node used for historical state queries (archival if provided, otherwise default) */
+    private get historyNode(): AztecNode {
+        return this.config.archivalNode ?? this.config.node;
+    }
 
     // Lazy-initialized components
     private noir: Noir | null = null;
@@ -126,7 +132,7 @@ export class SwapProver {
         const buyIndex = lotStateTree.assignSlot(tokenOut);
 
         // Get block header for public data tree root
-        const header = await this.config.node.getBlockHeader(Number(event.blockNumber) as any);
+        const header = await this.historyNode.getBlockHeader(Number(event.blockNumber) as any);
         if (!header) throw new Error(`Block header not found for block ${event.blockNumber}`);
         const publicDataTreeRoot = header.state.partial.publicDataTree.root;
 
@@ -358,7 +364,7 @@ export class SwapProver {
             [priceFeedAddress, tokenSlot],
             DOM_SEP__PUBLIC_LEAF_SLOT,
         );
-        const witness = await this.config.node.getPublicDataWitness(
+        const witness = await this.historyNode.getPublicDataWitness(
             Number(blockNumber) as any, treeIndex,
         );
         if (!witness) throw new Error(`Failed to get price witness for token ${tokenAddress}`);

@@ -230,12 +230,20 @@ export function useProveFlow() {
         "@aztec/noir-contracts.js/PriceFeed"
       );
 
+      const archivalNodeUrl = process.env.NEXT_PUBLIC_AZTEC_ARCHIVAL_NODE_URL;
+      let archivalNode;
+      if (archivalNodeUrl) {
+        const { createAztecNodeClient } = await import("@aztec/aztec.js/node");
+        archivalNode = createAztecNodeClient(archivalNodeUrl);
+      }
+
       const prover = new SwapProver({
         bb,
         circuit: individualSwapJson,
         recipientCompleteAddress: completeAddress,
         ivskM,
         node: wallet.getNode(),
+        archivalNode,
       });
 
       // Initialize lot state tree with USDC lot from initial mint

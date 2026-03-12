@@ -30,11 +30,12 @@ import swapSummaryTreeCircuit from '@privpnl/circuits/swap_summary_tree' with { 
 import capitalGainsTaxCircuit from '@privpnl/circuits/capital_gains_tax' with { type: 'json' };
 import vkeys from '@privpnl/circuits/vkeys' with { type: 'json' };
 
-const { AZTEC_NODE_URL = "http://localhost:8080" } = process.env;
+const { AZTEC_NODE_URL = "http://localhost:8080", AZTEC_ARCHIVAL_NODE_URL } = process.env;
 
 describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 86_400_000 }, () => {
 
     let node: AztecNode;
+    let archivalNode: AztecNode | undefined;
     let wallet: EmbeddedWallet;
     let addresses: AztecAddress[];
 
@@ -111,6 +112,10 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
 
         node = createAztecNodeClient(AZTEC_NODE_URL);
         console.log(`Connected to Aztec node at "${AZTEC_NODE_URL}"`);
+        archivalNode = AZTEC_ARCHIVAL_NODE_URL
+            ? createAztecNodeClient(AZTEC_ARCHIVAL_NODE_URL)
+            : undefined;
+        if (archivalNode) console.log(`Using archival node at "${AZTEC_ARCHIVAL_NODE_URL}"`);
 
         const nodeInfo = await node.getNodeInfo();
         const isDevnet = nodeInfo.l1ChainId === 11155111;
@@ -389,6 +394,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
             recipientCompleteAddress,
             ivskM,
             node,
+            archivalNode,
         });
 
         const proofTree = new SwapProofTree({
