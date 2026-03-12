@@ -1,6 +1,6 @@
 {
   "framework": "nextjs",
   "installCommand": "VERCEL=1 yarn install",
-  "buildCommand": "cd packages/frontend && yarn build",
+  "buildCommand": "ls -la && cd packages/frontend && yarn build",
   "outputDirectory": "packages/frontend/.next"
 }
