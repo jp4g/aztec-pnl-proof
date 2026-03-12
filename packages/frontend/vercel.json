@@ -1,0 +1,4 @@
+{
+  "framework": "nextjs",
+  "installCommand": "cd ../.. && VERCEL=1 yarn install"
+}
