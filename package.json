@@ -12,7 +12,6 @@
     "deploy": "tsx scripts/deploy.ts",
     "demo-data": "tsx scripts/demo-data.ts",
     "setup": "tsx scripts/deploy.ts && tsx scripts/demo-data.ts",
-    "push-env": "tsx scripts/push-env.ts",
     "test": "node --env-file=.env --import tsx --test test/pnl.test.ts"
   },
   "dependencies": {

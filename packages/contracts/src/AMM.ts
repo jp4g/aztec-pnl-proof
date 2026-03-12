@@ -9,7 +9,7 @@ import { EthAddress } from '@aztec/aztec.js/addresses';
 import { Fr, Point } from '@aztec/aztec.js/fields';
 import { type PublicKey, PublicKeys } from '@aztec/aztec.js/keys';
 import type { Wallet } from '@aztec/aztec.js/wallet';
-import AMMContractArtifactJson from '../amm_contract/target/amm_contract-AMM.json' with { type: 'json' };
+import AMMContractArtifactJson from './AMM.json' with { type: 'json' };
 export const AMMContractArtifact = loadContractArtifact(AMMContractArtifactJson as NoirCompiledContract);
 
 

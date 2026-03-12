@@ -4,6 +4,7 @@ import type { CompiledCircuit } from '@aztec/noir-types';
 import { fieldToI64, i64ToField } from './swap-proof-tree';
 import type { SwapProofTreeResult, VkeyArtifacts } from './swap-proof-tree';
 import { parseSignedHex, proofBytesToFields } from './utils';
+import { log } from './logger';
 
 export interface TaxProofResult {
     proof: Uint8Array;
@@ -34,20 +35,20 @@ export class TaxProver {
     private async initialize(): Promise<void> {
         if (this.noir) return;
 
-        console.log('Initializing TaxProver...');
+        log('Initializing TaxProver...');
         this.noir = new Noir(this.taxCircuit);
         await this.noir.init();
         this.backend = new UltraHonkBackend(
             this.taxCircuit.bytecode,
             this.bb,
         );
-        console.log('TaxProver initialized');
+        log('TaxProver initialized');
     }
 
     async prove(summaryResult: SwapProofTreeResult): Promise<TaxProofResult> {
         await this.initialize();
 
-        console.log('\n=== TaxProver: Computing capital gains tax ===');
+        log('\n=== TaxProver: Computing capital gains tax ===');
 
         const proofAsFields = proofBytesToFields(summaryResult.proof);
 
@@ -68,12 +69,12 @@ export class TaxProver {
             summary_vkey_hash: this.summaryVkey.vkHash,
         };
 
-        console.log('  Executing tax circuit...');
+        log('  Executing tax circuit...');
         const { witness, returnValue } = await this.noir!.execute(circuitInputs);
         const [root, pnlStr, taxStr, remainingRoot, initialRoot, priceFeedAddr, blockNum] =
             returnValue as [string, string, string, string, string, string, string];
 
-        console.log('  Generating proof...');
+        log('  Generating proof...');
         const proof = await this.backend!.generateProof(witness);
         const isValid = await this.backend!.verifyProof(proof);
         if (!isValid) {
@@ -83,9 +84,9 @@ export class TaxProver {
         const pnl = parseSignedHex(pnlStr);
         const tax = parseSignedHex(taxStr);
 
-        console.log(`  PnL: ${pnl}`);
-        console.log(`  Tax (20%): ${tax}`);
-        console.log(`  Proof: valid`);
+        log(`  PnL: ${pnl}`);
+        log(`  Tax (20%): ${tax}`);
+        log(`  Proof: valid`);
 
         return {
             proof: proof.proof,

@@ -7,7 +7,7 @@ import type {
   DecodedSwap,
   DownloadableProof,
 } from "@/types";
-import { TOKENS } from "@/data/dummy";
+import { TOKENS } from "@/config/tokens";
 import { buildTreeNodes } from "@/lib/tree-utils";
 
 /** Map token contract addresses to symbols for display.
