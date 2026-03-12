@@ -9,7 +9,7 @@
  * Fetches live prices from CoinGecko, sets oracle prices accordingly,
  * and seeds each pool with liquidity matching the real price ratio.
  *
- * Writes deployed addresses to frontend/.env.production (devnet) or frontend/.env.local (sandbox) and deployment.json.
+ * Writes deployed addresses to frontend/.env.production (devnet) or frontend/.env.development (sandbox) and deployment.json.
  *
  * Env vars:
  *   AZTEC_NODE_URL       (default: http://localhost:8080)
@@ -269,17 +269,17 @@ async function setup() {
     console.log('--- Seeding pools with liquidity ($10M USDC per pool) ---');
 
     const ethPool = poolAmounts(prices.wETH, TOKEN_DECIMALS);
-    console.log(`  wETH/USDC: ${Number(ethPool.tokenAmount) / 1e18} wETH + ${Number(ethPool.usdcAmount) / 1e6} USDC`);
+    console.log(`  wETH/USDC: ${Number(ethPool.tokenAmount) / 10 ** TOKEN_DECIMALS} wETH + ${Number(ethPool.usdcAmount) / 10 ** USDC_DECIMALS} USDC`);
     await weth.methods.mint_to_public(ammEthUsdc.address, ethPool.tokenAmount).send(sendOpts(admin));
     await usdc.methods.mint_to_public(ammEthUsdc.address, ethPool.usdcAmount).send(sendOpts(admin));
 
     const zecPool = poolAmounts(prices.wZEC, TOKEN_DECIMALS);
-    console.log(`  wZEC/USDC: ${Number(zecPool.tokenAmount) / 1e18} wZEC + ${Number(zecPool.usdcAmount) / 1e6} USDC`);
+    console.log(`  wZEC/USDC: ${Number(zecPool.tokenAmount) / 10 ** TOKEN_DECIMALS} wZEC + ${Number(zecPool.usdcAmount) / 10 ** USDC_DECIMALS} USDC`);
     await wzec.methods.mint_to_public(ammZecUsdc.address, zecPool.tokenAmount).send(sendOpts(admin));
     await usdc.methods.mint_to_public(ammZecUsdc.address, zecPool.usdcAmount).send(sendOpts(admin));
 
     const aztecPool = poolAmounts(prices.wAZTEC, TOKEN_DECIMALS);
-    console.log(`  wAZTEC/USDC: ${Number(aztecPool.tokenAmount) / 1e18} wAZTEC + ${Number(aztecPool.usdcAmount) / 1e6} USDC`);
+    console.log(`  wAZTEC/USDC: ${Number(aztecPool.tokenAmount) / 10 ** TOKEN_DECIMALS} wAZTEC + ${Number(aztecPool.usdcAmount) / 10 ** USDC_DECIMALS} USDC`);
     await waztec.methods.mint_to_public(ammAztecUsdc.address, aztecPool.tokenAmount).send(sendOpts(admin));
     await usdc.methods.mint_to_public(ammAztecUsdc.address, aztecPool.usdcAmount).send(sendOpts(admin));
     console.log();

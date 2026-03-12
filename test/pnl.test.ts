@@ -1,4 +1,5 @@
 import { describe, test } from "node:test";
+import { cpus } from "node:os";
 import { expect } from '@jest/globals';
 import { getInitialTestAccountsData } from '@aztec/accounts/testing';
 import { AztecAddress } from '@aztec/aztec.js/addresses';
@@ -7,6 +8,7 @@ import { TokenContract } from '@aztec/noir-contracts.js/Token';
 import { PriceFeedContract } from '@aztec/noir-contracts.js/PriceFeed';
 import { AMMContract } from '@privpnl/contracts';
 import { precision } from "@privpnl/proof/utils";
+import { MESSAGE_CIPHERTEXT_LEN, TAG_SIZE } from '@privpnl/proof/constants';
 import { EmbeddedWallet } from "@aztec/wallets/embedded";
 import { Barretenberg } from '@aztec/bb.js';
 import type { CompiledCircuit } from '@aztec/noir-types';
@@ -103,7 +105,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
     test("prove PnL from 6 swaps across 3 pools with varying prices", { timeout: 86_400_000 }, async () => {
         // --- Setup (moved from before() due to bun's 60s hook timeout) ---
         console.log("Initializing Barretenberg...");
-        const threads = require('os').cpus().length;
+        const threads = cpus().length;
         bb = await Barretenberg.new({ threads });
         console.log("Barretenberg initialized");
 
@@ -230,9 +232,9 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
 
         // Track pool state (reserves mutated by rebalancer + swaps)
         const poolStates: Record<PoolKey, PoolState> = {
-            AB: { contract: poolAB, token0: tokenA, token1: tokenB, reserve0: POOL_AB_LIQ_A, reserve1: POOL_AB_LIQ_B },
-            AC: { contract: poolAC, token0: tokenA, token1: tokenC, reserve0: POOL_AC_LIQ_A, reserve1: POOL_AC_LIQ_C },
-            BC: { contract: poolBC, token0: tokenB, token1: tokenC, reserve0: POOL_BC_LIQ_B, reserve1: POOL_BC_LIQ_C },
+            AB: { contract: poolAB, token0: tokenA, token1: tokenB, reserve0: POOL_AB_LIQ_A, reserve1: POOL_AB_LIQ_B, decimals0: Number(DECIMALS), decimals1: Number(DECIMALS) },
+            AC: { contract: poolAC, token0: tokenA, token1: tokenC, reserve0: POOL_AC_LIQ_A, reserve1: POOL_AC_LIQ_C, decimals0: Number(DECIMALS), decimals1: Number(DECIMALS) },
+            BC: { contract: poolBC, token0: tokenB, token1: tokenC, reserve0: POOL_BC_LIQ_B, reserve1: POOL_BC_LIQ_C, decimals0: Number(DECIMALS), decimals1: Number(DECIMALS) },
         };
         const allPools = [poolStates.AB, poolStates.AC, poolStates.BC];
 
@@ -458,11 +460,10 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         expect(result.publicInputs.blockNumber).toBe(blockNumbers[5]);
 
         // Verify merkle root (leaves are hashes of ciphertext fields)
-        const MESSAGE_CIPHERTEXT_LEN = 15;
         const expectedLeaves: Fr[] = [];
         for (let i = 0; i < 6; i++) {
-            // Parse ciphertext into fields (skip 32-byte tag, then 15 x 32-byte chunks)
-            const buf = swapEvents[i].ciphertextBuffer.slice(32);
+            // Parse ciphertext into fields (skip tag, then MESSAGE_CIPHERTEXT_LEN x 32-byte chunks)
+            const buf = swapEvents[i].ciphertextBuffer.slice(TAG_SIZE);
             const padded = Buffer.alloc(MESSAGE_CIPHERTEXT_LEN * 32);
             buf.copy(padded, 0, 0, Math.min(buf.length, padded.length));
             const ctFields: Fr[] = [];

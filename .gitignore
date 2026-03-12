@@ -1,6 +1,14 @@
 node_modules
 .claude
+.vscode
 deps/
 deployment.json
 .vercel
-.env
+.env*
+!.env*.example
+*.bak
+.tsbuildinfo
+*.tsbuildinfo
+codegenCache.json
+**/target/
+dest/

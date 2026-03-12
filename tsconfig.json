@@ -4,7 +4,7 @@
     "outDir": "dest",
     "tsBuildInfoFile": ".tsbuildinfo",
     "target": "es2020",
-    "lib": ["esnext", "dom", "es2017.object"],
+    "lib": ["esnext"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
@@ -12,14 +12,11 @@
     "allowSyntheticDefaultImports": true,
     "allowJs": true,
     "esModuleInterop": true,
-    "downlevelIteration": true,
     "inlineSourceMap": true,
     "declarationMap": true,
     "importHelpers": true,
     "resolveJsonModule": true,
-    "composite": true,
-    "skipLibCheck": true,
-    "jsx": "react-jsx"
+    "skipLibCheck": true
   },
   "include": ["scripts/**/*", "test/**/*"]
 }

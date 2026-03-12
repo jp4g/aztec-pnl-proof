@@ -2,6 +2,8 @@ import { execSync } from 'node:child_process';
 import { copyFile, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
+const FRONTEND_CIRCUITS_DIR = join(process.cwd(), 'packages', 'frontend', 'public', 'circuits');
+
 function run(cmd: string, cwd?: string) {
   console.log(`$ ${cmd}`);
   execSync(cmd, { cwd, stdio: 'inherit' });
@@ -69,10 +71,8 @@ async function computeVkeys(circuitsDir: string) {
   console.log(`Saved vkeys to ${vkeysPath}`);
 
   // Copy to frontend public dir for browser access
-  const publicDir = join(process.cwd(), 'packages', 'frontend', 'public', 'circuits');
-  await mkdir(publicDir, { recursive: true });
-  await writeFile(join(publicDir, 'vkeys.json'), JSON.stringify(vkeys));
-  console.log(`Copied vkeys to ${join(publicDir, 'vkeys.json')}`);
+  await writeFile(join(FRONTEND_CIRCUITS_DIR, 'vkeys.json'), JSON.stringify(vkeys));
+  console.log(`Copied vkeys to ${join(FRONTEND_CIRCUITS_DIR, 'vkeys.json')}`);
 
   bb.destroy();
 }
@@ -107,8 +107,7 @@ async function postinstall() {
   console.log('✓ All circuits compiled');
 
   // Copy circuit artifacts to ts/ and frontend public dir
-  const publicDir = join(process.cwd(), 'packages', 'frontend', 'public', 'circuits');
-  await mkdir(publicDir, { recursive: true });
+  await mkdir(FRONTEND_CIRCUITS_DIR, { recursive: true });
   for (const name of ['individual_swap', 'swap_summary_tree', 'capital_gains_tax']) {
     await copyFileWithLog(
       join(circuitsDir, 'target', `${name}.json`),
@@ -116,7 +115,7 @@ async function postinstall() {
     );
     await copyFileWithLog(
       join(circuitsDir, 'target', `${name}.json`),
-      join(publicDir, `${name}.json`),
+      join(FRONTEND_CIRCUITS_DIR, `${name}.json`),
     );
   }
 

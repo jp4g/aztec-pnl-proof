@@ -72,7 +72,7 @@ const SWAP_DEFS: SwapDef[] = [
     { inKey: 'wAZTEC', outKey: 'USDC',   pool: 'wAZTEC/USDC', amountIn: 0n,           amountInDesc: 'all wAZTEC'  }, // filled at runtime
 ];
 
-async function getPrivateBalance(token: typeof TokenContract.prototype, owner: AztecAddress): Promise<bigint> {
+async function getPrivateBalance(token: TokenContract, owner: AztecAddress): Promise<bigint> {
     const raw = await token.methods.balance_of_private(owner).simulate({ from: owner });
     return typeof raw === 'bigint' ? raw : BigInt(raw.toString());
 }
@@ -156,8 +156,6 @@ async function demoData() {
     console.log(`Demo user (winner): ${demoUser}\n`);
 
     // --- Register and attach to deployed contracts ---
-    const { AztecAddress: AztecAddr } = await import('@aztec/aztec.js/addresses');
-
     // Register all contract instances on the PXE (fresh wallet doesn't know about them)
     console.log('--- Registering deployed contracts on PXE ---');
     const allAddresses = [
@@ -165,27 +163,27 @@ async function demoData() {
         infra.pools['wETH/USDC'].lp, infra.pools['wZEC/USDC'].lp, infra.pools['wAZTEC/USDC'].lp,
     ];
     for (const addr of allAddresses) {
-        const instance = await node.getContract(AztecAddr.fromString(addr));
+        const instance = await node.getContract(AztecAddress.fromString(addr));
         if (instance) await wallet.registerContract(instance, TokenContractArtifact);
     }
     const ammAddresses = [
         infra.pools['wETH/USDC'].amm, infra.pools['wZEC/USDC'].amm, infra.pools['wAZTEC/USDC'].amm,
     ];
     for (const addr of ammAddresses) {
-        const instance = await node.getContract(AztecAddr.fromString(addr));
+        const instance = await node.getContract(AztecAddress.fromString(addr));
         if (instance) await wallet.registerContract(instance, AMMContractArtifact);
     }
     {
-        const instance = await node.getContract(AztecAddr.fromString(infra.priceFeed));
+        const instance = await node.getContract(AztecAddress.fromString(infra.priceFeed));
         if (instance) await wallet.registerContract(instance, PriceFeedContractArtifact);
     }
     console.log('  All contracts registered\n');
 
-    const usdc_token = await TokenContract.at(AztecAddr.fromString(infra.tokens.USDC), wallet);
-    const weth = await TokenContract.at(AztecAddr.fromString(infra.tokens.wETH), wallet);
-    const wzec = await TokenContract.at(AztecAddr.fromString(infra.tokens.wZEC), wallet);
-    const waztec = await TokenContract.at(AztecAddr.fromString(infra.tokens.wAZTEC), wallet);
-    const priceFeed = await PriceFeedContract.at(AztecAddr.fromString(infra.priceFeed), wallet);
+    const usdc_token = await TokenContract.at(AztecAddress.fromString(infra.tokens.USDC), wallet);
+    const weth = await TokenContract.at(AztecAddress.fromString(infra.tokens.wETH), wallet);
+    const wzec = await TokenContract.at(AztecAddress.fromString(infra.tokens.wZEC), wallet);
+    const waztec = await TokenContract.at(AztecAddress.fromString(infra.tokens.wAZTEC), wallet);
+    const priceFeed = await PriceFeedContract.at(AztecAddress.fromString(infra.priceFeed), wallet);
 
     const tokenMap: Record<TokenKey, typeof usdc_token> = {
         USDC: usdc_token,
@@ -194,9 +192,9 @@ async function demoData() {
         wAZTEC: waztec,
     };
 
-    const ammEthUsdc = await AMMContract.at(AztecAddr.fromString(infra.pools['wETH/USDC'].amm), wallet);
-    const ammZecUsdc = await AMMContract.at(AztecAddr.fromString(infra.pools['wZEC/USDC'].amm), wallet);
-    const ammAztecUsdc = await AMMContract.at(AztecAddr.fromString(infra.pools['wAZTEC/USDC'].amm), wallet);
+    const ammEthUsdc = await AMMContract.at(AztecAddress.fromString(infra.pools['wETH/USDC'].amm), wallet);
+    const ammZecUsdc = await AMMContract.at(AztecAddress.fromString(infra.pools['wZEC/USDC'].amm), wallet);
+    const ammAztecUsdc = await AMMContract.at(AztecAddress.fromString(infra.pools['wAZTEC/USDC'].amm), wallet);
 
     const poolMap: Record<PoolKey, typeof ammEthUsdc> = {
         'wETH/USDC': ammEthUsdc,
