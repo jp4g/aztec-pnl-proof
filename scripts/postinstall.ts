@@ -125,7 +125,11 @@ async function postinstall() {
   console.log('✓ Verification keys computed');
 }
 
-postinstall().catch((error) => {
-  console.error('Build failed:', error);
-  process.exit(1);
-});
+if (process.env.VERCEL) {
+  console.log('Skipping postinstall on Vercel (artifacts are pre-built)');
+} else {
+  postinstall().catch((error) => {
+    console.error('Build failed:', error);
+    process.exit(1);
+  });
+}
