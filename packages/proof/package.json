@@ -15,7 +15,8 @@
     "./rebalance": "./src/rebalance.ts",
     "./utils": "./src/utils.ts",
     "./constants": "./src/constants.ts",
-    "./types": "./src/types.ts"
+    "./types": "./src/types.ts",
+    "./decrypt": "./src/decrypt.ts"
   },
   "dependencies": {
     "@zkpassport/poseidon2": "^0.6.2"
