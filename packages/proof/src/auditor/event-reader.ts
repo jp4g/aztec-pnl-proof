@@ -78,9 +78,7 @@ async function processSecret(
         // Step 2: Silo each tag with the contract address (v4 uses domain-separated hash)
         const app = secretEntry.app;
         const siloedTags = await Promise.all(
-            baseTags.map(async baseTag => {
-                return await SiloedTag.compute(new Tag(baseTag), app);
-            })
+            baseTags.map(baseTag => SiloedTag.compute(new Tag(baseTag), app))
         );
 
         log(`[EventReader] Generated ${siloedTags.length} siloed tags for indices ${index}-${index + count - 1}`);

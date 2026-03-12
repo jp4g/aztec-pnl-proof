@@ -286,6 +286,13 @@ export class SwapProofTree {
         }
         if (proofs.length === 1) totalCombines = 1;
 
+        // If only 1 proof, still wrap it in the summary tree for uniform structure
+        if (proofs.length === 1) {
+            log('\n=== Wrapping single proof in summary tree ===');
+            onProgress?.('aggregate', 0, 1, { level: 0, nodeIndex: 0, nodesInLevel: 1 });
+            return await this.combineProofs(proofs[0], null, 0);
+        }
+
         while (currentLevel.length > 1) {
             const pairsInLevel = Math.ceil(currentLevel.length / 2);
             log(
@@ -312,13 +319,6 @@ export class SwapProofTree {
 
             currentLevel = nextLevel;
             level++;
-        }
-
-        // If only 1 proof, still wrap it in the summary tree for uniform structure
-        if (proofs.length === 1) {
-            log('\n=== Wrapping single proof in summary tree ===');
-            onProgress?.('aggregate', 0, 1, { level: 0, nodeIndex: 0, nodesInLevel: 1 });
-            return await this.combineProofs(proofs[0], null, 0);
         }
 
         return currentLevel[0];

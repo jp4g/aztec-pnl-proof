@@ -107,44 +107,26 @@ async function deriveAesKeys(sharedSecret: Point): Promise<{
     headerKey: Buffer;
     headerIv: Buffer;
 }> {
-    // Derive two random field elements using Poseidon2 with different separators
-    const rand1 = await poseidon2HashWithSeparator(
-        [sharedSecret.x, sharedSecret.y],
-        DomainSeparator.SYMMETRIC_KEY
-    );
-    const rand2 = await poseidon2HashWithSeparator(
-        [sharedSecret.x, sharedSecret.y],
-        DomainSeparator.SYMMETRIC_KEY_2
-    );
+    // Derive 4 random field elements using Poseidon2 with different separators.
+    // All use the same inputs — only the separator differs — so parallelize.
+    const inputs = [sharedSecret.x, sharedSecret.y];
+    const [rand1, rand2, rand3, rand4] = await Promise.all([
+        poseidon2HashWithSeparator(inputs, DomainSeparator.SYMMETRIC_KEY),
+        poseidon2HashWithSeparator(inputs, DomainSeparator.SYMMETRIC_KEY_2),
+        poseidon2HashWithSeparator(inputs, (1 << 8) + DomainSeparator.SYMMETRIC_KEY),
+        poseidon2HashWithSeparator(inputs, (1 << 8) + DomainSeparator.SYMMETRIC_KEY_2),
+    ]);
 
-    // Convert to big-endian bytes
-    const rand1Bytes = rand1.toBuffer(); // 32 bytes
-    const rand2Bytes = rand2.toBuffer(); // 32 bytes
-
-    // Extract 16 bytes from the "little end" of each (last 16 bytes) and reverse
+    // Extract 16 bytes from the "little end" of each (last 16 bytes) and reverse.
     // Noir code extracts bytes in reverse order: bytes[i] = rand_bytes[31-i]
-    const bodyKey = Buffer.from(rand1Bytes.slice(16, 32)).reverse();
-    const bodyIv = Buffer.from(rand2Bytes.slice(16, 32)).reverse();
+    const extractKey = (rand: Fr) => Buffer.from(rand.toBuffer().slice(16, 32)).reverse();
 
-    // Derive header keys the same way but with different separators
-    // In the Noir code, they shift the separator by k << 8 for multiple key pairs
-    // For the header (second pair), k=1, so add 256 to the separator
-    const rand3 = await poseidon2HashWithSeparator(
-        [sharedSecret.x, sharedSecret.y],
-        (1 << 8) + DomainSeparator.SYMMETRIC_KEY
-    );
-    const rand4 = await poseidon2HashWithSeparator(
-        [sharedSecret.x, sharedSecret.y],
-        (1 << 8) + DomainSeparator.SYMMETRIC_KEY_2
-    );
-
-    const rand3Bytes = rand3.toBuffer();
-    const rand4Bytes = rand4.toBuffer();
-
-    const headerKey = Buffer.from(rand3Bytes.slice(16, 32)).reverse();
-    const headerIv = Buffer.from(rand4Bytes.slice(16, 32)).reverse();
-
-    return { bodyKey, bodyIv, headerKey, headerIv };
+    return {
+        bodyKey: extractKey(rand1),
+        bodyIv: extractKey(rand2),
+        headerKey: extractKey(rand3),
+        headerIv: extractKey(rand4),
+    };
 }
 
 /**

@@ -130,13 +130,11 @@ export class SwapProver {
         if (!header) throw new Error(`Block header not found for block ${event.blockNumber}`);
         const publicDataTreeRoot = header.state.partial.publicDataTree.root;
 
-        // Get price witnesses for BOTH tokens
-        const sellPriceWitness = await this.getPriceWitness(
-            priceFeedAddress, priceFeedAssetsSlot, tokenIn, event.blockNumber,
-        );
-        const buyPriceWitness = await this.getPriceWitness(
-            priceFeedAddress, priceFeedAssetsSlot, tokenOut, event.blockNumber,
-        );
+        // Get price witnesses for BOTH tokens (independent RPC reads)
+        const [sellPriceWitness, buyPriceWitness] = await Promise.all([
+            this.getPriceWitness(priceFeedAddress, priceFeedAssetsSlot, tokenIn, event.blockNumber),
+            this.getPriceWitness(priceFeedAddress, priceFeedAssetsSlot, tokenOut, event.blockNumber),
+        ]);
 
         log(`  sell token price: ${sellPriceWitness.leafPreimage.leaf.value}`);
         log(`  buy token price: ${buyPriceWitness.leafPreimage.leaf.value}`);
@@ -305,8 +303,8 @@ export class SwapProver {
         }
 
         let remaining = sellAmount;
-        for (let j = 0; j < MAX_LOTS; j++) {
-            if (remaining > 0n && lotsCopy[j].amount > 0n) {
+        for (let j = 0; j < MAX_LOTS && remaining > 0n; j++) {
+            if (lotsCopy[j].amount > 0n) {
                 const consumed = remaining < lotsCopy[j].amount ? remaining : lotsCopy[j].amount;
                 lotsCopy[j].amount -= consumed;
                 remaining -= consumed;

@@ -243,9 +243,11 @@ async function demoData() {
         const r1 = BigInt(await token1.methods.balance_of_public(amm.address).simulate({ from: admin }));
         return { reserve0: r0, reserve1: r1 };
     }
-    const ethReserves = await readReserves(weth, usdc_token, ammEthUsdc);
-    const zecReserves = await readReserves(wzec, usdc_token, ammZecUsdc);
-    const aztecReserves = await readReserves(waztec, usdc_token, ammAztecUsdc);
+    const [ethReserves, zecReserves, aztecReserves] = await Promise.all([
+        readReserves(weth, usdc_token, ammEthUsdc),
+        readReserves(wzec, usdc_token, ammZecUsdc),
+        readReserves(waztec, usdc_token, ammAztecUsdc),
+    ]);
     console.log(`  wETH/USDC:   r0=${ethReserves.reserve0}, r1=${ethReserves.reserve1}`);
     console.log(`  wZEC/USDC:   r0=${zecReserves.reserve0}, r1=${zecReserves.reserve1}`);
     console.log(`  wAZTEC/USDC: r0=${aztecReserves.reserve0}, r1=${aztecReserves.reserve1}\n`);

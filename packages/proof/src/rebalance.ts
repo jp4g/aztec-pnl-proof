@@ -1,4 +1,5 @@
 import type { AztecAddress } from '@aztec/aztec.js/addresses';
+import { log } from './logger';
 
 /**
  * Minimal contract interface for rebalancing — satisfied by both typed
@@ -124,7 +125,7 @@ export async function rebalancePools(params: {
             const targetR1 = targetNorm1 / 10n ** (maxD - d1);
             const toMint = targetR1 - pool.reserve1;
             if (toMint > 0n) {
-                console.log(`  Rebalance pool(${addr0.slice(0, 10)}../${addr1.slice(0, 10)}..): mint ${toMint} of token1`);
+                log(`  Rebalance pool(${label0}../${label1}..): mint ${toMint} of token1`);
                 await pool.token1.methods
                     .mint_to_public(pool.contract.address, toMint)
                     .send(opts(minter))
@@ -137,7 +138,7 @@ export async function rebalancePools(params: {
             const targetR0 = targetNorm0 / 10n ** (maxD - d0);
             const toMint = targetR0 - pool.reserve0;
             if (toMint > 0n) {
-                console.log(`  Rebalance pool(${addr0.slice(0, 10)}../${addr1.slice(0, 10)}..): mint ${toMint} of token0`);
+                log(`  Rebalance pool(${label0}../${label1}..): mint ${toMint} of token0`);
                 await pool.token0.methods
                     .mint_to_public(pool.contract.address, toMint)
                     .send(opts(minter))

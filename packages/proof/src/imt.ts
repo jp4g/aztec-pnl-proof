@@ -32,5 +32,5 @@ export async function getZeroHashes(maxDepth: number): Promise<Fr[]> {
 
     cachedZeroHashes = await computeZeroHashes(maxDepth);
     cachedMaxDepth = maxDepth;
-    return cachedZeroHashes;
+    return cachedZeroHashes.slice(0, maxDepth + 1);
 }
