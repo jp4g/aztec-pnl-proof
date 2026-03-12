@@ -24,7 +24,8 @@
     "@aztec/protocol-contracts": "4.0.0-devnet.2-patch.3",
     "@aztec/pxe": "npm:@jp4g/aztec-pxe@4.0.0-devnet.2-patch.3-fork.0",
     "@aztec/stdlib": "4.0.0-devnet.2-patch.3",
-    "@aztec/wallets": "npm:@jp4g/aztec-wallets@4.0.0-devnet.2-patch.3-fork.0"
+    "@aztec/wallets": "npm:@jp4g/aztec-wallets@4.0.0-devnet.2-patch.3-fork.0",
+    "next": "16.1.6"
   },
   "devDependencies": {
     "@types/node": "^22.15.1",
