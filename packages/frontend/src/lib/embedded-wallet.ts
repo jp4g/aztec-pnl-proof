@@ -1,6 +1,5 @@
 import { Account } from "@aztec/aztec.js/account";
 import { AztecAddress } from "@aztec/aztec.js/addresses";
-import { getContractInstanceFromInstantiationParams } from "@aztec/aztec.js/contracts";
 import { SponsoredFeePaymentMethod } from "@aztec/aztec.js/fee";
 import { Fr } from "@aztec/aztec.js/fields";
 import { createLogger } from "@aztec/aztec.js/log";
@@ -9,7 +8,6 @@ import {
   AccountManager,
   type DeployAccountOptions,
 } from "@aztec/aztec.js/wallet";
-import { SPONSORED_FPC_SALT } from "@aztec/constants";
 import { GrumpkinScalar } from "@aztec/foundation/curves/grumpkin";
 import type { FieldsOf } from "@aztec/foundation/types";
 import { SchnorrAccountContract } from "@aztec/accounts/schnorr/lazy";
@@ -136,14 +134,19 @@ export class EmbeddedAuditableWallet extends BaseWallet {
     config.proverEnabled = true;
     const pxe = await createPXE(aztecNode, config, {});
 
-    // Register sponsored FPC on the PXE
+    // Register sponsored FPC using address from env
+    const fpcAddr = process.env.NEXT_PUBLIC_SPONSORED_FPC_ADDRESS;
+    if (!fpcAddr) {
+      throw new Error('NEXT_PUBLIC_SPONSORED_FPC_ADDRESS is required. Run `yarn deploy` or `yarn fpc:deploy` first.');
+    }
+    const fpcAddress = AztecAddress.fromString(fpcAddr);
     const { SponsoredFPCContractArtifact } = await import(
       "@aztec/noir-contracts.js/SponsoredFPC"
     );
-    const fpcInstance = await getContractInstanceFromInstantiationParams(
-      SponsoredFPCContractArtifact,
-      { salt: new Fr(SPONSORED_FPC_SALT) }
-    );
+    const fpcInstance = await aztecNode.getContract(fpcAddress);
+    if (!fpcInstance) {
+      throw new Error(`SponsoredFPC not found on-chain at ${fpcAddress}`);
+    }
     await pxe.registerContract({
       instance: fpcInstance,
       artifact: SponsoredFPCContractArtifact,
@@ -155,14 +158,11 @@ export class EmbeddedAuditableWallet extends BaseWallet {
   }
 
   private async getSponsoredPaymentMethod(): Promise<SponsoredFeePaymentMethod> {
-    const { SponsoredFPCContractArtifact } = await import(
-      "@aztec/noir-contracts.js/SponsoredFPC"
-    );
-    const instance = await getContractInstanceFromInstantiationParams(
-      SponsoredFPCContractArtifact,
-      { salt: new Fr(SPONSORED_FPC_SALT) }
-    );
-    return new SponsoredFeePaymentMethod(instance.address);
+    const fpcAddr = process.env.NEXT_PUBLIC_SPONSORED_FPC_ADDRESS;
+    if (!fpcAddr) {
+      throw new Error('NEXT_PUBLIC_SPONSORED_FPC_ADDRESS is required');
+    }
+    return new SponsoredFeePaymentMethod(AztecAddress.fromString(fpcAddr));
   }
 
   protected override async completeFeeOptions(

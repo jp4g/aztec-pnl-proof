@@ -3,23 +3,21 @@ import type { SponsoredFeePaymentMethod } from "@aztec/aztec.js/fee";
 /**
  * Build a SponsoredFeePaymentMethod for devnet transactions.
  *
- * Both PriceCard (rebalance) and TokenProvider (USDC minting) derive
- * the FPC address identically. This utility deduplicates that logic.
+ * Both PriceCard (rebalance) and TokenProvider (USDC minting) use this
+ * to get the FPC payment method from the env-configured address.
  *
  * Returns `undefined` when not on devnet (NEXT_PUBLIC_ADMIN_ACCOUNT absent).
+ * Throws if NEXT_PUBLIC_SPONSORED_FPC_ADDRESS is not set.
  */
 export async function buildSponsoredFeePaymentMethod(): Promise<SponsoredFeePaymentMethod | undefined> {
   if (!process.env.NEXT_PUBLIC_ADMIN_ACCOUNT) return undefined;
 
-  const { SponsoredFeePaymentMethod } = await import("@aztec/aztec.js/fee");
-  const { getContractInstanceFromInstantiationParams } = await import("@aztec/aztec.js/contracts");
-  const { SponsoredFPCContractArtifact } = await import("@aztec/noir-contracts.js/SponsoredFPC");
-  const { SPONSORED_FPC_SALT } = await import("@aztec/constants");
-  const { Fr } = await import("@aztec/aztec.js/fields");
+  const fpcAddress = process.env.NEXT_PUBLIC_SPONSORED_FPC_ADDRESS;
+  if (!fpcAddress) {
+    throw new Error('NEXT_PUBLIC_SPONSORED_FPC_ADDRESS is required. Run `yarn deploy` or `yarn fpc:deploy` first.');
+  }
 
-  const fpcInstance = await getContractInstanceFromInstantiationParams(
-    SponsoredFPCContractArtifact,
-    { salt: new Fr(SPONSORED_FPC_SALT) },
-  );
-  return new SponsoredFeePaymentMethod(fpcInstance.address);
+  const { SponsoredFeePaymentMethod } = await import("@aztec/aztec.js/fee");
+  const { AztecAddress } = await import("@aztec/aztec.js/addresses");
+  return new SponsoredFeePaymentMethod(AztecAddress.fromString(fpcAddress));
 }

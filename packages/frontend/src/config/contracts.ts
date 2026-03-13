@@ -33,6 +33,8 @@ export const LP_ADDRESSES: Record<string, string | undefined> = {
 
 export const PRICE_FEED_ADDRESS = process.env.NEXT_PUBLIC_PRICE_FEED;
 
+export const SPONSORED_FPC_ADDRESS = process.env.NEXT_PUBLIC_SPONSORED_FPC_ADDRESS;
+
 export const POOL_DEFS = [
   { label: "wETH/USDC", token0: "wETH", token1: "USDC", address: process.env.NEXT_PUBLIC_AMM_ETH_USDC },
   { label: "wZEC/USDC", token0: "wZEC", token1: "USDC", address: process.env.NEXT_PUBLIC_AMM_ZEC_USDC },

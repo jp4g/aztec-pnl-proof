@@ -26,11 +26,15 @@ import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { SponsoredFeePaymentMethod } from '@aztec/aztec.js/fee';
 import { Fr } from '@aztec/foundation/curves/bn254';
+import { getContractInstanceFromInstantiationParams } from '@aztec/aztec.js/contracts';
+import { SponsoredFPCContract } from '@aztec/noir-contracts.js/SponsoredFPC';
+import { SPONSORED_FPC_SALT } from '@aztec/constants';
 import { PRICE_PRECISION, USDC_DECIMALS, TOKEN_DECIMALS } from '@privpnl/proof/constants';
 import {
     type AccountInfo, type DeployedInfra,
     initializeWallet, makeSendOpts, registerSandboxAccounts,
 } from './utils';
+import { upsertEnvVar } from './fpc/utils';
 
 const {
     AZTEC_NODE_URL = 'http://localhost:8080',
@@ -115,6 +119,18 @@ async function setup() {
         wZEC: toOraclePrice(prices.wZEC),
         wAZTEC: toOraclePrice(prices.wAZTEC),
     };
+
+    // Ensure SPONSORED_FPC_ADDRESS is set (compute canonical if not already provided)
+    if (!process.env.SPONSORED_FPC_ADDRESS) {
+        const canonicalInstance = await getContractInstanceFromInstantiationParams(SponsoredFPCContract.artifact, {
+            salt: new Fr(SPONSORED_FPC_SALT),
+        });
+        process.env.SPONSORED_FPC_ADDRESS = canonicalInstance.address.toString();
+        console.log(`Computed canonical FPC address: ${canonicalInstance.address}`);
+
+        // Save to root .env so subsequent scripts (demo-data, test) can find it
+        upsertEnvVar('SPONSORED_FPC_ADDRESS', canonicalInstance.address.toString());
+    }
 
     const { node, wallet, isDevnet, fpcAddress } = await initializeWallet(AZTEC_NODE_URL);
     const sendOpts = makeSendOpts(isDevnet, fpcAddress);
@@ -338,6 +354,9 @@ async function setup() {
     }
     if (demoAccounts.length > 0) {
         deployedVars.NEXT_PUBLIC_DEMO_ACCOUNTS = JSON.stringify(demoAccounts);
+    }
+    if (process.env.SPONSORED_FPC_ADDRESS) {
+        deployedVars.NEXT_PUBLIC_SPONSORED_FPC_ADDRESS = process.env.SPONSORED_FPC_ADDRESS;
     }
     let existing = '';
     try { existing = await readFile(envPath, 'utf-8'); } catch {}

@@ -1,5 +1,5 @@
 import { AztecAddress } from '@aztec/stdlib/aztec-address';
-import { DirectionalAppTaggingSecret } from '@aztec/stdlib/logs';
+import { ExtendedDirectionalAppTaggingSecret } from '@aztec/stdlib/logs';
 
 import type {
   SerializedTaggingSecretEntry,
@@ -36,7 +36,7 @@ function serializeTaggingSecretEntry(entry: TaggingSecretEntry): SerializedTaggi
 
 function deserializeTaggingSecretEntry(entry: SerializedTaggingSecretEntry): TaggingSecretEntry {
   return {
-    secret: DirectionalAppTaggingSecret.fromString(entry.secret),
+    secret: ExtendedDirectionalAppTaggingSecret.fromString(entry.secret),
     direction: entry.direction,
     counterparty: AztecAddress.fromString(entry.counterparty),
     app: AztecAddress.fromString(entry.app),

@@ -1,6 +1,6 @@
 import { poseidon2Hash } from '@aztec/foundation/crypto/poseidon';
 import { Fr } from '@aztec/foundation/curves/bn254';
-import type { DirectionalAppTaggingSecret } from '@aztec/stdlib/logs';
+import type { ExtendedDirectionalAppTaggingSecret } from '@aztec/stdlib/logs';
 
 /**
  * Utility class for generating tags from tagging secrets.
@@ -10,7 +10,7 @@ import type { DirectionalAppTaggingSecret } from '@aztec/stdlib/logs';
  * a poseidon2 hash.
  */
 export class TagGenerator {
-  static async generateTags(secret: DirectionalAppTaggingSecret, startIndex: number, count: number): Promise<Fr[]> {
+  static async generateTags(secret: ExtendedDirectionalAppTaggingSecret, startIndex: number, count: number): Promise<Fr[]> {
     const tags: Fr[] = [];
     for (let i = 0; i < count; i++) {
       const tag = await this.generateSingleTag(secret, startIndex + i);
@@ -19,12 +19,12 @@ export class TagGenerator {
     return tags;
   }
 
-  static async generateSingleTag(secret: DirectionalAppTaggingSecret, index: number): Promise<Fr> {
-    return await poseidon2Hash([secret.value, new Fr(index)]);
+  static async generateSingleTag(secret: ExtendedDirectionalAppTaggingSecret, index: number): Promise<Fr> {
+    return await poseidon2Hash([secret.secret, new Fr(index)]);
   }
 
   static async *generateTagBatches(
-    secret: DirectionalAppTaggingSecret,
+    secret: ExtendedDirectionalAppTaggingSecret,
     startIndex: number,
     maxIndex: number,
     batchSize: number,

@@ -1,13 +1,13 @@
 import type { Fr } from '@aztec/foundation/curves/bn254';
 import type { AztecAddress } from '@aztec/stdlib/aztec-address';
-import type { DirectionalAppTaggingSecret } from '@aztec/stdlib/logs';
+import type { ExtendedDirectionalAppTaggingSecret } from '@aztec/stdlib/logs';
 
 /** Direction of note flow relative to the user. */
 export type NoteDirection = 'inbound' | 'outbound';
 
 /** A tagging secret with metadata about its direction and counterparty. */
 export interface TaggingSecretEntry {
-  secret: DirectionalAppTaggingSecret;
+  secret: ExtendedDirectionalAppTaggingSecret;
   direction: NoteDirection;
   counterparty: AztecAddress;
   app: AztecAddress;

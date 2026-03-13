@@ -12,24 +12,34 @@
     "deploy": "tsx scripts/deploy.ts",
     "demo-data": "tsx scripts/demo-data.ts",
     "setup": "tsx scripts/deploy.ts && tsx scripts/demo-data.ts",
-    "test": "node --env-file=.env --import tsx --test test/pnl.test.ts"
+    "test": "node --env-file=.env --import tsx --test test/pnl.test.ts",
+    "fpc:bootstrap": "tsx scripts/fpc/bootstrap.ts",
+    "fpc:deploy": "tsx scripts/fpc/deploy.ts",
+    "fpc:fund": "tsx scripts/fpc/fund.ts",
+    "fpc:test": "tsx scripts/fpc/test.ts",
+    "fpc:status": "tsx scripts/fpc/status.ts"
   },
   "dependencies": {
-    "@aztec/accounts": "4.0.0-devnet.2-patch.3",
-    "@aztec/aztec.js": "4.0.0-devnet.2-patch.3",
-    "@aztec/bb.js": "4.0.0-devnet.2-patch.3",
-    "@aztec/noir-contracts.js": "4.0.0-devnet.2-patch.3",
-    "@aztec/noir-noir_js": "4.0.0-devnet.2-patch.3",
-    "@aztec/noir-types": "4.0.0-devnet.2-patch.3",
-    "@aztec/protocol-contracts": "4.0.0-devnet.2-patch.3",
-    "@aztec/pxe": "npm:@jp4g/aztec-pxe@4.0.0-devnet.2-patch.3-fork.0",
-    "@aztec/stdlib": "4.0.0-devnet.2-patch.3",
-    "@aztec/wallets": "npm:@jp4g/aztec-wallets@4.0.0-devnet.2-patch.3-fork.0",
-    "next": "16.1.6"
+    "@aztec/accounts": "4.1.0-rc.2",
+    "@aztec/aztec.js": "4.1.0-rc.2",
+    "@aztec/bb.js": "4.1.0-rc.2",
+    "@aztec/noir-contracts.js": "4.1.0-rc.2",
+    "@aztec/noir-noir_js": "4.1.0-rc.2",
+    "@aztec/noir-types": "4.1.0-rc.2",
+    "@aztec/protocol-contracts": "4.1.0-rc.2",
+    "@aztec/pxe": "npm:@jp4g/aztec-pxe@4.1.0-rc.2-patch.0",
+    "@aztec/stdlib": "4.1.0-rc.2",
+    "@aztec/constants": "4.1.0-rc.2",
+    "@aztec/ethereum": "4.1.0-rc.2",
+    "@aztec/l1-artifacts": "4.1.0-rc.2",
+    "@aztec/wallets": "npm:@jp4g/aztec-wallets@4.1.0-rc.2-patch.0",
+    "next": "16.1.6",
+    "viem": "npm:@aztec/viem@2.38.2"
   },
   "devDependencies": {
     "@types/node": "^22.15.1",
     "dotenv": "^16",
+    "expect": "^30.3.0",
     "tsx": "^4",
     "typescript": "^5.4.4"
   }

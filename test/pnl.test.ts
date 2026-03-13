@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import { cpus } from "node:os";
-import { expect } from '@jest/globals';
+import { expect } from 'expect';
 import { getInitialTestAccountsData } from '@aztec/accounts/testing';
 import { AztecAddress } from '@aztec/aztec.js/addresses';
 import { createAztecNodeClient, type AztecNode } from "@aztec/aztec.js/node";
@@ -21,8 +21,6 @@ import { LotStateTree } from '@privpnl/proof/lot-state-tree';
 import { TaxProver } from '@privpnl/proof/tax-prover';
 import { rebalancePools, type PoolState } from '@privpnl/proof/rebalance';
 import { SponsoredFeePaymentMethod } from '@aztec/aztec.js/fee';
-import { getContractInstanceFromInstantiationParams } from '@aztec/aztec.js/contracts';
-import { SPONSORED_FPC_SALT } from '@aztec/constants';
 import { SponsoredFPCContract } from '@aztec/noir-contracts.js/SponsoredFPC';
 
 import individualSwapCircuit from '@privpnl/circuits/individual_swap' with { type: 'json' };
@@ -127,11 +125,16 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
 
         if (isDevnet) {
             console.log("Devnet detected — registering SponsoredFPC and deploying fresh accounts...");
-            const fpcInstance = await getContractInstanceFromInstantiationParams(SponsoredFPCContract.artifact, {
-                salt: new Fr(SPONSORED_FPC_SALT),
-            });
+            const fpcAddr = process.env.SPONSORED_FPC_ADDRESS;
+            if (!fpcAddr) {
+                throw new Error('SPONSORED_FPC_ADDRESS is required in .env for devnet tests');
+            }
+            fpcAddress = AztecAddress.fromString(fpcAddr);
+            const fpcInstance = await node.getContract(fpcAddress);
+            if (!fpcInstance) {
+                throw new Error(`SponsoredFPC not found on-chain at ${fpcAddress}`);
+            }
             await wallet.registerContract(fpcInstance, SponsoredFPCContract.artifact);
-            fpcAddress = fpcInstance.address;
             console.log(`  SponsoredFPC registered at: ${fpcAddress}`);
             const fpcPaymentMethod = new SponsoredFeePaymentMethod(fpcAddress);
 

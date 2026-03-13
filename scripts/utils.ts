@@ -3,11 +3,8 @@ import { AztecAddress } from '@aztec/aztec.js/addresses';
 import { createAztecNodeClient, type AztecNode } from '@aztec/aztec.js/node';
 import { EmbeddedWallet } from '@aztec/wallets/embedded';
 import { SponsoredFeePaymentMethod } from '@aztec/aztec.js/fee';
-import { getContractInstanceFromInstantiationParams } from '@aztec/aztec.js/contracts';
-import { SPONSORED_FPC_SALT } from '@aztec/constants';
 import { SponsoredFPCContract } from '@aztec/noir-contracts.js/SponsoredFPC';
 import { getInitialTestAccountsData } from '@aztec/accounts/testing';
-import { Fr } from '@aztec/foundation/curves/bn254';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 
@@ -61,22 +58,29 @@ export async function initializeWallet(nodeUrl = 'http://localhost:8080'): Promi
 
     let fpcAddress: AztecAddress | undefined;
     if (isDevnet) {
-        fpcAddress = await registerSponsoredFPC(wallet);
+        fpcAddress = await registerSponsoredFPC(wallet, node);
     }
 
     return { node, wallet, isDevnet, fpcAddress };
 }
 
 /**
- * Register the SponsoredFPC contract on the wallet. Returns its address.
+ * Register the SponsoredFPC contract on the wallet using the address from SPONSORED_FPC_ADDRESS env var.
+ * Throws if the env var is not set or the contract is not found on-chain.
  */
-export async function registerSponsoredFPC(wallet: EmbeddedWallet): Promise<AztecAddress> {
-    const fpcInstance = await getContractInstanceFromInstantiationParams(SponsoredFPCContract.artifact, {
-        salt: new Fr(SPONSORED_FPC_SALT),
-    });
-    await wallet.registerContract(fpcInstance, SponsoredFPCContract.artifact);
-    console.log(`  SponsoredFPC registered at: ${fpcInstance.address}`);
-    return fpcInstance.address;
+export async function registerSponsoredFPC(wallet: EmbeddedWallet, node: AztecNode): Promise<AztecAddress> {
+    const addr = process.env.SPONSORED_FPC_ADDRESS;
+    if (!addr) {
+        throw new Error('SPONSORED_FPC_ADDRESS is required in .env. Set it via `yarn fpc:deploy` or `yarn deploy`.');
+    }
+    const address = AztecAddress.fromString(addr);
+    const instance = await node.getContract(address);
+    if (!instance) {
+        throw new Error(`SponsoredFPC not found on-chain at ${address}`);
+    }
+    await wallet.registerContract(instance, SponsoredFPCContract.artifact);
+    console.log(`  SponsoredFPC registered at: ${address}`);
+    return address;
 }
 
 /**
