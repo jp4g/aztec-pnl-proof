@@ -21,7 +21,7 @@
     "@aztec/entrypoints": "4.1.0-rc.2",
     "@aztec/foundation": "4.1.0-rc.2",
     "@aztec/noir-contracts.js": "4.1.0-rc.2",
-    "@aztec/pxe": "npm:@jp4g/aztec-pxe@4.1.0-rc.2-patch.0",
+    "@aztec/pxe": "npm:@jp4g/aztec-pxe@4.1.0-rc.2-patch.1",
     "@aztec/stdlib": "4.1.0-rc.2",
     "@aztec/wallet-sdk": "4.1.0-rc.2",
     "@iconify/react": "^6.0.2",

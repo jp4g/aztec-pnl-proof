@@ -855,10 +855,10 @@
     tslib "^2.4.0"
     viem "npm:@aztec/viem@2.38.2"
 
-"@aztec/pxe@npm:@jp4g/aztec-pxe@4.1.0-rc.2-patch.0":
-  version "4.1.0-rc.2-patch.0"
-  resolved "https://registry.yarnpkg.com/@jp4g/aztec-pxe/-/aztec-pxe-4.1.0-rc.2-patch.0.tgz#6bf4cb2e1b4b9eb7de63bd0909e468d066d5667a"
-  integrity sha512-41HvAMt2dIAx9mFO9IXBhpu9kYx7suxyor1VQHygX8XKOU51vp5mc1LlrVZbnfo2XHBq756bd5A4o5uGziycFA==
+"@aztec/pxe@npm:@jp4g/aztec-pxe@4.1.0-rc.2-patch.1":
+  version "4.1.0-rc.2-patch.1"
+  resolved "https://registry.yarnpkg.com/@jp4g/aztec-pxe/-/aztec-pxe-4.1.0-rc.2-patch.1.tgz#5b3e4d67709d412398dc98b730ff045d970c93ce"
+  integrity sha512-IYnPxwq3Ky0C7853xeyaBS3lb+N9yL8v5n8/wMejjM+FR0OfveCY6KFsS8ngeTES/2dePpXDd1o60Ziz3Sn8Iw==
   dependencies:
     "@aztec/bb-prover" "4.1.0-rc.2"
     "@aztec/bb.js" "4.1.0-rc.2"
@@ -975,10 +975,10 @@
     "@aztec/pxe" "4.1.0-rc.2"
     "@aztec/stdlib" "4.1.0-rc.2"
 
-"@aztec/wallets@npm:@jp4g/aztec-wallets@4.1.0-rc.2-patch.0":
-  version "4.1.0-rc.2-patch.0"
-  resolved "https://registry.yarnpkg.com/@jp4g/aztec-wallets/-/aztec-wallets-4.1.0-rc.2-patch.0.tgz#cdbb870007532260717e1ccb93bb592f29f24ecd"
-  integrity sha512-6QYav0xDHNrgYdIBuPmb194/xpHTGjyqx+C9YcAf7nLuR4qt2ZMVzvgfjIfoTwjElTWtUyViDQAsKzT4v9zPBw==
+"@aztec/wallets@npm:@jp4g/aztec-wallets@4.1.0-rc.2-patch.1":
+  version "4.1.0-rc.2-patch.1"
+  resolved "https://registry.yarnpkg.com/@jp4g/aztec-wallets/-/aztec-wallets-4.1.0-rc.2-patch.1.tgz#0c2f72d3c5eb4fe63b04037b26ab768339c99128"
+  integrity sha512-5D7eurvJGFM9chJPMNjjlYKB8qEy16xaZ9GbSmSRyVbRmjq91W3QtEHlkvAyjQW0NcgdTUhujkfI9fLcj+031g==
   dependencies:
     "@aztec/accounts" "4.1.0-rc.2"
     "@aztec/aztec.js" "4.1.0-rc.2"
