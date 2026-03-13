@@ -47,9 +47,9 @@ export function useTokenBalances() {
             wallet
           );
           const owner = AztecAddress.fromString(address);
-          const result = await token.methods.balance_of_private(owner).simulate({ from: owner });
+          const { result: simResult } = await token.methods.balance_of_private(owner).simulate({ from: owner });
           const raw =
-            typeof result === "bigint" ? result : BigInt(result.toString());
+            typeof simResult === "bigint" ? simResult : BigInt(simResult.toString());
           const decimals = TOKEN_DECIMALS[symbol] ?? DEFAULT_TOKEN_DECIMALS;
           const formatted = formatTokenBalance(raw, decimals);
           setBalances((prev) => ({ ...prev, [symbol]: formatted }));

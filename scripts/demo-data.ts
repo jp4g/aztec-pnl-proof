@@ -17,7 +17,7 @@
 import { getInitialTestAccountsData } from '@aztec/accounts/testing';
 import { AztecAddress } from '@aztec/aztec.js/addresses';
 import { Fr } from '@aztec/aztec.js/fields';
-import { PriceFeedContract, PriceFeedContractArtifact } from '@aztec/noir-contracts.js/PriceFeed';
+import { PriceFeedContract, PriceFeedContractArtifact } from '@privpnl/contracts/PriceFeed';
 import { TokenContract, TokenContractArtifact } from '@privpnl/contracts/Token';
 import { AMMContract, AMMContractArtifact } from '@privpnl/contracts/AMM';
 import { rebalancePools, type PoolState } from '@privpnl/proof/rebalance';
@@ -73,7 +73,7 @@ const SWAP_DEFS: SwapDef[] = [
 ];
 
 async function getPrivateBalance(token: TokenContract, owner: AztecAddress): Promise<bigint> {
-    const raw = await token.methods.balance_of_private(owner).simulate({ from: owner });
+    const { result: raw } = await token.methods.balance_of_private(owner).simulate({ from: owner });
     return typeof raw === 'bigint' ? raw : BigInt(raw.toString());
 }
 
@@ -240,8 +240,10 @@ async function demoData() {
     // previous (possibly partial) run may have altered pool balances.
     console.log('--- Reading on-chain pool reserves ---');
     async function readReserves(token0: typeof weth, token1: typeof usdc_token, amm: typeof ammEthUsdc) {
-        const r0 = BigInt(await token0.methods.balance_of_public(amm.address).simulate({ from: admin }));
-        const r1 = BigInt(await token1.methods.balance_of_public(amm.address).simulate({ from: admin }));
+        const { result: r0raw } = await token0.methods.balance_of_public(amm.address).simulate({ from: admin });
+        const r0 = typeof r0raw === 'bigint' ? r0raw : BigInt(r0raw.toString());
+        const { result: r1raw } = await token1.methods.balance_of_public(amm.address).simulate({ from: admin });
+        const r1 = typeof r1raw === 'bigint' ? r1raw : BigInt(r1raw.toString());
         return { reserve0: r0, reserve1: r1 };
     }
     const [ethReserves, zecReserves, aztecReserves] = await Promise.all([
@@ -356,7 +358,7 @@ async function demoData() {
         });
 
         // Get amount out
-        const amountOut = await pool.methods
+        const { result: amountOut } = await pool.methods
             .get_amount_out_for_exact_in(reserveIn, reserveOut, amountIn)
             .simulate({ from: demoUser });
 
@@ -548,7 +550,7 @@ async function demoData() {
             action: tokenIn.methods.transfer_to_public(loserUser, pool.address, amountIn, nonce),
         });
 
-        const amountOut = await pool.methods
+        const { result: amountOut } = await pool.methods
             .get_amount_out_for_exact_in(reserveIn, reserveOut, amountIn)
             .simulate({ from: loserUser });
 

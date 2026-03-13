@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./AMM": "./src/AMM.ts",
-    "./Token": "./src/Token.ts"
+    "./Token": "./src/Token.ts",
+    "./PriceFeed": "./src/PriceFeed.ts"
   }
 }

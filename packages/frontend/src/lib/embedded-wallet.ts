@@ -59,7 +59,7 @@ const priceFeedEntry: ContractRegistryEntry = {
   label: "PriceFeed",
   address: PRICE_FEED_ADDRESS,
   loadArtifact: () =>
-    import("@aztec/noir-contracts.js/PriceFeed").then((m) => m.PriceFeedContractArtifact),
+    import("@privpnl/contracts/PriceFeed").then((m) => m.PriceFeedContractArtifact),
 };
 
 const ammEntries: ContractRegistryEntry[] = POOL_KEYS.map((key) => ({
@@ -139,14 +139,17 @@ export class EmbeddedAuditableWallet extends BaseWallet {
     if (!fpcAddr) {
       throw new Error('NEXT_PUBLIC_SPONSORED_FPC_ADDRESS is required. Run `yarn deploy` or `yarn fpc:deploy` first.');
     }
-    const fpcAddress = AztecAddress.fromString(fpcAddr);
     const { SponsoredFPCContractArtifact } = await import(
       "@aztec/noir-contracts.js/SponsoredFPC"
     );
-    const fpcInstance = await aztecNode.getContract(fpcAddress);
-    if (!fpcInstance) {
-      throw new Error(`SponsoredFPC not found on-chain at ${fpcAddress}`);
-    }
+    const { getContractInstanceFromInstantiationParams } = await import(
+      "@aztec/aztec.js/contracts"
+    );
+    const { SPONSORED_FPC_SALT } = await import("@aztec/constants");
+    const fpcInstance = await getContractInstanceFromInstantiationParams(
+      SponsoredFPCContractArtifact,
+      { salt: new Fr(SPONSORED_FPC_SALT) }
+    );
     await pxe.registerContract({
       instance: fpcInstance,
       artifact: SponsoredFPCContractArtifact,

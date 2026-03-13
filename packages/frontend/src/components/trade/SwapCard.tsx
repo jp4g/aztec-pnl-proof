@@ -196,13 +196,13 @@ export default function SwapCard() {
       const pool = await Contract.at(poolAddr, AMMContractArtifact, wallet);
 
       // Fetch pool reserves
-      const [reserveIn, reserveOut] = await Promise.all([
+      const [{ result: reserveIn }, { result: reserveOut }] = await Promise.all([
         tokenSell.methods.balance_of_public(poolAddr).simulate({ from: owner }),
         tokenBuy.methods.balance_of_public(poolAddr).simulate({ from: owner }),
       ]);
 
       // Compute real output from AMM
-      const amountOut = await pool.methods
+      const { result: amountOut } = await pool.methods
         .get_amount_out_for_exact_in(reserveIn, reserveOut, amountIn)
         .simulate({ from: owner });
 

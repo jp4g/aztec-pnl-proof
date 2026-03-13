@@ -71,7 +71,7 @@ export function useQuoteSwap({
         const tokenBuy = await Contract.at(buyAddr, TokenContractArtifact, wallet);
         const pool = await Contract.at(poolAddr, AMMContractArtifact, wallet);
 
-        const [reserveIn, reserveOut] = await Promise.all([
+        const [{ result: reserveIn }, { result: reserveOut }] = await Promise.all([
           tokenSell.methods.balance_of_public(poolAddr).simulate({ from: owner }),
           tokenBuy.methods.balance_of_public(poolAddr).simulate({ from: owner }),
         ]);
@@ -81,7 +81,7 @@ export function useQuoteSwap({
 
         if (activeInput === "sell") {
           const amountIn = toTokenAmount(sellAmount, sellDecimals);
-          const amountOut = await pool.methods
+          const { result: amountOut } = await pool.methods
             .get_amount_out_for_exact_in(reserveIn, reserveOut, amountIn)
             .simulate({ from: owner });
 
@@ -92,7 +92,7 @@ export function useQuoteSwap({
           }
         } else {
           const amountOut = toTokenAmount(buyAmount, buyDecimals);
-          const amountIn = await pool.methods
+          const { result: amountIn } = await pool.methods
             .get_amount_in_for_exact_out(reserveIn, reserveOut, amountOut)
             .simulate({ from: owner });
 

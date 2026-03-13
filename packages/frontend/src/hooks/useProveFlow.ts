@@ -227,7 +227,7 @@ export function useProveFlow() {
       const { LotStateTree } = await import("@privpnl/proof/lot-state-tree");
       const { Fr } = await import("@aztec/aztec.js/fields");
       const { PriceFeedContract } = await import(
-        "@aztec/noir-contracts.js/PriceFeed"
+        "@privpnl/contracts/PriceFeed"
       );
 
       const archivalNodeUrl = process.env.NEXT_PUBLIC_AZTEC_ARCHIVAL_NODE_URL;

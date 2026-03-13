@@ -19,7 +19,7 @@
  */
 
 import { AztecAddress } from '@aztec/aztec.js/addresses';
-import { PriceFeedContract } from '@aztec/noir-contracts.js/PriceFeed';
+import { PriceFeedContract } from '@privpnl/contracts/PriceFeed';
 import { TokenContract } from '@privpnl/contracts/Token';
 import { AMMContract } from '@privpnl/contracts/AMM';
 import { writeFile, readFile } from 'fs/promises';
@@ -150,16 +150,13 @@ async function setup() {
             const manager = await wallet.createSchnorrAccount(secret, Fr.ZERO, signingKey);
             const deployMethod = await manager.getDeployMethod();
             console.log(`  Deploying account ${i} at ${manager.address}...`);
-            const deployReceipt = await deployMethod.send({
+            await deployMethod.send({
                 from: AztecAddress.ZERO,
                 fee: { paymentMethod: fpcPaymentMethod },
                 skipClassPublication: i !== 0,
-                wait: { returnReceipt: true, timeout: 600 },
+                wait: { timeout: 600 },
             });
-            console.log(`  Account ${i} status: ${deployReceipt.status}, result: ${deployReceipt.executionResult}, tx: ${deployReceipt.txHash}`);
-            if (deployReceipt.executionResult !== 'success') {
-                throw new Error(`Account ${i} deploy failed: ${deployReceipt.executionResult} (revert: ${deployReceipt.revertReason})`);
-            }
+            console.log(`  Account ${i} deployed at ${manager.address}`);
             addresses.push(manager.address);
 
             const accountInfo: AccountInfo = {
@@ -203,28 +200,28 @@ async function setup() {
     console.log('--- Deploying tokens ---');
 
     console.log('Deploying USDC...');
-    const usdc = await TokenContract.deploy(wallet, admin, 'USD Coin', 'USDC', 6)
+    const { contract: usdc } = await TokenContract.deploy(wallet, admin, 'USD Coin', 'USDC', 6)
         .send(sendOpts(admin));
     console.log(`  USDC: ${usdc.address}`);
 
     console.log('Deploying wETH...');
-    const weth = await TokenContract.deploy(wallet, admin, 'Wrapped Ether', 'wETH', 18)
+    const { contract: weth } = await TokenContract.deploy(wallet, admin, 'Wrapped Ether', 'wETH', 18)
         .send(sendOpts(admin));
     console.log(`  wETH: ${weth.address}`);
 
     console.log('Deploying wZEC...');
-    const wzec = await TokenContract.deploy(wallet, admin, 'Wrapped Zcash', 'wZEC', 18)
+    const { contract: wzec } = await TokenContract.deploy(wallet, admin, 'Wrapped Zcash', 'wZEC', 18)
         .send(sendOpts(admin));
     console.log(`  wZEC: ${wzec.address}`);
 
     console.log('Deploying wAZTEC...');
-    const waztec = await TokenContract.deploy(wallet, admin, 'Wrapped Aztec', 'wAZTEC', 18)
+    const { contract: waztec } = await TokenContract.deploy(wallet, admin, 'Wrapped Aztec', 'wAZTEC', 18)
         .send(sendOpts(admin));
     console.log(`  wAZTEC: ${waztec.address}\n`);
 
     // --- Deploy PriceFeed oracle ---
     console.log('--- Deploying PriceFeed oracle ---');
-    const priceFeed = await PriceFeedContract.deploy(wallet)
+    const { contract: priceFeed } = await PriceFeedContract.deploy(wallet)
         .send(sendOpts(admin));
     console.log(`  PriceFeed: ${priceFeed.address}\n`);
 
@@ -253,10 +250,10 @@ async function setup() {
 
     // wETH/USDC pool
     console.log('Deploying wETH/USDC LP token...');
-    const lpEthUsdc = await TokenContract.deploy(wallet, admin, 'LP wETH-USDC', 'LP-EU', 18)
+    const { contract: lpEthUsdc } = await TokenContract.deploy(wallet, admin, 'LP wETH-USDC', 'LP-EU', 18)
         .send(sendOpts(admin));
     console.log('Deploying wETH/USDC AMM...');
-    const ammEthUsdc = await AMMContract.deploy(wallet, weth.address, usdc.address, lpEthUsdc.address)
+    const { contract: ammEthUsdc } = await AMMContract.deploy(wallet, weth.address, usdc.address, lpEthUsdc.address)
         .send(sendOpts(admin));
     await lpEthUsdc.methods.set_minter(ammEthUsdc.address, true)
         .send(sendOpts(admin));
@@ -264,10 +261,10 @@ async function setup() {
 
     // wZEC/USDC pool
     console.log('Deploying wZEC/USDC LP token...');
-    const lpZecUsdc = await TokenContract.deploy(wallet, admin, 'LP wZEC-USDC', 'LP-ZU', 18)
+    const { contract: lpZecUsdc } = await TokenContract.deploy(wallet, admin, 'LP wZEC-USDC', 'LP-ZU', 18)
         .send(sendOpts(admin));
     console.log('Deploying wZEC/USDC AMM...');
-    const ammZecUsdc = await AMMContract.deploy(wallet, wzec.address, usdc.address, lpZecUsdc.address)
+    const { contract: ammZecUsdc } = await AMMContract.deploy(wallet, wzec.address, usdc.address, lpZecUsdc.address)
         .send(sendOpts(admin));
     await lpZecUsdc.methods.set_minter(ammZecUsdc.address, true)
         .send(sendOpts(admin));
@@ -275,10 +272,10 @@ async function setup() {
 
     // wAZTEC/USDC pool
     console.log('Deploying wAZTEC/USDC LP token...');
-    const lpAztecUsdc = await TokenContract.deploy(wallet, admin, 'LP wAZTEC-USDC', 'LP-AU', 18)
+    const { contract: lpAztecUsdc } = await TokenContract.deploy(wallet, admin, 'LP wAZTEC-USDC', 'LP-AU', 18)
         .send(sendOpts(admin));
     console.log('Deploying wAZTEC/USDC AMM...');
-    const ammAztecUsdc = await AMMContract.deploy(wallet, waztec.address, usdc.address, lpAztecUsdc.address)
+    const { contract: ammAztecUsdc } = await AMMContract.deploy(wallet, waztec.address, usdc.address, lpAztecUsdc.address)
         .send(sendOpts(admin));
     await lpAztecUsdc.methods.set_minter(ammAztecUsdc.address, true)
         .send(sendOpts(admin));

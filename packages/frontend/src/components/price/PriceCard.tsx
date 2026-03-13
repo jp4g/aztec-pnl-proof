@@ -56,7 +56,7 @@ export default function PriceCard() {
     try {
       const { AztecAddress } = await import("@aztec/aztec.js/addresses");
       const { Contract } = await import("@aztec/aztec.js/contracts");
-      const { PriceFeedContractArtifact } = await import("@aztec/noir-contracts.js/PriceFeed");
+      const { PriceFeedContractArtifact } = await import("@privpnl/contracts/PriceFeed");
 
       const pfAddr = process.env.NEXT_PUBLIC_PRICE_FEED;
       if (!pfAddr) throw new Error("NEXT_PUBLIC_PRICE_FEED not set");
@@ -75,14 +75,14 @@ export default function PriceCard() {
 
         try {
           const tokenAddr = AztecAddress.fromString(tokenAddrStr);
-          const result = await priceFeed.methods
+          const { result: asset } = await priceFeed.methods
             .get_price(tokenAddr.toField())
             .simulate({ from: owner });
 
-          // result is Asset { price: u128 } which serializes as 1 Field
-          const raw = typeof result === "object" && result !== null
-            ? (typeof result.price !== "undefined" ? BigInt(result.price.toString()) : BigInt(result.toString()))
-            : BigInt(result.toString());
+          // asset is Asset { price: u128 }
+          const raw = typeof asset === "object" && asset !== null
+            ? (typeof asset.price !== "undefined" ? BigInt(asset.price.toString()) : BigInt(asset.toString()))
+            : BigInt(asset.toString());
           const usdPrice = Number(raw) / PRICE_PRECISION;
           const priceStr = usdPrice.toString();
 
@@ -195,7 +195,7 @@ export default function PriceCard() {
 
       const { AztecAddress } = await import("@aztec/aztec.js/addresses");
       const { Contract } = await import("@aztec/aztec.js/contracts");
-      const { PriceFeedContractArtifact } = await import("@aztec/noir-contracts.js/PriceFeed");
+      const { PriceFeedContractArtifact } = await import("@privpnl/contracts/PriceFeed");
       const { TokenContractArtifact } = await import("@aztec/noir-contracts.js/Token");
 
       const pfAddr = process.env.NEXT_PUBLIC_PRICE_FEED;
@@ -249,7 +249,7 @@ export default function PriceCard() {
         );
 
         const owner = AztecAddress.fromString(address);
-        const [reserve0Raw, reserve1Raw] = await Promise.all([
+        const [{ result: reserve0Raw }, { result: reserve1Raw }] = await Promise.all([
           token0Contract.methods.balance_of_public(poolAddr).simulate({ from: owner }),
           token1Contract.methods.balance_of_public(poolAddr).simulate({ from: owner }),
         ]);

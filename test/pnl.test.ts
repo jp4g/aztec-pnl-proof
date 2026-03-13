@@ -5,7 +5,7 @@ import { getInitialTestAccountsData } from '@aztec/accounts/testing';
 import { AztecAddress } from '@aztec/aztec.js/addresses';
 import { createAztecNodeClient, type AztecNode } from "@aztec/aztec.js/node";
 import { TokenContract } from '@aztec/noir-contracts.js/Token';
-import { PriceFeedContract } from '@aztec/noir-contracts.js/PriceFeed';
+import { PriceFeedContract } from '@privpnl/contracts/PriceFeed';
 import { AMMContract } from '@privpnl/contracts';
 import { precision } from "@privpnl/proof/utils";
 import { MESSAGE_CIPHERTEXT_LEN, TAG_SIZE } from '@privpnl/proof/constants';
@@ -182,14 +182,14 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
 
         // Deploy PriceFeed
         console.log("Deploying PriceFeed...");
-        priceFeed = await PriceFeedContract.deploy(wallet).send(sendOpts(addresses[0]));
+        ({ contract: priceFeed } = await PriceFeedContract.deploy(wallet).send(sendOpts(addresses[0])));
         console.log(`  PriceFeed: ${priceFeed.address}`);
 
         // Deploy 3 tokens
         console.log("Deploying tokens...");
-        tokenA = await TokenContract.deploy(wallet, addresses[0], "Token A", "TKA", 18).send(sendOpts(addresses[0]));
-        tokenB = await TokenContract.deploy(wallet, addresses[0], "Token B", "TKB", 18).send(sendOpts(addresses[0]));
-        tokenC = await TokenContract.deploy(wallet, addresses[0], "Token C", "TKC", 18).send(sendOpts(addresses[0]));
+        ({ contract: tokenA } = await TokenContract.deploy(wallet, addresses[0], "Token A", "TKA", 18).send(sendOpts(addresses[0])));
+        ({ contract: tokenB } = await TokenContract.deploy(wallet, addresses[0], "Token B", "TKB", 18).send(sendOpts(addresses[0])));
+        ({ contract: tokenC } = await TokenContract.deploy(wallet, addresses[0], "Token C", "TKC", 18).send(sendOpts(addresses[0])));
         console.log(`  tokenA: ${tokenA.address}`);
         console.log(`  tokenB: ${tokenB.address}`);
         console.log(`  tokenC: ${tokenC.address}`);
@@ -203,15 +203,15 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
 
         // Deploy 3 LP tokens
         console.log("Deploying LP tokens...");
-        lpAB = await TokenContract.deploy(wallet, addresses[0], "LP AB", "LPAB", 18).send(sendOpts(addresses[0]));
-        lpAC = await TokenContract.deploy(wallet, addresses[0], "LP AC", "LPAC", 18).send(sendOpts(addresses[0]));
-        lpBC = await TokenContract.deploy(wallet, addresses[0], "LP BC", "LPBC", 18).send(sendOpts(addresses[0]));
+        ({ contract: lpAB } = await TokenContract.deploy(wallet, addresses[0], "LP AB", "LPAB", 18).send(sendOpts(addresses[0])));
+        ({ contract: lpAC } = await TokenContract.deploy(wallet, addresses[0], "LP AC", "LPAC", 18).send(sendOpts(addresses[0])));
+        ({ contract: lpBC } = await TokenContract.deploy(wallet, addresses[0], "LP BC", "LPBC", 18).send(sendOpts(addresses[0])));
 
         // Deploy 3 AMM pools
         console.log("Deploying AMM pools...");
-        poolAB = await AMMContract.deploy(wallet, tokenA.address, tokenB.address, lpAB.address).send(sendOpts(addresses[0]));
-        poolAC = await AMMContract.deploy(wallet, tokenA.address, tokenC.address, lpAC.address).send(sendOpts(addresses[0]));
-        poolBC = await AMMContract.deploy(wallet, tokenB.address, tokenC.address, lpBC.address).send(sendOpts(addresses[0]));
+        ({ contract: poolAB } = await AMMContract.deploy(wallet, tokenA.address, tokenB.address, lpAB.address).send(sendOpts(addresses[0])));
+        ({ contract: poolAC } = await AMMContract.deploy(wallet, tokenA.address, tokenC.address, lpAC.address).send(sendOpts(addresses[0])));
+        ({ contract: poolBC } = await AMMContract.deploy(wallet, tokenB.address, tokenC.address, lpBC.address).send(sendOpts(addresses[0])));
         console.log(`  poolAB: ${poolAB.address}`);
         console.log(`  poolAC: ${poolAC.address}`);
         console.log(`  poolBC: ${poolBC.address}`);
@@ -292,7 +292,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
                 action: tokenIn.methods.transfer_to_public(swapper, pool.address, amountIn, nonce),
             });
 
-            const amountOut = await pool.methods
+            const { result: amountOut } = await pool.methods
                 .get_amount_out_for_exact_in(reserveIn, reserveOut, amountIn)
                 .simulate({ from: swapper });
             console.log(`  ${dir.inKey} -> ${dir.outKey} on pool${dir.pool}: in=${amountIn}, out=${amountOut}`);

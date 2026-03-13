@@ -101,6 +101,26 @@ async function postinstall() {
     './AMM.json',
   );
 
+  // --- Compile PriceFeed contract + codegen ---
+  console.log('Compiling PriceFeed contract...');
+  run('aztec compile', join(contractsDir, 'price_feed_contract'));
+  console.log('✓ PriceFeed contract compiled');
+
+  console.log('Generating PriceFeed TS artifact...');
+  run(`aztec codegen ${join(contractsDir, 'price_feed_contract', 'target')} -o ${join(contractsDir, 'src')}/`);
+  console.log('✓ PriceFeed artifact generated');
+
+  // Copy contract artifact + patch import
+  await copyFileWithLog(
+    join(contractsDir, 'price_feed_contract', 'target', 'price_feed_contract-PriceFeed.json'),
+    join(contractsDir, 'src', 'PriceFeed.json'),
+  );
+  await replaceInFile(
+    join(contractsDir, 'src', 'PriceFeed.ts'),
+    '../price_feed_contract/target/price_feed_contract-PriceFeed.json',
+    './PriceFeed.json',
+  );
+
   // --- Compile all Noir circuits (workspace) ---
   console.log('Compiling Noir circuits...');
   run('nargo compile', circuitsDir);
