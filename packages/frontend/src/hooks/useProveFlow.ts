@@ -174,6 +174,11 @@ export function useProveFlow() {
           ivskM,
         );
         if (plaintext) {
+          console.log(`[prove] Decrypted event: ${plaintext.length} fields`, plaintext.map((f, i) => `[${i}]=${f.toString()}`));
+          if (plaintext.length < 6) {
+            console.warn(`[prove] Expected 6 fields, got ${plaintext.length} — skipping event`);
+            continue;
+          }
           decodedSwaps.push({
             tokenIn: plaintext[2].toString(),
             tokenOut: plaintext[3].toString(),
