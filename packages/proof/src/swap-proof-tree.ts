@@ -5,7 +5,6 @@ import type { CompiledCircuit } from '@aztec/noir-types';
 import { getZeroHashes } from './imt';
 import type { SwapProver, SwapProofResult, SwapData } from './swap-prover';
 import { LotStateTree } from './lot-state-tree';
-import { writeFileSync } from 'fs';
 import { parseSignedHex, proofBytesToFields } from './utils';
 import { log } from './logger';
 
@@ -144,8 +143,11 @@ export class SwapProofTree {
 
     private saveDebug(): void {
         if (!this.debugData || !this.config.debugOutputPath) return;
-        writeFileSync(this.config.debugOutputPath, JSON.stringify(this.debugData, null, 2));
-        log(`[debug] Saved proof tree data to ${this.config.debugOutputPath}`);
+        if (typeof globalThis.process !== 'undefined') {
+            const { writeFileSync } = require('fs') as typeof import('fs');
+            writeFileSync(this.config.debugOutputPath, JSON.stringify(this.debugData, null, 2));
+            log(`[debug] Saved proof tree data to ${this.config.debugOutputPath}`);
+        }
     }
 
     /**

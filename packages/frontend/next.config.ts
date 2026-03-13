@@ -17,7 +17,7 @@ const nextConfig: NextConfig = {
       },
     ];
   },
-  turbopack: {},
+  // turbopack: {},
   transpilePackages: ['@privpnl/proof', '@privpnl/contracts', '@privpnl/circuits'],
   webpack: (config, { isServer, webpack }) => {
     config.resolve = config.resolve ?? {};

@@ -95,7 +95,9 @@ export async function retrieveEncryptedEvents(
   const events: BrowserRetrievedEvent[] = [];
 
   for (const secretEntry of inboundSecrets) {
-    const secretValue = BigInt(secretEntry.secret);
+    // secret may be "0xSECRET:0xAPP" (ExtendedDirectionalAppTaggingSecret) or a plain hex
+    const secretStr = secretEntry.secret.includes(':') ? secretEntry.secret.split(':')[0] : secretEntry.secret;
+    const secretValue = BigInt(secretStr);
     const app = secretEntry.app;
 
     for (let index = startIndex; index < startIndex + maxIndices; index += batchSize) {
