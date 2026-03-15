@@ -91,7 +91,18 @@ export default function PriceCard() {
           setRows((prev) =>
             prev.map((r) =>
               r.symbol === symbol
-                ? { ...r, currentPrice: priceStr, newPrice: priceStr, loading: false }
+                ? {
+                    ...r,
+                    currentPrice: priceStr,
+                    // Preserve newPrice if the user or Sync Live already set a
+                    // different value; only auto-fill when it's empty or still
+                    // matches the old currentPrice (i.e. untouched).
+                    newPrice:
+                      r.newPrice === "" || r.newPrice === r.currentPrice
+                        ? priceStr
+                        : r.newPrice,
+                    loading: false,
+                  }
                 : r
             )
           );
