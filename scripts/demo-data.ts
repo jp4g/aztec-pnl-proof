@@ -285,6 +285,7 @@ async function demoData() {
             const mult = PRICE_MULTIPLIERS[resumeSwap];
             console.log(`  [resume] Applying price state for winner swap ${resumeSwap + 1} (ETH:${mult.wETH}x, ZEC:${mult.wZEC}x, AZTEC:${mult.wAZTEC}x)`);
             await rebalancePools({
+                wallet,
                 priceFeed,
                 minter: admin,
                 pools: Object.values(poolStates),
@@ -312,6 +313,7 @@ async function demoData() {
             if (changed) {
                 console.log(`\n  Updating oracle prices & rebalancing (ETH:${mult.wETH}x, ZEC:${mult.wZEC}x, AZTEC:${mult.wAZTEC}x)`);
                 await rebalancePools({
+                    wallet,
                     priceFeed,
                     minter: admin,
                     pools: Object.values(poolStates),
@@ -484,6 +486,7 @@ async function demoData() {
         const mult = LOSER_PRICE_MULTIPLIERS[resumeSwap];
         console.log(`  [resume] Applying price state for loser swap ${resumeSwap + 1} (ETH:${mult.wETH}x, ZEC:${mult.wZEC}x, AZTEC:${mult.wAZTEC}x)`);
         await rebalancePools({
+            wallet,
             priceFeed,
             minter: admin,
             pools: Object.values(poolStates),
@@ -509,6 +512,7 @@ async function demoData() {
             if (changed) {
                 console.log(`\n  Updating oracle prices & rebalancing (ETH:${mult.wETH}x, ZEC:${mult.wZEC}x, AZTEC:${mult.wAZTEC}x)`);
                 await rebalancePools({
+                    wallet,
                     priceFeed,
                     minter: admin,
                     pools: Object.values(poolStates),
@@ -586,6 +590,7 @@ async function demoData() {
     // --- Reset oracle prices to base (1.0x) values and rebalance ---
     console.log('\n--- Resetting oracle prices to base values & rebalancing ---');
     await rebalancePools({
+        wallet,
         priceFeed,
         minter: admin,
         pools: Object.values(poolStates),

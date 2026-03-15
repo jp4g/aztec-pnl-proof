@@ -1,5 +1,6 @@
 "use client";
 
+import { Icon } from "@iconify/react";
 import PriceCard from "@/components/price/PriceCard";
 import RequireWallet from "@/components/layout/RequireWallet";
 
@@ -11,6 +12,22 @@ export default function PricePage() {
           Adjust oracle prices to simulate market movements and see how they
           affect your PnL statement in this demo.
         </p>
+
+        <div className="w-full max-w-md mb-4 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 flex gap-3">
+          <Icon
+            icon="lucide:triangle-alert"
+            width={16}
+            className="text-amber-500 flex-shrink-0 mt-0.5"
+          />
+          <p className="text-xs text-amber-700 leading-relaxed">
+            Oracle prices may be out of sync with real market prices due to
+            previous demo activity. Use the{" "}
+            <span className="font-semibold">Sync Live</span> button to reset
+            all token prices to current CoinGecko values and rebalance the
+            pools.
+          </p>
+        </div>
+
         <PriceCard />
       </main>
     </RequireWallet>

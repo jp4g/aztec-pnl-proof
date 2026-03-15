@@ -17,6 +17,7 @@ import PriceRowList, {
 } from "./PriceRowList";
 import AddAssetSearch from "./AddAssetSearch";
 import ChangesPreview from "./ChangesPreview";
+import type { LivePrices } from "@/app/api/prices/route";
 
 const STORAGE_KEY = "privpnl-price-assets";
 
@@ -40,6 +41,7 @@ export default function PriceCard() {
     return [];
   });
   const [executing, setExecuting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [progress, setProgress] = useState({ step: 0, total: 0, label: "" });
 
   const fetchedRef = useRef(false);
@@ -272,6 +274,7 @@ export default function PriceCard() {
         : (from: import("@aztec/aztec.js/addresses").AztecAddress) => ({ from });
 
       await rebalancePools({
+        wallet,
         priceFeed: priceFeed as unknown as Parameters<typeof rebalancePools>[0]["priceFeed"],
         minter: adminRef.current!,
         pools: poolStates,
@@ -308,6 +311,64 @@ export default function PriceCard() {
     wallet.enqueue(() => fetchPrices());
   }, [wallet, connected, fetchPrices]);
 
+  const handleSyncLive = useCallback(async () => {
+    if (syncing || executing) return;
+    setSyncing(true);
+    try {
+      const res = await fetch("/api/prices");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `Failed to fetch live prices (${res.status})`);
+      }
+      const livePrices: LivePrices = await res.json();
+
+      setRows((prev) => {
+        // Build set of symbols already in rows
+        const existing = new Set(prev.map((r) => r.symbol));
+
+        // Update existing rows with live prices
+        const updated = prev.map((r) => {
+          const livePrice = livePrices[r.symbol as keyof LivePrices];
+          if (livePrice != null && r.symbol !== "USDC") {
+            return { ...r, newPrice: livePrice.toString() };
+          }
+          return r;
+        });
+
+        // Add missing non-USDC tokens that have live prices
+        const toAdd: TokenPriceRow[] = [];
+        for (const symbol of Object.keys(livePrices) as (keyof LivePrices)[]) {
+          if (symbol === "USDC" || existing.has(symbol)) continue;
+          if (!AVAILABLE_TOKENS.some((t) => t.symbol === symbol)) continue;
+          toAdd.push({
+            symbol,
+            currentPrice: "",
+            newPrice: livePrices[symbol].toString(),
+            loading: false,
+          });
+        }
+
+        const next = [...updated, ...toAdd];
+        persistSymbols(next);
+        return next;
+      });
+
+      // Fetch on-chain current prices for any newly added tokens
+      if (wallet && connected) {
+        fetchedRef.current = false;
+        wallet.enqueue(() => fetchPrices());
+      }
+
+      showToast("Live prices loaded from CoinGecko", "success");
+    } catch (err) {
+      console.error("Sync live prices failed:", err);
+      const msg = err instanceof Error ? err.message : "Failed to sync live prices";
+      showToast(msg, "error");
+    } finally {
+      setSyncing(false);
+    }
+  }, [syncing, executing, wallet, connected, fetchPrices, persistSymbols, showToast]);
+
   // Button state
   let buttonLabel = "Apply & Rebalance";
   let buttonDisabled = false;
@@ -338,15 +399,31 @@ export default function PriceCard() {
       {/* Header */}
       <div className="flex items-center justify-between mb-5">
         <h2 className="text-lg font-semibold text-neutral-900">Set Oracle Prices</h2>
-        {connected && (
-          <button
-            onClick={handleRefresh}
-            disabled={executing}
-            className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-neutral-100 text-neutral-500 transition-colors disabled:opacity-50"
-          >
-            <Icon icon="lucide:refresh-cw" width={16} />
-          </button>
-        )}
+        <div className="flex items-center gap-1">
+          {connected && (
+            <button
+              onClick={handleSyncLive}
+              disabled={executing || syncing}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-orange-600 hover:bg-orange-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {syncing ? (
+                <span className="inline-block w-3 h-3 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Icon icon="lucide:globe" width={14} />
+              )}
+              Sync Live
+            </button>
+          )}
+          {connected && (
+            <button
+              onClick={handleRefresh}
+              disabled={executing}
+              className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-neutral-100 text-neutral-500 transition-colors disabled:opacity-50"
+            >
+              <Icon icon="lucide:refresh-cw" width={16} />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Token rows */}

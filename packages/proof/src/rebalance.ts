@@ -1,13 +1,14 @@
 import type { AztecAddress } from '@aztec/aztec.js/addresses';
+import { BatchCall, ContractFunctionInteraction, type SendInteractionOptions } from '@aztec/aztec.js/contracts';
+import type { Wallet } from '@aztec/aztec.js/wallet';
 import { log } from './logger';
 
-/**
- * Minimal contract interface for rebalancing — satisfied by both typed
- * Noir codegen contracts (scripts) and generic Contract.at() (frontend).
- */
-interface Sendable {
-    send(opts: Record<string, any>): Promise<any>;
-}
+// The proof package uses moduleResolution: "NodeNext" while the frontend uses
+// "bundler" (required by Next.js). TypeScript treats identical @aztec types from
+// each resolution strategy as incompatible, even though they resolve to the same
+// node_modules copy at runtime. We accept `unknown` here and cast once at the
+// BatchCall call site so callers don't need ugly double-casts.
+type WalletLike = unknown;
 
 interface HasAddress {
     address: AztecAddress;
@@ -15,13 +16,13 @@ interface HasAddress {
 
 interface TokenLike extends HasAddress {
     methods: {
-        mint_to_public(to: AztecAddress, amount: bigint): Sendable;
+        mint_to_public(to: AztecAddress, amount: bigint): ContractFunctionInteraction;
     };
 }
 
 interface PriceFeedLike extends HasAddress {
     methods: {
-        set_price(token: any, price: bigint): Sendable;
+        set_price(token: any, price: bigint): ContractFunctionInteraction;
     };
 }
 
@@ -58,22 +59,19 @@ export interface TokenPrice {
  * Pool reserves are mutated in-place.
  */
 export async function rebalancePools(params: {
+    wallet: WalletLike;
     priceFeed: PriceFeedLike;
     minter: AztecAddress;
     pools: PoolState[];
     tokenPrices: TokenPrice[];
     setOracle?: boolean;
-    sendOpts?: (from: AztecAddress) => Record<string, any>;
+    sendOpts?: (from: AztecAddress) => SendInteractionOptions;
     onProgress?: (step: number, total: number, label: string) => void;
     /** Address string → display name, used in progress labels */
     tokenLabels?: Map<string, string>;
 }): Promise<void> {
-    const { priceFeed, minter, pools, tokenPrices, setOracle = true, onProgress, tokenLabels } = params;
-    const opts = params.sendOpts ?? ((from: AztecAddress) => ({ from }));
-
-    const oracleSteps = setOracle ? tokenPrices.length : 0;
-    const totalSteps = oracleSteps + pools.length;
-    let currentStep = 0;
+    const { wallet, priceFeed, minter, pools, tokenPrices, setOracle = true, onProgress, tokenLabels } = params;
+    const opts = params.sendOpts ?? ((from: AztecAddress): SendInteractionOptions => ({ from }));
 
     // Build lookup: address string -> price
     const priceMap = new Map<string, bigint>();
@@ -81,26 +79,25 @@ export async function rebalancePools(params: {
         priceMap.set(tp.token.address.toString(), tp.price);
     }
 
+    // Collect all interactions and deferred reserve mutations
+    const interactions: ContractFunctionInteraction[] = [];
+    const deferredMutations: (() => void)[] = [];
+
     // 1. Set oracle prices
     if (setOracle) {
         for (const tp of tokenPrices) {
-            const tokenName = tokenLabels?.get(tp.token.address.toString()) ?? `token ${currentStep + 1}`;
-            onProgress?.(currentStep, totalSteps, `Setting oracle price for ${tokenName}...`);
-            await priceFeed.methods
-                .set_price(tp.token.address.toField(), tp.price)
-                .send(opts(minter))
-                ;
-            currentStep++;
+            interactions.push(
+                priceFeed.methods.set_price(tp.token.address.toField(), tp.price)
+            );
         }
     }
 
-    // 2. Rebalance each pool
+    // 2. Compute rebalance mints
     for (const pool of pools) {
         const addr0 = pool.token0.address.toString();
         const addr1 = pool.token1.address.toString();
         const label0 = tokenLabels?.get(addr0) ?? addr0.slice(0, 10);
         const label1 = tokenLabels?.get(addr1) ?? addr1.slice(0, 10);
-        onProgress?.(currentStep, totalSteps, `Rebalancing ${label0}/${label1} pool...`);
         const p0 = priceMap.get(addr0);
         const p1 = priceMap.get(addr1);
         if (p0 === undefined || p1 === undefined) {
@@ -126,11 +123,8 @@ export async function rebalancePools(params: {
             const toMint = targetR1 - pool.reserve1;
             if (toMint > 0n) {
                 log(`  Rebalance pool(${label0}../${label1}..): mint ${toMint} of token1`);
-                await pool.token1.methods
-                    .mint_to_public(pool.contract.address, toMint)
-                    .send(opts(minter))
-                    ;
-                pool.reserve1 += toMint;
+                interactions.push(pool.token1.methods.mint_to_public(pool.contract.address, toMint));
+                deferredMutations.push(() => { pool.reserve1 += toMint; });
             }
         } else if (value1 > value0) {
             // Token1 side is overweight - mint token0 to balance
@@ -139,14 +133,45 @@ export async function rebalancePools(params: {
             const toMint = targetR0 - pool.reserve0;
             if (toMint > 0n) {
                 log(`  Rebalance pool(${label0}../${label1}..): mint ${toMint} of token0`);
-                await pool.token0.methods
-                    .mint_to_public(pool.contract.address, toMint)
-                    .send(opts(minter))
-                    ;
-                pool.reserve0 += toMint;
+                interactions.push(pool.token0.methods.mint_to_public(pool.contract.address, toMint));
+                deferredMutations.push(() => { pool.reserve0 += toMint; });
             }
         }
-        currentStep++;
     }
+
+    // Send interactions in batches of MAX_BATCH (entrypoint caps at 5, use 4 for safety)
+    const MAX_BATCH = 4;
+    const priceCount = setOracle ? tokenPrices.length : 0;
+    const totalBatches = Math.ceil(interactions.length / MAX_BATCH);
+    const totalSteps = totalBatches + 1; // +1 for final "Done" step
+
+    onProgress?.(0, totalSteps, 'Preparing batches...');
+
+    for (let i = 0; i < interactions.length; i += MAX_BATCH) {
+        const batchIndex = i / MAX_BATCH;
+        const batchEnd = Math.min(i + MAX_BATCH, interactions.length);
+
+        // Determine what this batch contains based on the price/mint boundary
+        const hasPrices = i < priceCount;
+        const hasMints = batchEnd > priceCount;
+        let label: string;
+        if (hasPrices && hasMints) {
+            label = `Batch ${batchIndex + 1}/${totalBatches}: setting prices & rebalancing...`;
+        } else if (hasPrices) {
+            label = `Batch ${batchIndex + 1}/${totalBatches}: setting prices...`;
+        } else {
+            label = `Batch ${batchIndex + 1}/${totalBatches}: rebalancing pools...`;
+        }
+        onProgress?.(batchIndex + 1, totalSteps, label);
+
+        const chunk = interactions.slice(i, batchEnd);
+        await new BatchCall(wallet as Wallet, chunk).send(opts(minter));
+    }
+
+    // Apply reserve mutations after successful send
+    for (const mutate of deferredMutations) {
+        mutate();
+    }
+
     onProgress?.(totalSteps, totalSteps, 'Done');
 }
