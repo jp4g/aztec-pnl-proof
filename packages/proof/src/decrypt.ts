@@ -37,11 +37,9 @@ export async function decryptLog(
         const restFieldsBuffer = ciphertextWithoutTag.slice(32);
         const restBytes = unpackFieldsToBytes(restFieldsBuffer);
 
-        // First byte of the unpacked bytes is the sign of eph_pk
-        const ephPkSign = restBytes[0] !== 0;
-
-        // Reconstruct ephemeral public key
-        const ephPk = await reconstructPublicKey(ephPkX, ephPkSign);
+        // In SDK 4.1.0-rc.2, ephemeral keys always have positive y-coordinate
+        // (generated via generate_positive_ephemeral_key_pair), so sign is always true.
+        const ephPk = await reconstructPublicKey(ephPkX, true);
         if (!ephPk) {
             logError('Failed to reconstruct ephemeral public key');
             return null;
@@ -58,8 +56,8 @@ export async function decryptLog(
         const { bodyKey, bodyIv, headerKey, headerIv } = await deriveAesKeys(sharedSecret);
 
         // Step 5: Extract and decrypt header
-        // Header starts at byte 1 (after sign byte) and is 16 bytes
-        const headerCiphertext = restBytes.slice(1, 17);
+        // In SDK 4.1.0-rc.2, no sign byte — header starts at byte 0
+        const headerCiphertext = restBytes.slice(0, 16);
         const aes = new Aes128();
         const headerPlaintext = await aes.decryptBufferCBC(
             headerCiphertext,
@@ -71,9 +69,10 @@ export async function decryptLog(
         const ciphertextLength = (headerPlaintext[0] << 8) | headerPlaintext[1];
 
         // Step 6: Decrypt body
-        const availableBytes = restBytes.length - 17;
+        const bodyStart = 16; // header is 16 bytes, no sign byte
+        const availableBytes = restBytes.length - bodyStart;
         const actualLength = Math.min(ciphertextLength, availableBytes);
-        const bodyCiphertext = restBytes.slice(17, 17 + actualLength);
+        const bodyCiphertext = restBytes.slice(bodyStart, bodyStart + actualLength);
         const bodyPlaintext = await aes.decryptBufferCBC(
             bodyCiphertext,
             bodyIv,

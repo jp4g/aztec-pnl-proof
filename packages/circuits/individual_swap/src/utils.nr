@@ -4,7 +4,7 @@ use aztec::{
         encryption::aes128::derive_aes_symmetric_key_and_iv_from_ecdh_shared_secret_using_poseidon2_unsafe,
     },
     keys::ecdh_shared_secret::derive_ecdh_shared_secret,
-    utils::point::{point_from_x_coord_and_sign, get_sign_of_point},
+    utils::point::point_from_x_coord_and_sign,
 };
 use std::{aes128::aes128_encrypt, embedded_curve_ops::EmbeddedCurveScalar};
 use protocol_types::{
@@ -135,10 +135,8 @@ pub fn verify_encryption(
     let ciphertext_fields = extract_ciphertext_fields(ciphertext);
     let ciphertext_bytes = bytes_from_fields(ciphertext_fields);
 
-    let eph_pk_sign_byte = ciphertext_bytes[0];
-    let eph_pk_sign = eph_pk_sign_byte != 0;
-
-    let eph_pk = point_from_x_coord_and_sign(eph_pk_x, eph_pk_sign)
+    // SDK 4.1.0-rc.2: ephemeral keys always have positive y (no sign byte)
+    let eph_pk = point_from_x_coord_and_sign(eph_pk_x, true)
         .expect(f"Invalid ephemeral public key x-coordinate");
     let recipient_sk_scalar = EmbeddedCurveScalar::from_field(ivsk_app);
     let shared_secret = derive_ecdh_shared_secret(recipient_sk_scalar, eph_pk);
@@ -148,7 +146,7 @@ pub fn verify_encryption(
 
     let plaintext_bytes = plaintext_fields_to_bytes(plaintext);
     let computed_body = aes128_encrypt(plaintext_bytes, body_iv, body_sym_key);
-    let body_start = 1 + HEADER_CIPHERTEXT_SIZE_IN_BYTES;
+    let body_start = HEADER_CIPHERTEXT_SIZE_IN_BYTES;
     for i in 0..computed_body.len() {
         if body_start + i < ciphertext_bytes.len() {
             assert(
@@ -158,7 +156,6 @@ pub fn verify_encryption(
         }
     }
 
-    assert(eph_pk_sign_byte == get_sign_of_point(eph_pk) as u8, "Ephemeral PK sign mismatch");
 }
 
 // ============================================================
