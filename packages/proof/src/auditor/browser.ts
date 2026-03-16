@@ -1,12 +1,11 @@
 import { poseidon2Hash } from "@zkpassport/poseidon2";
 
 export type {
-  SerializedTaggingSecretEntry,
-  SerializedTaggingSecretExport,
+  SerializedExportedTaggingSecret,
 } from "./types";
 
 import type {
-  SerializedTaggingSecretExport,
+  SerializedExportedTaggingSecret,
 } from "./types";
 
 // Domain separator for PRIVATE_LOG_FIRST_FIELD from @aztec/constants
@@ -68,6 +67,18 @@ async function getPrivateLogsByTags(nodeUrl: string, siloedTags: string[]): Prom
 }
 
 /**
+ * Parse the app address from a serialized ExtendedDirectionalAppTaggingSecret string.
+ * Format is "0xSECRET:0xAPP", where APP is the contract address.
+ */
+function parseAppFromSecret(secretStr: string): string {
+  const colonIdx = secretStr.indexOf(':');
+  if (colonIdx === -1) {
+    throw new Error(`Invalid secret format — expected "0xSECRET:0xAPP", got "${secretStr}"`);
+  }
+  return secretStr.slice(colonIdx + 1);
+}
+
+/**
  * Retrieve encrypted events from the Aztec network using tagging secrets.
  *
  * Lightweight implementation with zero @aztec/* dependencies.
@@ -75,12 +86,12 @@ async function getPrivateLogsByTags(nodeUrl: string, siloedTags: string[]): Prom
  * Suitable for browser/server environments (Next.js routes, etc.).
  *
  * @param nodeUrl - Aztec node JSON-RPC endpoint URL
- * @param secretsExport - Serialized tagging secrets export
+ * @param secrets - Serialized exported tagging secrets
  * @param options - Optional scan parameters
  */
 export async function retrieveEncryptedEvents(
   nodeUrl: string,
-  secretsExport: SerializedTaggingSecretExport,
+  secrets: SerializedExportedTaggingSecret[],
   options?: {
     startIndex?: number;
     maxIndices?: number;
@@ -91,14 +102,14 @@ export async function retrieveEncryptedEvents(
   const maxIndices = options?.maxIndices ?? 10000;
   const batchSize = options?.batchSize ?? 100;
 
-  const inboundSecrets = secretsExport.secrets.filter((s) => s.direction === "inbound");
+  const inboundSecrets = secrets.filter((s) => s.direction === "inbound");
   const events: BrowserRetrievedEvent[] = [];
 
-  for (const secretEntry of inboundSecrets) {
-    // secret may be "0xSECRET:0xAPP" (ExtendedDirectionalAppTaggingSecret) or a plain hex
-    const secretStr = secretEntry.secret.includes(':') ? secretEntry.secret.split(':')[0] : secretEntry.secret;
+  for (const entry of inboundSecrets) {
+    // secret is "0xSECRET:0xAPP" (ExtendedDirectionalAppTaggingSecret)
+    const secretStr = entry.secret.includes(':') ? entry.secret.split(':')[0] : entry.secret;
     const secretValue = BigInt(secretStr);
-    const app = secretEntry.app;
+    const app = parseAppFromSecret(entry.secret);
 
     for (let index = startIndex; index < startIndex + maxIndices; index += batchSize) {
       const count = Math.min(batchSize, startIndex + maxIndices - index);

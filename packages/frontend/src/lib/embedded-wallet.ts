@@ -11,7 +11,7 @@ import {
 import { GrumpkinScalar } from "@aztec/foundation/curves/grumpkin";
 import type { FieldsOf } from "@aztec/foundation/types";
 import { SchnorrAccountContract } from "@aztec/accounts/schnorr/lazy";
-import { createPXE, type TaggingSecretExport } from "@aztec/pxe/client/lazy";
+import { createPXE, type ExportedTaggingSecret } from "@aztec/pxe/client/lazy";
 import { getPXEConfig } from "@aztec/pxe/config";
 import { BaseWallet, type FeeOptions } from "@aztec/wallet-sdk/base-wallet";
 import { GasSettings } from "@aztec/stdlib/gas";
@@ -396,7 +396,7 @@ export class EmbeddedAuditableWallet extends BaseWallet {
     account: AztecAddress,
     apps: AztecAddress[],
     counterparties?: AztecAddress[],
-  ): Promise<TaggingSecretExport> {
+  ): Promise<ExportedTaggingSecret[]> {
     return this.pxe.exportTaggingSecrets(account, apps, counterparties);
   }
 

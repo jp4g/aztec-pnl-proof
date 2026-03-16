@@ -1,4 +1,3 @@
-import type { Fr } from '@aztec/foundation/curves/bn254';
 import type { AztecAddress } from '@aztec/stdlib/aztec-address';
 import type { ExtendedDirectionalAppTaggingSecret } from '@aztec/stdlib/logs';
 
@@ -6,33 +5,15 @@ import type { ExtendedDirectionalAppTaggingSecret } from '@aztec/stdlib/logs';
 export type NoteDirection = 'inbound' | 'outbound';
 
 /** A tagging secret with metadata about its direction and counterparty. */
-export interface TaggingSecretEntry {
+export interface ExportedTaggingSecret {
   secret: ExtendedDirectionalAppTaggingSecret;
   direction: NoteDirection;
   counterparty: AztecAddress;
-  app: AztecAddress;
-  label?: string;
 }
 
-/** Complete export of tagging secrets for an account. */
-export interface TaggingSecretExport {
-  account: AztecAddress;
-  secrets: TaggingSecretEntry[];
-  exportedAt: number;
-}
-
-/** JSON-serializable version of TaggingSecretEntry. */
-export interface SerializedTaggingSecretEntry {
+/** JSON-serializable version of ExportedTaggingSecret. */
+export interface SerializedExportedTaggingSecret {
   secret: string;
   direction: NoteDirection;
   counterparty: string;
-  app: string;
-  label?: string;
-}
-
-/** JSON-serializable version of TaggingSecretExport. */
-export interface SerializedTaggingSecretExport {
-  account: string;
-  secrets: SerializedTaggingSecretEntry[];
-  exportedAt: number;
 }

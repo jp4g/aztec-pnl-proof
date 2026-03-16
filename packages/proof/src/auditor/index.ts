@@ -1,16 +1,14 @@
 export { TagGenerator } from './tag-generator';
 export {
-  serializeTaggingSecretExport,
-  deserializeTaggingSecretExport,
+  serializeExportedTaggingSecrets,
+  deserializeExportedTaggingSecrets,
   validateSerializedExport,
-  parseTaggingSecretExport,
+  parseExportedTaggingSecrets,
 } from './serialization';
 export type {
   NoteDirection,
-  TaggingSecretEntry,
-  TaggingSecretExport,
-  SerializedTaggingSecretEntry,
-  SerializedTaggingSecretExport,
+  ExportedTaggingSecret,
+  SerializedExportedTaggingSecret,
 } from './types';
 
 // Node entry point

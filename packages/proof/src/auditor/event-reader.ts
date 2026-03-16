@@ -1,6 +1,6 @@
 import type { AztecNode } from "@aztec/aztec.js/node";
 import { TagGenerator } from "./tag-generator";
-import type { TaggingSecretExport, TaggingSecretEntry } from "./types";
+import type { ExportedTaggingSecret } from "./types";
 import { Tag, SiloedTag } from "@aztec/stdlib/logs";
 import { log } from '../logger';
 
@@ -13,13 +13,13 @@ import { log } from '../logger';
  * - Only processes INBOUND secrets (events encrypted for the account holder)
  *
  * @param node - Aztec node client
- * @param secretsExport - Exported tagging secrets from a user
+ * @param secrets - Exported tagging secrets from a user
  * @param options - Scan options
  * @returns Retrieved encrypted event logs
  */
 export async function retrieveEncryptedEvents(
     node: AztecNode,
-    secretsExport: TaggingSecretExport,
+    secrets: ExportedTaggingSecret[],
     options?: {
         startIndex?: number;
         maxIndices?: number;
@@ -33,12 +33,12 @@ export async function retrieveEncryptedEvents(
     const results: EventSecretResult[] = [];
 
     // Filter to only inbound secrets - we can only decrypt events encrypted for us
-    const inboundSecrets = secretsExport.secrets.filter(s => s.direction === 'inbound');
+    const inboundSecrets = secrets.filter(s => s.direction === 'inbound');
 
-    for (const secretEntry of inboundSecrets) {
+    for (const entry of inboundSecrets) {
         const secretResult = await processSecret(
             node,
-            secretEntry,
+            entry,
             startIndex,
             maxIndices,
             batchSize,
@@ -48,7 +48,6 @@ export async function retrieveEncryptedEvents(
     }
 
     return {
-        account: secretsExport.account.toString(),
         retrievedAt: Date.now(),
         secrets: results,
         totalEvents: results.reduce((sum, r) => sum + r.events.length, 0),
@@ -60,23 +59,23 @@ export async function retrieveEncryptedEvents(
  */
 async function processSecret(
     node: AztecNode,
-    secretEntry: TaggingSecretEntry,
+    entry: ExportedTaggingSecret,
     startIndex: number,
     maxIndices: number,
     batchSize: number,
 ): Promise<EventSecretResult> {
     const events: RetrievedEvent[] = [];
 
-    log(`[EventReader] Processing secret: counterparty: ${secretEntry.counterparty.toString().slice(0, 16)}...`);
+    log(`[EventReader] Processing secret: counterparty: ${entry.counterparty.toString().slice(0, 16)}...`);
 
     for (let index = startIndex; index < startIndex + maxIndices; index += batchSize) {
         const count = Math.min(batchSize, startIndex + maxIndices - index);
 
         // Step 1: Generate base tags (unsiloed)
-        const baseTags = await TagGenerator.generateTags(secretEntry.secret, index, count);
+        const baseTags = await TagGenerator.generateTags(entry.secret, index, count);
 
         // Step 2: Silo each tag with the contract address (v4 uses domain-separated hash)
-        const app = secretEntry.app;
+        const app = entry.secret.app;
         const siloedTags = await Promise.all(
             baseTags.map(baseTag => SiloedTag.compute(new Tag(baseTag), app))
         );
@@ -118,9 +117,8 @@ async function processSecret(
 
     return {
         secret: {
-            counterparty: secretEntry.counterparty.toString(),
-            app: secretEntry.app.toString(),
-            label: secretEntry.label,
+            counterparty: entry.counterparty.toString(),
+            app: entry.secret.app.toString(),
         },
         events,
         eventCount: events.length,
@@ -131,7 +129,6 @@ async function processSecret(
  * Result of retrieving encrypted events.
  */
 export interface EventRetrievalResult {
-    account: string;
     retrievedAt: number;
     secrets: EventSecretResult[];
     totalEvents: number;
@@ -144,7 +141,6 @@ export interface EventSecretResult {
     secret: {
         counterparty: string;
         app: string;
-        label?: string;
     };
     events: RetrievedEvent[];
     eventCount: number;
