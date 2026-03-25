@@ -356,7 +356,7 @@ pub contract AMM {
             amount_in,
             amount_out: amount_out_min,
             is_exact_input: true,
-        }).deliver_to(sender, MessageDelivery.ONCHAIN_UNCONSTRAINED);
+        }).deliver_to(sender, MessageDelivery.ONCHAIN_CONSTRAINED);
 
         self.enqueue_self._swap_exact_tokens_for_tokens(
             token_in,
@@ -439,7 +439,7 @@ pub contract AMM {
             amount_in: amount_in_max,
             amount_out,
             is_exact_input: false,
-        }).deliver_to(sender, MessageDelivery.ONCHAIN_UNCONSTRAINED);
+        }).deliver_to(sender, MessageDelivery.ONCHAIN_CONSTRAINED);
 
         self.enqueue_self._swap_tokens_for_exact_tokens(
             token_in,
