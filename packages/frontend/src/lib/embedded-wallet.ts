@@ -132,28 +132,42 @@ export class EmbeddedAuditableWallet extends BaseWallet {
 
     const config = getPXEConfig();
     config.proverEnabled = true;
+    // Set dataDirectory so the IDB store gets a stable name across page reloads.
+    // Without this, AztecIndexedDBStore.open receives '' which is falsy, causing
+    // it to generate a random DB name every time (data lost on refresh).
+    config.dataDirectory = 'aztec-pnl-proof';
     const pxe = await createPXE(aztecNode, config, {});
 
-    // Register sponsored FPC using address from env
+    // Register sponsored FPC using address from env (skip if already in PXE)
     const fpcAddr = process.env.NEXT_PUBLIC_SPONSORED_FPC_ADDRESS;
     if (!fpcAddr) {
       throw new Error('NEXT_PUBLIC_SPONSORED_FPC_ADDRESS is required. Run `yarn deploy` or `yarn fpc:deploy` first.');
     }
-    const { SponsoredFPCContractArtifact } = await import(
-      "@aztec/noir-contracts.js/SponsoredFPC"
-    );
-    const { getContractInstanceFromInstantiationParams } = await import(
-      "@aztec/aztec.js/contracts"
-    );
-    const { SPONSORED_FPC_SALT } = await import("@aztec/constants");
-    const fpcInstance = await getContractInstanceFromInstantiationParams(
-      SponsoredFPCContractArtifact,
-      { salt: new Fr(SPONSORED_FPC_SALT) }
-    );
-    await pxe.registerContract({
-      instance: fpcInstance,
-      artifact: SponsoredFPCContractArtifact,
-    });
+
+    const registered = await pxe.getContracts();
+    const fpcAztecAddr = AztecAddress.fromString(fpcAddr);
+    const fpcAlreadyRegistered = registered.some(a => a.equals(fpcAztecAddr));
+
+    if (!fpcAlreadyRegistered) {
+      const { SponsoredFPCContractArtifact } = await import(
+        "@aztec/noir-contracts.js/SponsoredFPC"
+      );
+      const { getContractInstanceFromInstantiationParams } = await import(
+        "@aztec/aztec.js/contracts"
+      );
+      const { SPONSORED_FPC_SALT } = await import("@aztec/constants");
+      const fpcInstance = await getContractInstanceFromInstantiationParams(
+        SponsoredFPCContractArtifact,
+        { salt: new Fr(SPONSORED_FPC_SALT) }
+      );
+      await pxe.registerContract({
+        instance: fpcInstance,
+        artifact: SponsoredFPCContractArtifact,
+      });
+      logger.info("[init] registered SponsoredFPC");
+    } else {
+      logger.info("[init] SponsoredFPC already registered, skipping");
+    }
 
     const nodeInfo = await aztecNode.getNodeInfo();
     logger.info("PXE connected to node", nodeInfo);
@@ -269,6 +283,10 @@ export class EmbeddedAuditableWallet extends BaseWallet {
     }
     if (stored.length === 0) return { active: null, all: [] };
 
+    // Check which accounts are already registered in PXE (local IDB, fast)
+    const registered = await this.pxe.getContracts();
+    const registeredSet = new Set(registered.map(a => a.toString()));
+
     const validAddresses: AztecAddress[] = [];
     const validEntries: StoredAccount[] = [];
 
@@ -284,7 +302,13 @@ export class EmbeddedAuditableWallet extends BaseWallet {
           Fr.fromString(entry.salt)
         );
 
-        await this.enqueue(() => this.registerAccount(accountManager));
+        // Skip PXE registration if account is already persisted from a prior session
+        if (!registeredSet.has(accountManager.address.toString())) {
+          await this.enqueue(() => this.registerAccount(accountManager));
+          logger.info(`[accounts] registered ${entry.address}`);
+        } else {
+          logger.info(`[accounts] ${entry.address} already registered, skipping`);
+        }
         this.accounts.set(
           accountManager.address.toString(),
           await accountManager.getAccount()
@@ -323,9 +347,20 @@ export class EmbeddedAuditableWallet extends BaseWallet {
   async registerDeployedContracts(): Promise<void> {
     const entries = CONTRACT_REGISTRY.filter((e) => !!e.address);
 
-    // Fetch all on-chain instances + artifacts in parallel (no IDB)
+    // Check which contracts are already registered in PXE (local IDB read, fast)
+    const registered = await this.pxe.getContracts();
+    const registeredSet = new Set(registered.map(a => a.toString()));
+
+    const missing = entries.filter(e => !registeredSet.has(AztecAddress.fromString(e.address!).toString()));
+    if (missing.length === 0) {
+      logger.info(`[register] all ${entries.length} contracts already registered, skipping`);
+      return;
+    }
+    logger.info(`[register] ${entries.length - missing.length} already registered, registering ${missing.length} missing`);
+
+    // Only fetch + register the missing contracts
     const resolved = await Promise.all(
-      entries.map(async (entry) => {
+      missing.map(async (entry) => {
         try {
           const address = AztecAddress.fromString(entry.address!);
           const [instance, artifact] = await Promise.all([
