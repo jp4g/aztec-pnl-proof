@@ -116,6 +116,9 @@ export function useProveFlow() {
         progress: 10,
       }));
 
+      console.log("[prove] secrets shape:", Object.keys(secrets));
+      console.log("[prove] secrets.secrets[0]:", secrets.secrets?.[0] ? Object.keys(secrets.secrets[0]) : "empty");
+
       const serializedSecrets = {
         account: secrets.account.toString(),
         secrets: secrets.secrets.map((s: any) => ({
