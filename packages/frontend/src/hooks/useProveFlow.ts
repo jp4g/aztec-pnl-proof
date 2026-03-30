@@ -116,20 +116,8 @@ export function useProveFlow() {
         progress: 10,
       }));
 
-      console.log("[prove] secrets:", JSON.stringify(secrets, (_, v) => typeof v === 'bigint' ? v.toString() : v));
-      console.log("[prove] ivskM:", ivskM?.toString());
-      console.log("[prove] completeAddress:", completeAddress?.address?.toString());
-
-      const serializedSecrets = {
-        account: secrets.account.toString(),
-        secrets: secrets.secrets.map((s: any) => ({
-          secret: s.secret.toString(),
-          counterparty: s.counterparty.toString(),
-          app: s.app.toString(),
-          direction: s.direction,
-          label: s.label,
-        })),
-      };
+      const { serializeExportedTaggingSecrets } = await import("@privpnl/proof/auditor");
+      const serializedSecrets = serializeExportedTaggingSecrets(secrets);
 
       const eventsRes = await fetch("/api/audit/events", {
         method: "POST",
