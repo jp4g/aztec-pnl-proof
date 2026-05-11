@@ -132,6 +132,7 @@ export function useProveFlow() {
       const eventsData = await eventsRes.json();
       const encryptedEvents = eventsData.events as Array<{
         txHash: string;
+        app: string;
         blockNumber: string;
         publicDataTreeRoot: string;
         ciphertext: string;
@@ -150,6 +151,9 @@ export function useProveFlow() {
       }
 
       for (const evt of encryptedEvents) {
+        if (!evt.app) {
+          throw new Error(`Audit event ${evt.txHash} is missing app`);
+        }
         if (!evt.publicDataTreeRoot) {
           throw new Error(`Audit event ${evt.txHash} is missing publicDataTreeRoot`);
         }
@@ -171,13 +175,14 @@ export function useProveFlow() {
           Buffer.from(evt.ciphertext, "hex"),
           completeAddress,
           ivskM,
+          evt.app,
         );
-        if (plaintext && plaintext.length >= 6) {
+        if (plaintext && plaintext.plaintext.length >= 6) {
           decodedSwaps.push({
-            tokenIn: plaintext[2].toString(),
-            tokenOut: plaintext[3].toString(),
-            amountIn: plaintext[4].toBigInt(),
-            amountOut: plaintext[5].toBigInt(),
+            tokenIn: plaintext.plaintext[2].toString(),
+            tokenOut: plaintext.plaintext[3].toString(),
+            amountIn: plaintext.plaintext[4].toBigInt(),
+            amountOut: plaintext.plaintext[5].toBigInt(),
             blockNumber: BigInt(evt.blockNumber),
           });
         }
@@ -267,6 +272,7 @@ export function useProveFlow() {
       // --- Step 6: Convert events to Buffer format ---
       const swapEvents = encryptedEvents.map((e) => ({
         encryptedLog: Buffer.from(e.ciphertext, "hex"),
+        app: e.app,
         blockNumber: BigInt(e.blockNumber),
         publicDataTreeRoot: e.publicDataTreeRoot,
       }));

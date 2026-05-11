@@ -1,17 +1,14 @@
 use aztec::{
     messages::{
         encoding::{MESSAGE_CIPHERTEXT_LEN, EPH_PK_X_SIZE_IN_FIELDS},
-        encryption::aes128::derive_aes_symmetric_key_and_iv_from_ecdh_shared_secret_using_poseidon2_unsafe,
+        encryption::aes128::derive_aes_symmetric_key_and_iv_from_shared_secret,
     },
-    keys::ecdh_shared_secret::derive_ecdh_shared_secret,
-    utils::point::point_from_x_coord_and_sign,
 };
-use std::{aes128::aes128_encrypt, embedded_curve_ops::EmbeddedCurveScalar};
+use std::aes128::aes128_encrypt;
 use protocol_types::{
-    constants::{DOM_SEP__PUBLIC_LEAF_SLOT, DOM_SEP__PUBLIC_STORAGE_MAP_SLOT},
+    constants::{DOM_SEP__ECDH_FIELD_MASK, DOM_SEP__PUBLIC_LEAF_SLOT, DOM_SEP__PUBLIC_STORAGE_MAP_SLOT},
     hash::{poseidon2_hash, poseidon2_hash_with_separator},
     merkle_tree::root::root_from_sibling_path,
-    utils::field::full_field_less_than,
 };
 
 // ============================================================
@@ -64,8 +61,8 @@ pub fn verify_and_read_public_data(
     let computed_root = root_from_sibling_path(leaf_hash, witness.witness_index, witness.witness_path);
     assert_eq(computed_root, public_data_tree_root, "Merkle membership proof failed");
 
-    let is_less_than_slot = full_field_less_than(witness.leaf_preimage.slot, tree_index);
-    let is_next_greater_than = full_field_less_than(tree_index, witness.leaf_preimage.next_slot);
+    let is_less_than_slot = witness.leaf_preimage.slot.lt(tree_index);
+    let is_next_greater_than = tree_index.lt(witness.leaf_preimage.next_slot);
     let is_max = (witness.leaf_preimage.next_index == 0) & (witness.leaf_preimage.next_slot == 0);
     let is_in_range = is_less_than_slot & (is_next_greater_than | is_max);
 
@@ -110,6 +107,18 @@ fn extract_ciphertext_fields(
     result
 }
 
+fn unmask_ciphertext_fields(
+    fields: [Field; MESSAGE_CIPHERTEXT_LEN - 1],
+    s_app: Field,
+) -> [Field; MESSAGE_CIPHERTEXT_LEN - 1] {
+    let mut result = [0 as Field; MESSAGE_CIPHERTEXT_LEN - 1];
+    for i in 0..MESSAGE_CIPHERTEXT_LEN - 1 {
+        let mask = poseidon2_hash_with_separator([s_app], DOM_SEP__ECDH_FIELD_MASK + i);
+        result[i] = fields[i] - mask;
+    }
+    result
+}
+
 /// Convert plaintext fields to bytes (32 bytes per field, big-endian).
 fn plaintext_fields_to_bytes(plaintext: [Field; SWAP_PLAINTEXT_FIELDS]) -> [u8; PLAINTEXT_BYTES_LEN] {
     let mut bytes = [0 as u8; PLAINTEXT_BYTES_LEN];
@@ -129,19 +138,13 @@ fn plaintext_fields_to_bytes(plaintext: [Field; SWAP_PLAINTEXT_FIELDS]) -> [u8; 
 pub fn verify_encryption(
     plaintext: [Field; SWAP_PLAINTEXT_FIELDS],
     ciphertext: [Field; MESSAGE_CIPHERTEXT_LEN],
-    ivsk_app: Field,
+    s_app: Field,
 ) {
-    let eph_pk_x = ciphertext[0];
     let ciphertext_fields = extract_ciphertext_fields(ciphertext);
-    let ciphertext_bytes = bytes_from_fields(ciphertext_fields);
+    let unmasked_fields = unmask_ciphertext_fields(ciphertext_fields, s_app);
+    let ciphertext_bytes = bytes_from_fields(unmasked_fields);
 
-    // SDK 4.1.0-rc.2: ephemeral keys always have positive y (no sign byte)
-    let eph_pk = point_from_x_coord_and_sign(eph_pk_x, true)
-        .expect(f"Invalid ephemeral public key x-coordinate");
-    let recipient_sk_scalar = EmbeddedCurveScalar::from_field(ivsk_app);
-    let shared_secret = derive_ecdh_shared_secret(recipient_sk_scalar, eph_pk);
-
-    let pairs = derive_aes_symmetric_key_and_iv_from_ecdh_shared_secret_using_poseidon2_unsafe::<2>(shared_secret);
+    let pairs = derive_aes_symmetric_key_and_iv_from_shared_secret::<2>(s_app);
     let (body_sym_key, body_iv) = pairs[0];
 
     let plaintext_bytes = plaintext_fields_to_bytes(plaintext);

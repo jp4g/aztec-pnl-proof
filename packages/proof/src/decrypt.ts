@@ -3,83 +3,72 @@ import { poseidon2HashWithSeparator } from '@aztec/foundation/crypto/poseidon';
 import { Fr } from '@aztec/foundation/curves/bn254';
 import { Point } from '@aztec/foundation/curves/grumpkin';
 import { DomainSeparator } from '@aztec/constants';
-import { deriveEcdhSharedSecret } from '@aztec/stdlib/logs';
+import { deriveAppSiloedSharedSecret } from '@aztec/stdlib/logs';
 import { computeAddressSecret } from '@aztec/stdlib/keys';
+import { AztecAddress } from '@aztec/stdlib/aztec-address';
 import type { CompleteAddress } from '@aztec/stdlib/contract';
-import { TAG_SIZE } from './constants';
+import { MESSAGE_CIPHERTEXT_LEN, TAG_SIZE } from './constants';
 import { error as logError } from './logger';
 
+const HEADER_CIPHERTEXT_SIZE_IN_BYTES = 16;
+const TWO_POW_248 = 1n << 248n;
+
+export interface DecryptedLog {
+    plaintext: Fr[];
+    sApp: Fr;
+}
+
 /**
- * Decrypt an encrypted log (note or event).
- *
- * Based on the flow from note-encryption-decryption-walkthrough.md.
- * Works for both notes and events since they use the same AES128 encryption scheme.
- *
- * @param encryptedLog - The encrypted log buffer (hex string from ciphertext)
- * @param recipientCompleteAddress - The recipient's complete address (includes keys and preaddress)
- * @param ivskM - The recipient's master incoming viewing secret key
- * @returns The decrypted plaintext fields, or null if decryption fails
+ * Decrypt an Aztec 4.2 encrypted log and return the private app-siloed secret used by the circuit.
  */
 export async function decryptLog(
     encryptedLog: Buffer,
     recipientCompleteAddress: CompleteAddress,
     ivskM: any, // GrumpkinScalar type
-): Promise<Fr[] | null> {
+    app: string,
+): Promise<DecryptedLog | null> {
     try {
-        // Step 1: Parse ciphertext structure
-        // Format: [tag (32 bytes) | eph_pk.x (32 bytes) | rest as fields (31 bytes each)]
-        // Skip the tag (first 32 bytes)
-        const ciphertextWithoutTag = encryptedLog.slice(TAG_SIZE);
-        const ephPkX = Fr.fromBuffer(ciphertextWithoutTag.slice(0, 32));
-
-        // The rest are fields packed with 31 bytes per field
-        // We need to unpack them back to bytes
-        const restFieldsBuffer = ciphertextWithoutTag.slice(32);
-        const restBytes = unpackFieldsToBytes(restFieldsBuffer);
-
-        // In SDK 4.1.0-rc.2, ephemeral keys always have positive y-coordinate
-        // (generated via generate_positive_ephemeral_key_pair), so sign is always true.
-        const ephPk = await reconstructPublicKey(ephPkX, true);
+        const ciphertextFields = parseCiphertextFields(encryptedLog);
+        const ephPk = await reconstructPublicKey(ciphertextFields[0], true);
         if (!ephPk) {
             logError('Failed to reconstruct ephemeral public key');
             return null;
         }
 
-        // Step 2: Compute address secret
         const preaddress = await recipientCompleteAddress.getPreaddress();
         const addressSecret = await computeAddressSecret(preaddress, ivskM);
+        const sApp = await deriveAppSiloedSharedSecret(
+            addressSecret,
+            ephPk,
+            AztecAddress.fromString(app),
+        );
 
-        // Step 3: Derive shared secret (ECDH)
-        const sharedSecret = await deriveEcdhSharedSecret(addressSecret, ephPk);
+        const maskedFields = ciphertextFields.slice(1);
+        const unmaskedFields = await unmaskCiphertextFields(maskedFields, sApp);
+        const messageBytes = fieldsToBytes(unmaskedFields);
 
-        // Step 4: Derive AES symmetric keys from shared secret
-        const { bodyKey, bodyIv, headerKey, headerIv } = await deriveAesKeys(sharedSecret);
-
-        // Step 5: Extract and decrypt header
-        // In SDK 4.1.0-rc.2, no sign byte — header starts at byte 0
-        const headerCiphertext = restBytes.slice(0, 16);
+        const { bodyKey, bodyIv, headerKey, headerIv } = await deriveAesKeys(sApp);
         const aes = new Aes128();
+        const headerCiphertext = messageBytes.slice(0, HEADER_CIPHERTEXT_SIZE_IN_BYTES);
         const headerPlaintext = await aes.decryptBufferCBC(
             headerCiphertext,
             headerIv,
             headerKey
         );
-
-        // Extract ciphertext length from header (2 bytes, big-endian)
         const ciphertextLength = (headerPlaintext[0] << 8) | headerPlaintext[1];
 
-        // Step 6: Decrypt body
-        const bodyStart = 16; // header is 16 bytes, no sign byte
-        const availableBytes = restBytes.length - bodyStart;
-        const actualLength = Math.min(ciphertextLength, availableBytes);
-        const bodyCiphertext = restBytes.slice(bodyStart, bodyStart + actualLength);
+        const bodyStart = HEADER_CIPHERTEXT_SIZE_IN_BYTES;
+        const bodyCiphertext = messageBytes.slice(bodyStart, bodyStart + ciphertextLength);
+        if (bodyCiphertext.length !== ciphertextLength) {
+            throw new Error(`Ciphertext body length ${bodyCiphertext.length} does not match header ${ciphertextLength}`);
+        }
+
         const bodyPlaintext = await aes.decryptBufferCBC(
             bodyCiphertext,
             bodyIv,
             bodyKey
         );
 
-        // Step 7: Convert bytes back to fields (32 bytes per field)
         const fields: Fr[] = [];
         for (let i = 0; i < bodyPlaintext.length; i += 32) {
             if (i + 32 <= bodyPlaintext.length) {
@@ -88,72 +77,58 @@ export async function decryptLog(
             }
         }
 
-        return fields;
+        return { plaintext: fields, sApp };
     } catch (error) {
         logError('Decryption failed:', error);
         return null;
     }
 }
 
-/**
- * Derive AES keys and IVs from ECDH shared secret using Poseidon2.
- *
- * This follows the pattern from aes128.nr in the Aztec codebase.
- */
-async function deriveAesKeys(sharedSecret: Point): Promise<{
+async function deriveAesKeys(sApp: Fr): Promise<{
     bodyKey: Buffer;
     bodyIv: Buffer;
     headerKey: Buffer;
     headerIv: Buffer;
 }> {
-    // Derive 4 random field elements using Poseidon2 with different separators.
-    // All use the same inputs — only the separator differs — so parallelize.
-    const inputs = [sharedSecret.x, sharedSecret.y];
-    const [rand1, rand2, rand3, rand4] = await Promise.all([
-        poseidon2HashWithSeparator(inputs, DomainSeparator.SYMMETRIC_KEY),
-        poseidon2HashWithSeparator(inputs, DomainSeparator.SYMMETRIC_KEY_2),
-        poseidon2HashWithSeparator(inputs, (1 << 8) + DomainSeparator.SYMMETRIC_KEY),
-        poseidon2HashWithSeparator(inputs, (1 << 8) + DomainSeparator.SYMMETRIC_KEY_2),
-    ]);
-
-    // Extract 16 bytes from the "little end" of each (last 16 bytes) and reverse.
-    // Noir code extracts bytes in reverse order: bytes[i] = rand_bytes[31-i]
-    const extractKey = (rand: Fr) => Buffer.from(rand.toBuffer().slice(16, 32)).reverse();
+    const subkeys = await Promise.all([0, 1, 2, 3].map(i =>
+        poseidon2HashWithSeparator([sApp], DomainSeparator.ECDH_SUBKEY + i)
+    ));
+    const extract = (rand: Fr) => Buffer.from(rand.toBuffer().slice(16, 32)).reverse();
 
     return {
-        bodyKey: extractKey(rand1),
-        bodyIv: extractKey(rand2),
-        headerKey: extractKey(rand3),
-        headerIv: extractKey(rand4),
+        bodyKey: extract(subkeys[0]),
+        bodyIv: extract(subkeys[1]),
+        headerKey: extract(subkeys[2]),
+        headerIv: extract(subkeys[3]),
     };
 }
 
-/**
- * Unpack fields that were packed with 31 bytes per field back into a continuous byte array.
- * This reverses the bytes_to_fields operation from Noir.
- */
-function unpackFieldsToBytes(packedBuffer: Buffer): Buffer {
-    const numFields = Math.floor(packedBuffer.length / 32);
-    const unpacked: Buffer[] = [];
+function parseCiphertextFields(encryptedLog: Buffer): Fr[] {
+    const ciphertextWithoutTag = encryptedLog.slice(TAG_SIZE);
+    const padded = Buffer.alloc(MESSAGE_CIPHERTEXT_LEN * 32);
+    ciphertextWithoutTag.copy(padded, 0, 0, Math.min(ciphertextWithoutTag.length, padded.length));
 
-    for (let i = 0; i < numFields; i++) {
-        const fieldBuffer = packedBuffer.slice(i * 32, (i + 1) * 32);
-        // Each field stores 31 bytes (the high byte is always 0 in valid field packing)
-        // Take the last 31 bytes of the 32-byte field representation
-        const bytes31 = fieldBuffer.slice(1, 32);
-        unpacked.push(bytes31);
+    const fields: Fr[] = [];
+    for (let i = 0; i < MESSAGE_CIPHERTEXT_LEN; i++) {
+        fields.push(Fr.fromBuffer(padded.slice(i * 32, (i + 1) * 32)));
     }
-
-    return Buffer.concat(unpacked);
+    return fields;
 }
 
-/**
- * Reconstruct a Grumpkin point from its x-coordinate and sign bit.
- */
+async function unmaskCiphertextFields(maskedFields: Fr[], sApp: Fr): Promise<Fr[]> {
+    return await Promise.all(maskedFields.map(async (field, index) => {
+        const mask = await poseidon2HashWithSeparator([sApp], DomainSeparator.ECDH_FIELD_MASK + index);
+        const unmasked = field.sub(mask);
+        return unmasked.toBigInt() < TWO_POW_248 ? unmasked : Fr.ZERO;
+    }));
+}
+
+function fieldsToBytes(fields: Fr[]): Buffer {
+    return Buffer.concat(fields.map(field => field.toBuffer().slice(1, 32)));
+}
+
 async function reconstructPublicKey(x: Fr, signBit: boolean): Promise<Point | null> {
     try {
-        // Use Point.fromXAndSign to lift x to a point
-        // The sign bit tells us which of the two possible y-coordinates to use
         const point = await Point.fromXAndSign(x, signBit);
         return point;
     } catch (error) {

@@ -269,6 +269,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
                 if (pA !== prevA || pB !== prevB || pC !== prevC) {
                     console.log(`  Rebalancing to prices: A=${pA}, B=${pB}, C=${pC}`);
                     await rebalancePools({
+                        wallet,
                         priceFeed,
                         minter,
                         pools: allPools,
@@ -424,6 +425,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         const result = await proofTree.prove(
             swapEvents.map((e, i) => ({
                 encryptedLog: e.ciphertextBuffer,
+                app: e.app,
                 blockNumber: blockNumbers[i],
                 publicDataTreeRoot: e.publicDataTreeRoot,
             })),

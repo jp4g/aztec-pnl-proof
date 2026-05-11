@@ -1,6 +1,8 @@
 import { poseidon2Hash } from '@aztec/foundation/crypto/poseidon';
 import { Fr } from '@aztec/foundation/curves/bn254';
 import type { ExtendedDirectionalAppTaggingSecret } from '@aztec/stdlib/logs';
+import { computeLogTag } from '@aztec/stdlib/hash';
+import { DomainSeparator } from '@aztec/constants';
 
 /**
  * Utility class for generating tags from tagging secrets.
@@ -20,7 +22,8 @@ export class TagGenerator {
   }
 
   static async generateSingleTag(secret: ExtendedDirectionalAppTaggingSecret, index: number): Promise<Fr> {
-    return await poseidon2Hash([secret.secret, new Fr(index)]);
+    const rawTag = await poseidon2Hash([secret.secret, new Fr(index)]);
+    return await computeLogTag(rawTag, DomainSeparator.UNCONSTRAINED_MSG_LOG_TAG);
   }
 
   static async *generateTagBatches(

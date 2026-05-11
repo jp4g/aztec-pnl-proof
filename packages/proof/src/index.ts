@@ -18,6 +18,7 @@ export { parseSwapCiphertextFields, computeSwapLeaf } from './swap-leaf.js';
 export type { FieldLike } from './swap-leaf.js';
 
 export { decryptLog } from './decrypt.js';
+export type { DecryptedLog } from './decrypt.js';
 
 export { retrieveEncryptedEvents } from './auditor/event-reader.js';
 export type { EventRetrievalResult, EventSecretResult, RetrievedEvent } from './auditor/event-reader.js';

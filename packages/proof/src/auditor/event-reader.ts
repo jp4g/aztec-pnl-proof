@@ -108,6 +108,7 @@ async function processSecret(
 
                 events.push({
                     txHash: logEntry.txHash.toString(),
+                    app: app.toString(),
                     blockNumber,
                     publicDataTreeRoot,
                     ciphertext: encryptedLog.toString('hex'),
@@ -180,6 +181,8 @@ export interface EventSecretResult {
  */
 export interface RetrievedEvent {
     txHash: string;
+    /** App/contract address from the tagging secret used to discover this event */
+    app: string;
     blockNumber: string;
     /** Public data tree root from this event's block header */
     publicDataTreeRoot: string;

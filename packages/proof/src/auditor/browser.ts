@@ -10,10 +10,13 @@ import type {
 
 // Domain separator for PRIVATE_LOG_FIRST_FIELD from @aztec/constants
 const PRIVATE_LOG_FIRST_FIELD_SEPARATOR = 2769976252n;
+const UNCONSTRAINED_MSG_LOG_TAG_SEPARATOR = 1485357192n;
 
 /** A single retrieved event (browser-friendly, no Buffer). */
 export interface BrowserRetrievedEvent {
   txHash: string;
+  /** App/contract address from the tagging secret used to discover this event */
+  app: string;
   blockNumber: string;
   /** Public data tree root from this event's block header */
   publicDataTreeRoot: string;
@@ -35,11 +38,12 @@ function generateTag(secretValue: bigint, index: number): string {
   return "0x" + hash.toString(16).padStart(64, "0");
 }
 
-/** Compute siloed tag: poseidon2HashWithSeparator([app, tag], PRIVATE_LOG_FIRST_FIELD) */
+/** Compute siloed tag: poseidon2HashWithSeparator([app, log_tag], PRIVATE_LOG_FIRST_FIELD) */
 function computeSiloedTag(app: string, tagValue: string): string {
   const appBigInt = BigInt(app);
   const tagBigInt = BigInt(tagValue);
-  const hash = poseidon2Hash([PRIVATE_LOG_FIRST_FIELD_SEPARATOR, appBigInt, tagBigInt]);
+  const logTag = poseidon2Hash([UNCONSTRAINED_MSG_LOG_TAG_SEPARATOR, tagBigInt]);
+  const hash = poseidon2Hash([PRIVATE_LOG_FIRST_FIELD_SEPARATOR, appBigInt, logTag]);
   return "0x" + hash.toString(16).padStart(64, "0");
 }
 
@@ -184,6 +188,7 @@ export async function retrieveEncryptedEvents(
 
           events.push({
             txHash: log.txHash,
+            app,
             blockNumber,
             publicDataTreeRoot,
             ciphertext: ciphertextHex,

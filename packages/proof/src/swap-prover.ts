@@ -5,7 +5,6 @@ import { Barretenberg, UltraHonkBackend } from '@aztec/bb.js';
 import type { CompiledCircuit } from '@aztec/noir-types';
 import type { AztecNode } from '@aztec/aztec.js/node';
 import { decryptLog } from './decrypt';
-import { computeAddressSecret } from '@aztec/stdlib/keys';
 import type { CompleteAddress } from '@aztec/stdlib/contract';
 import { LotStateTree } from './lot-state-tree';
 import { MAX_LOTS, DOM_SEP__PUBLIC_LEAF_SLOT, DOM_SEP__PUBLIC_STORAGE_MAP_SLOT } from './constants';
@@ -44,6 +43,7 @@ export interface SwapData {
 
 export interface SwapProofEvent {
     encryptedLog: Buffer;
+    app: string;
     blockNumber: bigint;
     publicDataTreeRoot: string | Fr;
 }
@@ -83,7 +83,6 @@ export class SwapProver {
     // Lazy-initialized components
     private noir: Noir | null = null;
     private backend: UltraHonkBackend | null = null;
-    private addressSecret: Fr | null = null;
 
     constructor(config: SwapProverConfig) {
         this.config = config;
@@ -115,14 +114,15 @@ export class SwapProver {
             event.encryptedLog,
             this.config.recipientCompleteAddress,
             this.config.ivskM,
+            event.app,
         );
         if (!plaintext) throw new Error('Failed to decrypt swap event');
 
         // Extract token addresses from plaintext
-        const tokenIn = plaintext[2];
-        const tokenOut = plaintext[3];
-        const amountIn = plaintext[4].toBigInt();
-        const amountOut = plaintext[5].toBigInt();
+        const tokenIn = plaintext.plaintext[2];
+        const tokenOut = plaintext.plaintext[3];
+        const amountIn = plaintext.plaintext[4].toBigInt();
+        const amountOut = plaintext.plaintext[5].toBigInt();
 
         log(`  token_in: ${tokenIn}, token_out: ${tokenOut}`);
         log(`  amount_in: ${amountIn}, amount_out: ${amountOut}`);
@@ -174,7 +174,7 @@ export class SwapProver {
 
         // Build circuit inputs
         const circuitInputs = this.prepareCircuitInputs(
-            plaintext, ciphertextFields, event.blockNumber,
+            plaintext.plaintext, ciphertextFields, plaintext.sApp, event.blockNumber,
             initialRoot.toString(),
             sellData.lots, sellData.numLots, sellIndex, sellSiblingPath,
             buyData.lots, buyData.numLots, buyIndex, buySiblingPath,
@@ -209,7 +209,7 @@ export class SwapProver {
             tokenOut: tokenOut.toString(),
             amountIn,
             amountOut,
-            isExactInput: plaintext[6].toBigInt(),
+            isExactInput: plaintext.plaintext[6].toBigInt(),
             blockNumber: event.blockNumber,
         };
 
@@ -233,6 +233,7 @@ export class SwapProver {
     private prepareCircuitInputs(
         plaintext: Fr[],
         ciphertextFields: Fr[],
+        sApp: Fr,
         blockNumber: bigint,
         initialLotStateRoot: string,
         sellLots: Lot[],
@@ -269,7 +270,7 @@ export class SwapProver {
         return {
             plaintext: plaintext.map(f => f.toString()),
             ciphertext: ciphertextFields.map(f => f.toString()),
-            ivsk_app: this.addressSecret!.toString(),
+            s_app: sApp.toString(),
             block_number: new Fr(blockNumber).toString(),
             initial_lot_state_root: initialLotStateRoot,
             sell_lots: formatLots(sellLots),
@@ -372,10 +373,6 @@ export class SwapProver {
         this.noir = new Noir(this.config.circuit);
         await this.noir.init();
         this.backend = new UltraHonkBackend(this.config.circuit.bytecode, this.config.bb);
-
-        const preaddress = await this.config.recipientCompleteAddress.getPreaddress();
-        // Fr from @aztec/foundation vs @aztec/stdlib — structurally identical but nominally distinct
-        this.addressSecret = await computeAddressSecret(preaddress, this.config.ivskM as any) as any;
 
         log('SwapProver initialized');
     }

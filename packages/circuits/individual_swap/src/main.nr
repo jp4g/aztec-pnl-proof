@@ -26,7 +26,7 @@ fn main(
     // Swap event: plaintext fields and ciphertext fields (as they appear on-chain)
     plaintext: [Field; SWAP_PLAINTEXT_FIELDS],
     ciphertext: [Field; MESSAGE_CIPHERTEXT_LEN],
-    ivsk_app: Field,
+    s_app: Field,
     block_number: Field,
 
     // Lot state tree root (before this swap)
@@ -55,7 +55,7 @@ fn main(
     previous_block_number: Field,
 ) -> pub (Field, i64, Field, Field, Field, Field) {
     // 1. Verify encryption (proves plaintext encrypts to on-chain ciphertext)
-    verify_encryption(plaintext, ciphertext, ivsk_app);
+    verify_encryption(plaintext, ciphertext, s_app);
 
     // 2. Compute leaf hash from ciphertext plus audited block state.
     // Must match packages/proof/src/swap-leaf.ts.
