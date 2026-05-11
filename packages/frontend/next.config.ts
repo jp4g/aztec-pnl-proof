@@ -1,6 +1,11 @@
 import type { NextConfig } from "next";
 import { createRequire } from "module";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 const require = createRequire(import.meta.url);
+const frontendDir = dirname(fileURLToPath(import.meta.url));
+const workspaceRoot = resolve(frontendDir, "../..");
 
 const nextConfig: NextConfig = {
   typescript: {
@@ -21,6 +26,12 @@ const nextConfig: NextConfig = {
   transpilePackages: ['@privpnl/proof', '@privpnl/contracts', '@privpnl/circuits'],
   webpack: (config, { isServer, webpack }) => {
     config.resolve = config.resolve ?? {};
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      "@privpnl/proof": resolve(workspaceRoot, "packages/proof/src"),
+      "@privpnl/contracts": resolve(workspaceRoot, "packages/contracts/src"),
+      "@privpnl/circuits": resolve(workspaceRoot, "packages/circuits/ts"),
+    };
 
     if (!isServer) {
       config.resolve.fallback = {

@@ -12,13 +12,15 @@ import { log } from '../logger';
  * - Returns raw encrypted log buffers (ciphertexts) for circuit proving
  * - Only processes INBOUND secrets (events encrypted for the account holder)
  *
- * @param node - Aztec node client
+ * @param node - Aztec node client for private log retrieval
+ * @param historyNode - Aztec node client for historical block headers
  * @param secrets - Exported tagging secrets from a user
  * @param options - Scan options
  * @returns Retrieved encrypted event logs
  */
 export async function retrieveEncryptedEvents(
     node: AztecNode,
+    historyNode: AztecNode,
     secrets: ExportedTaggingSecret[],
     options?: {
         startIndex?: number;
@@ -31,6 +33,7 @@ export async function retrieveEncryptedEvents(
     const batchSize = options?.batchSize ?? 100;
 
     const results: EventSecretResult[] = [];
+    const publicDataRootByBlock = new Map<string, string>();
 
     // Filter to only inbound secrets - we can only decrypt events encrypted for us
     const inboundSecrets = secrets.filter(s => s.direction === 'inbound');
@@ -38,10 +41,12 @@ export async function retrieveEncryptedEvents(
     for (const entry of inboundSecrets) {
         const secretResult = await processSecret(
             node,
+            historyNode,
             entry,
             startIndex,
             maxIndices,
             batchSize,
+            publicDataRootByBlock,
         );
 
         results.push(secretResult);
@@ -59,10 +64,12 @@ export async function retrieveEncryptedEvents(
  */
 async function processSecret(
     node: AztecNode,
+    historyNode: AztecNode,
     entry: ExportedTaggingSecret,
     startIndex: number,
     maxIndices: number,
     batchSize: number,
+    publicDataRootByBlock: Map<string, string>,
 ): Promise<EventSecretResult> {
     const events: RetrievedEvent[] = [];
 
@@ -77,7 +84,7 @@ async function processSecret(
         // Step 2: Silo each tag with the contract address (v4 uses domain-separated hash)
         const app = entry.secret.app;
         const siloedTags = await Promise.all(
-            baseTags.map(baseTag => SiloedTag.compute(new Tag(baseTag), app))
+            baseTags.map(baseTag => SiloedTag.computeFromTagAndApp(new Tag(baseTag), app))
         );
 
         log(`[EventReader] Generated ${siloedTags.length} siloed tags for indices ${index}-${index + count - 1}`);
@@ -96,10 +103,13 @@ async function processSecret(
             for (const logEntry of logs) {
                 // v4: logData is Fr[], concatenate to buffer
                 const encryptedLog = Buffer.concat(logEntry.logData.map(f => f.toBuffer()));
+                const blockNumber = logEntry.blockNumber.toString();
+                const publicDataTreeRoot = await getPublicDataTreeRoot(historyNode, blockNumber, publicDataRootByBlock);
 
                 events.push({
                     txHash: logEntry.txHash.toString(),
-                    blockNumber: logEntry.blockNumber.toString(),
+                    blockNumber,
+                    publicDataTreeRoot,
                     ciphertext: encryptedLog.toString('hex'),
                     ciphertextBuffer: encryptedLog,
                     ciphertextBytes: encryptedLog.length,
@@ -123,6 +133,25 @@ async function processSecret(
         events,
         eventCount: events.length,
     };
+}
+
+
+async function getPublicDataTreeRoot(
+    historyNode: AztecNode,
+    blockNumber: string,
+    cache: Map<string, string>,
+): Promise<string> {
+    const cached = cache.get(blockNumber);
+    if (cached) return cached;
+
+    const header = await historyNode.getBlockHeader(Number(blockNumber) as any);
+    if (!header) {
+        throw new Error(`Block header not found for block ${blockNumber}`);
+    }
+
+    const root = header.state.partial.publicDataTree.root.toString();
+    cache.set(blockNumber, root);
+    return root;
 }
 
 /**
@@ -152,6 +181,8 @@ export interface EventSecretResult {
 export interface RetrievedEvent {
     txHash: string;
     blockNumber: string;
+    /** Public data tree root from this event's block header */
+    publicDataTreeRoot: string;
     /** Encrypted log ciphertext (hex encoded) */
     ciphertext: string;
     /** Raw ciphertext buffer for circuit input */

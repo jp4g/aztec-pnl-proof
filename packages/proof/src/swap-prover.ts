@@ -8,8 +8,9 @@ import { decryptLog } from './decrypt';
 import { computeAddressSecret } from '@aztec/stdlib/keys';
 import type { CompleteAddress } from '@aztec/stdlib/contract';
 import { LotStateTree } from './lot-state-tree';
-import { MAX_LOTS, MESSAGE_CIPHERTEXT_LEN, TAG_SIZE, DOM_SEP__PUBLIC_LEAF_SLOT, DOM_SEP__PUBLIC_STORAGE_MAP_SLOT } from './constants';
+import { MAX_LOTS, DOM_SEP__PUBLIC_LEAF_SLOT, DOM_SEP__PUBLIC_STORAGE_MAP_SLOT } from './constants';
 import { parseSignedHex } from './utils';
+import { parseSwapCiphertextFields } from './swap-leaf';
 import { log, warn } from './logger';
 import type { Lot } from './types';
 
@@ -25,10 +26,8 @@ export interface SwapProverConfig {
     recipientCompleteAddress: CompleteAddress;
     /** Master incoming viewing secret key */
     ivskM: Fr;
-    /** Aztec node client for fetching price witnesses */
-    node: AztecNode;
-    /** Optional archival node for historical state queries (getBlockHeader, getPublicDataWitness) */
-    archivalNode?: AztecNode;
+    /** Aztec node client for historical public data witnesses */
+    historyNode: AztecNode;
 }
 
 /**
@@ -41,6 +40,12 @@ export interface SwapData {
     amountOut: bigint;
     isExactInput: bigint;
     blockNumber: bigint;
+}
+
+export interface SwapProofEvent {
+    encryptedLog: Buffer;
+    blockNumber: bigint;
+    publicDataTreeRoot: string | Fr;
 }
 
 /**
@@ -75,11 +80,6 @@ export interface SwapProofResult {
  */
 export class SwapProver {
     private config: SwapProverConfig;
-    /** Node used for historical state queries (archival if provided, otherwise default) */
-    private get historyNode(): AztecNode {
-        return this.config.archivalNode ?? this.config.node;
-    }
-
     // Lazy-initialized components
     private noir: Noir | null = null;
     private backend: UltraHonkBackend | null = null;
@@ -92,7 +92,7 @@ export class SwapProver {
     /**
      * Prove a single swap event with multi-token lot state tree.
      *
-     * @param event - Encrypted swap event
+     * @param event - Encrypted swap event with audited block number and public data tree root
      * @param lotStateTree - Multi-token lot state tree (mutated in-place)
      * @param priceFeedAddress - PriceFeed contract address
      * @param priceFeedAssetsSlot - Storage slot of the PriceFeed `assets` map
@@ -100,7 +100,7 @@ export class SwapProver {
      * @returns Proof with signed PnL (lot state tree is updated in-place)
      */
     async prove(
-        event: { encryptedLog: Buffer; blockNumber: bigint },
+        event: SwapProofEvent,
         lotStateTree: LotStateTree,
         priceFeedAddress: Fr,
         priceFeedAssetsSlot: Fr,
@@ -130,11 +130,9 @@ export class SwapProver {
         // Ensure both tokens have slots in the tree
         const sellIndex = lotStateTree.assignSlot(tokenIn);
         const buyIndex = lotStateTree.assignSlot(tokenOut);
-
-        // Get block header for public data tree root
-        const header = await this.historyNode.getBlockHeader(Number(event.blockNumber) as any);
-        if (!header) throw new Error(`Block header not found for block ${event.blockNumber}`);
-        const publicDataTreeRoot = header.state.partial.publicDataTree.root;
+        const publicDataTreeRoot = event.publicDataTreeRoot instanceof Fr
+            ? event.publicDataTreeRoot
+            : Fr.fromString(event.publicDataTreeRoot);
 
         // Get price witnesses for BOTH tokens (independent RPC reads)
         const [sellPriceWitness, buyPriceWitness] = await Promise.all([
@@ -172,7 +170,7 @@ export class SwapProver {
         await lotStateTree.setLots(tokenOut, newBuyLots, newBuyNum);
 
         // Parse ciphertext into fields (matching on-chain representation)
-        const ciphertextFields = this.parseCiphertextFields(event.encryptedLog);
+        const ciphertextFields = parseSwapCiphertextFields(event.encryptedLog);
 
         // Build circuit inputs
         const circuitInputs = this.prepareCircuitInputs(
@@ -336,23 +334,6 @@ export class SwapProver {
         return { lots: compacted, numLots: newNumLots };
     }
 
-    /**
-     * Parse an encrypted log buffer into ciphertext fields (matching on-chain representation).
-     * Skips the 32-byte tag, then reads 15 x 32-byte chunks as Fr fields.
-     */
-    private parseCiphertextFields(encryptedLog: Buffer): Fr[] {
-        const ciphertextWithoutTag = encryptedLog.slice(TAG_SIZE);
-        const paddedBuffer = Buffer.alloc(MESSAGE_CIPHERTEXT_LEN * 32);
-        ciphertextWithoutTag.copy(paddedBuffer, 0, 0, Math.min(ciphertextWithoutTag.length, paddedBuffer.length));
-
-        const fields: Fr[] = [];
-        for (let i = 0; i < MESSAGE_CIPHERTEXT_LEN; i++) {
-            const chunk = paddedBuffer.slice(i * 32, (i + 1) * 32);
-            fields.push(Fr.fromBuffer(chunk));
-        }
-        return fields;
-    }
-
     private async getPriceWitness(
         priceFeedAddress: Fr,
         priceFeedAssetsSlot: Fr,
@@ -364,7 +345,7 @@ export class SwapProver {
             [priceFeedAddress, tokenSlot],
             DOM_SEP__PUBLIC_LEAF_SLOT,
         );
-        const witness = await this.historyNode.getPublicDataWitness(
+        const witness = await this.config.historyNode.getPublicDataWitness(
             Number(blockNumber) as any, treeIndex,
         );
         if (!witness) throw new Error(`Failed to get price witness for token ${tokenAddress}`);

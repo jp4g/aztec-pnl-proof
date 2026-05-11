@@ -57,8 +57,10 @@ fn main(
     // 1. Verify encryption (proves plaintext encrypts to on-chain ciphertext)
     verify_encryption(plaintext, ciphertext, ivsk_app);
 
-    // 2. Compute leaf hash from ciphertext (auditor can verify against on-chain logs)
-    let leaf = poseidon2_hash_with_separator(ciphertext, 0);
+    // 2. Compute leaf hash from ciphertext plus audited block state.
+    // Must match packages/proof/src/swap-leaf.ts.
+    let leaf_preimage = ciphertext.concat([block_number, public_data_tree_root]);
+    let leaf = poseidon2_hash_with_separator(leaf_preimage, 0);
 
     // 3. Extract swap values from plaintext
     // Layout: [metadata, randomness, token_in, token_out, amount_in, amount_out, is_exact_input]

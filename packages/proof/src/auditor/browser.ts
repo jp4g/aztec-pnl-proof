@@ -15,6 +15,8 @@ const PRIVATE_LOG_FIRST_FIELD_SEPARATOR = 2769976252n;
 export interface BrowserRetrievedEvent {
   txHash: string;
   blockNumber: string;
+  /** Public data tree root from this event's block header */
+  publicDataTreeRoot: string;
   /** Encrypted log ciphertext (hex encoded, no 0x prefix) */
   ciphertext: string;
   logIndex: number;
@@ -58,12 +60,53 @@ async function getPrivateLogsByTags(nodeUrl: string, siloedTags: string[]): Prom
     throw new Error(`Aztec node returned ${res.status}: ${await res.text()}`);
   }
 
-  const json = await res.json();
+  const json: any = await res.json();
   if (json.error) {
     throw new Error(`Aztec node RPC error: ${json.error.message ?? JSON.stringify(json.error)}`);
   }
 
   return json.result;
+}
+
+/** Fetch a historical block header root from an Aztec node JSON-RPC endpoint. */
+async function getPublicDataTreeRoot(
+  historyNodeUrl: string,
+  blockNumber: string,
+  cache: Map<string, string>,
+): Promise<string> {
+  const cached = cache.get(blockNumber);
+  if (cached) return cached;
+
+  const res = await fetch(historyNodeUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "node_getBlockHeader",
+      params: [Number(blockNumber)],
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Aztec history node returned ${res.status}: ${await res.text()}`);
+  }
+
+  const json: any = await res.json();
+  if (json.error) {
+    throw new Error(`Aztec history node RPC error: ${json.error.message ?? JSON.stringify(json.error)}`);
+  }
+  if (!json.result) {
+    throw new Error(`Block header not found for block ${blockNumber}`);
+  }
+
+  const root = json.result?.state?.partial?.publicDataTree?.root;
+  if (typeof root !== "string") {
+    throw new Error(`Block header for block ${blockNumber} is missing state.partial.publicDataTree.root`);
+  }
+
+  cache.set(blockNumber, root);
+  return root;
 }
 
 /**
@@ -86,11 +129,13 @@ function parseAppFromSecret(secretStr: string): string {
  * Suitable for browser/server environments (Next.js routes, etc.).
  *
  * @param nodeUrl - Aztec node JSON-RPC endpoint URL
+ * @param historyNodeUrl - Aztec node JSON-RPC endpoint URL with historical block headers
  * @param secrets - Serialized exported tagging secrets
  * @param options - Optional scan parameters
  */
 export async function retrieveEncryptedEvents(
   nodeUrl: string,
+  historyNodeUrl: string,
   secrets: SerializedExportedTaggingSecret[],
   options?: {
     startIndex?: number;
@@ -104,6 +149,7 @@ export async function retrieveEncryptedEvents(
 
   const inboundSecrets = secrets.filter((s) => s.direction === "inbound");
   const events: BrowserRetrievedEvent[] = [];
+  const publicDataRootByBlock = new Map<string, string>();
 
   for (const entry of inboundSecrets) {
     // secret is "0xSECRET:0xAPP" (ExtendedDirectionalAppTaggingSecret)
@@ -133,10 +179,13 @@ export async function retrieveEncryptedEvents(
               return hex.padStart(64, "0");
             })
             .join("");
+          const blockNumber = String(log.blockNumber);
+          const publicDataTreeRoot = await getPublicDataTreeRoot(historyNodeUrl, blockNumber, publicDataRootByBlock);
 
           events.push({
             txHash: log.txHash,
-            blockNumber: String(log.blockNumber),
+            blockNumber,
+            publicDataTreeRoot,
             ciphertext: ciphertextHex,
             logIndex: 0,
             tagIndex: index + i,

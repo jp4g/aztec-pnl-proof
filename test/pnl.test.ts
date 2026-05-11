@@ -8,13 +8,13 @@ import { TokenContract } from '@aztec/noir-contracts.js/Token';
 import { PriceFeedContract } from '@privpnl/contracts/PriceFeed';
 import { AMMContract } from '@privpnl/contracts';
 import { precision } from "@privpnl/proof/utils";
-import { MESSAGE_CIPHERTEXT_LEN, TAG_SIZE } from '@privpnl/proof/constants';
 import { EmbeddedWallet } from "@aztec/wallets/embedded";
 import { Barretenberg } from '@aztec/bb.js';
 import type { CompiledCircuit } from '@aztec/noir-types';
 import { Fr } from '@aztec/foundation/curves/bn254';
-import { poseidon2Hash, poseidon2HashWithSeparator } from '@aztec/foundation/crypto/poseidon';
+import { poseidon2Hash } from '@aztec/foundation/crypto/poseidon';
 import { retrieveEncryptedEvents } from '@privpnl/proof/auditor';
+import { computeSwapLeaf, parseSwapCiphertextFields } from '@privpnl/proof/swap-leaf';
 import { SwapProver } from '@privpnl/proof/swap-prover';
 import { SwapProofTree } from '@privpnl/proof/swap-proof-tree';
 import { LotStateTree } from '@privpnl/proof/lot-state-tree';
@@ -33,7 +33,7 @@ const { AZTEC_NODE_URL = "http://localhost:8080", AZTEC_ARCHIVAL_NODE_URL } = pr
 describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 86_400_000 }, () => {
 
     let node: AztecNode;
-    let archivalNode: AztecNode | undefined;
+    let historyNode: AztecNode;
     let wallet: EmbeddedWallet;
     let addresses: AztecAddress[];
 
@@ -110,10 +110,11 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
 
         node = createAztecNodeClient(AZTEC_NODE_URL);
         console.log(`Connected to Aztec node at "${AZTEC_NODE_URL}"`);
-        archivalNode = AZTEC_ARCHIVAL_NODE_URL
-            ? createAztecNodeClient(AZTEC_ARCHIVAL_NODE_URL)
-            : undefined;
-        if (archivalNode) console.log(`Using archival node at "${AZTEC_ARCHIVAL_NODE_URL}"`);
+        if (!AZTEC_ARCHIVAL_NODE_URL) {
+            throw new Error('AZTEC_ARCHIVAL_NODE_URL is required for historical block headers and public data witnesses');
+        }
+        historyNode = createAztecNodeClient(AZTEC_ARCHIVAL_NODE_URL);
+        console.log(`Using archival node at "${AZTEC_ARCHIVAL_NODE_URL}"`);
 
         const nodeInfo = await node.getNodeInfo();
         const isDevnet = nodeInfo.l1ChainId === 11155111;
@@ -326,7 +327,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
             [poolAB.address, poolAC.address, poolBC.address],
             [swapper],
         );
-        const events = await retrieveEncryptedEvents(node, taggingSecrets);
+        const events = await retrieveEncryptedEvents(node, historyNode, taggingSecrets);
         console.log(`  Found ${events.totalEvents} events`);
         expect(events.totalEvents).toBeGreaterThanOrEqual(6);
 
@@ -336,6 +337,9 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
             .sort((a, b) => Number(a.blockNumber) - Number(b.blockNumber));
         const swapEvents = allEvents.slice(0, 6);
         const blockNumbers = swapEvents.map(e => BigInt(e.blockNumber));
+        for (const event of swapEvents) {
+            expect(event.publicDataTreeRoot).toBeTruthy();
+        }
         console.log(`  Block numbers: ${blockNumbers.join(', ')}`);
 
         // ========================================
@@ -396,8 +400,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
             circuit: individualSwapCircuit as CompiledCircuit,
             recipientCompleteAddress,
             ivskM,
-            node,
-            archivalNode,
+            historyNode,
         });
 
         const proofTree = new SwapProofTree({
@@ -422,6 +425,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
             swapEvents.map((e, i) => ({
                 encryptedLog: e.ciphertextBuffer,
                 blockNumber: blockNumbers[i],
+                publicDataTreeRoot: e.publicDataTreeRoot,
             })),
             lotStateTree,
             priceFeed.address.toField(),
@@ -468,18 +472,15 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         // Verify block number is the last swap's block
         expect(result.publicInputs.blockNumber).toBe(blockNumbers[5]);
 
-        // Verify merkle root (leaves are hashes of ciphertext fields)
+        // Verify merkle root (leaves bind ciphertext fields, block number, and public data tree root)
         const expectedLeaves: Fr[] = [];
         for (let i = 0; i < 6; i++) {
-            // Parse ciphertext into fields (skip tag, then MESSAGE_CIPHERTEXT_LEN x 32-byte chunks)
-            const buf = swapEvents[i].ciphertextBuffer.slice(TAG_SIZE);
-            const padded = Buffer.alloc(MESSAGE_CIPHERTEXT_LEN * 32);
-            buf.copy(padded, 0, 0, Math.min(buf.length, padded.length));
-            const ctFields: Fr[] = [];
-            for (let f = 0; f < MESSAGE_CIPHERTEXT_LEN; f++) {
-                ctFields.push(Fr.fromBuffer(padded.slice(f * 32, (f + 1) * 32)));
-            }
-            expectedLeaves.push(await poseidon2HashWithSeparator(ctFields, 0));
+            const ctFields = parseSwapCiphertextFields(swapEvents[i].ciphertextBuffer);
+            expectedLeaves.push(await computeSwapLeaf(
+                ctFields,
+                blockNumbers[i],
+                swapEvents[i].publicDataTreeRoot,
+            ));
         }
 
         // 6 leaves -> binary tree:

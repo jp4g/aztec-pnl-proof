@@ -1,12 +1,67 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { copyFile, readFile, writeFile, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 
 const FRONTEND_CIRCUITS_DIR = join(process.cwd(), 'packages', 'frontend', 'public', 'circuits');
 
-function run(cmd: string, cwd?: string) {
-  console.log(`$ ${cmd}`);
-  execSync(cmd, { cwd, stdio: 'inherit' });
+type BuildMode = 'all' | 'contracts' | 'circuits';
+
+function run(cmd: string, args: string[], cwd?: string) {
+  console.log(`$ ${[cmd, ...args].join(' ')}`);
+  execFileSync(cmd, args, { cwd, stdio: 'inherit', env: getToolchainEnv() });
+}
+
+function getAztecToolPath(tool: 'aztec' | 'nargo') {
+  const home = process.env.HOME;
+  if (!home) {
+    throw new Error('HOME is not set; cannot locate aztec-up toolchain');
+  }
+
+  const aztecVersion = getAztecVersionFromRcFile();
+  if (!aztecVersion) {
+    throw new Error('Missing .aztecrc; run `aztec-up use <version>` and commit the repo .aztecrc');
+  }
+
+  const aztecRoot = join(home, '.aztec', 'versions', aztecVersion);
+  const toolPath = tool === 'aztec'
+    ? join(aztecRoot, 'node_modules', '.bin', 'aztec')
+    : join(aztecRoot, 'bin', 'nargo');
+
+  if (!existsSync(toolPath)) {
+    throw new Error(`Missing ${tool} for Aztec ${aztecVersion}. Run \`aztec-up install ${aztecVersion}\`.`);
+  }
+
+  return toolPath;
+}
+
+function getToolchainEnv() {
+  const home = process.env.HOME;
+  const aztecVersion = getAztecVersionFromRcFile();
+  if (!home || !aztecVersion) {
+    return process.env;
+  }
+
+  const aztecRoot = join(home, '.aztec', 'versions', aztecVersion);
+  const toolDirs = [
+    join(aztecRoot, 'bin'),
+    join(aztecRoot, 'node_modules', '.bin'),
+  ].filter(path => existsSync(path));
+
+  return {
+    ...process.env,
+    PATH: [...toolDirs, process.env.PATH ?? ''].join(delimiter),
+  };
+}
+
+function getAztecVersionFromRcFile() {
+  const aztecRcPath = join(process.cwd(), '.aztecrc');
+  if (!existsSync(aztecRcPath)) {
+    return undefined;
+  }
+
+  const version = readFileSync(aztecRcPath, 'utf-8').trim();
+  return version || undefined;
 }
 
 async function copyFileWithLog(src: string, dest: string) {
@@ -77,17 +132,21 @@ async function computeVkeys(circuitsDir: string) {
   bb.destroy();
 }
 
-async function postinstall() {
-  const contractsDir = join(process.cwd(), 'packages', 'contracts');
-  const circuitsDir = join(process.cwd(), 'packages', 'circuits');
+async function compileContracts(contractsDir: string) {
+  const aztec = getAztecToolPath('aztec');
 
   // --- Compile AMM contract + codegen ---
   console.log('Compiling AMM contract...');
-  run('aztec compile', join(contractsDir, 'amm_contract'));
+  run(aztec, ['compile'], join(contractsDir, 'amm_contract'));
   console.log('✓ AMM contract compiled');
 
   console.log('Generating AMM TS artifact...');
-  run(`aztec codegen ${join(contractsDir, 'amm_contract', 'target')} -o ${join(contractsDir, 'src')}/`);
+  run(aztec, [
+    'codegen',
+    join(contractsDir, 'amm_contract', 'target'),
+    '-o',
+    `${join(contractsDir, 'src')}/`,
+  ]);
   console.log('✓ AMM artifact generated');
 
   // Copy contract artifact + patch import
@@ -103,11 +162,16 @@ async function postinstall() {
 
   // --- Compile PriceFeed contract + codegen ---
   console.log('Compiling PriceFeed contract...');
-  run('aztec compile', join(contractsDir, 'price_feed_contract'));
+  run(aztec, ['compile'], join(contractsDir, 'price_feed_contract'));
   console.log('✓ PriceFeed contract compiled');
 
   console.log('Generating PriceFeed TS artifact...');
-  run(`aztec codegen ${join(contractsDir, 'price_feed_contract', 'target')} -o ${join(contractsDir, 'src')}/`);
+  run(aztec, [
+    'codegen',
+    join(contractsDir, 'price_feed_contract', 'target'),
+    '-o',
+    `${join(contractsDir, 'src')}/`,
+  ]);
   console.log('✓ PriceFeed artifact generated');
 
   // Copy contract artifact + patch import
@@ -120,10 +184,14 @@ async function postinstall() {
     '../price_feed_contract/target/price_feed_contract-PriceFeed.json',
     './PriceFeed.json',
   );
+}
+
+async function compileCircuits(circuitsDir: string) {
+  const nargo = getAztecToolPath('nargo');
 
   // --- Compile all Noir circuits (workspace) ---
   console.log('Compiling Noir circuits...');
-  run('nargo compile', circuitsDir);
+  run(nargo, ['compile'], circuitsDir);
   console.log('✓ All circuits compiled');
 
   // Copy circuit artifacts to ts/ and frontend public dir
@@ -143,6 +211,29 @@ async function postinstall() {
   console.log('Computing verification keys...');
   await computeVkeys(circuitsDir);
   console.log('✓ Verification keys computed');
+}
+
+function getBuildMode(): BuildMode {
+  const mode = process.argv[2] ?? 'all';
+  if (mode === 'all' || mode === 'contracts' || mode === 'circuits') {
+    return mode;
+  }
+
+  throw new Error(`Unknown build mode "${mode}". Expected all, contracts, or circuits.`);
+}
+
+async function postinstall() {
+  const mode = getBuildMode();
+  const contractsDir = join(process.cwd(), 'packages', 'contracts');
+  const circuitsDir = join(process.cwd(), 'packages', 'circuits');
+
+  if (mode === 'all' || mode === 'contracts') {
+    await compileContracts(contractsDir);
+  }
+
+  if (mode === 'all' || mode === 'circuits') {
+    await compileCircuits(circuitsDir);
+  }
 }
 
 if (process.env.VERCEL) {

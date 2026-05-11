@@ -19,7 +19,13 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@privpnl/proof": ["../../packages/proof/src/index.ts"],
+      "@privpnl/proof/*": ["../../packages/proof/src/*"],
+      "@privpnl/contracts": ["../../packages/contracts/src/index.ts"],
+      "@privpnl/contracts/*": ["../../packages/contracts/src/*"],
+      "@privpnl/circuits": ["../../packages/circuits/ts/artifacts.ts"],
+      "@privpnl/circuits/*": ["../../packages/circuits/ts/*"]
     }
   },
   "include": [

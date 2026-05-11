@@ -133,6 +133,7 @@ export function useProveFlow() {
       const encryptedEvents = eventsData.events as Array<{
         txHash: string;
         blockNumber: string;
+        publicDataTreeRoot: string;
         ciphertext: string;
         logIndex: number;
       }>;
@@ -146,6 +147,12 @@ export function useProveFlow() {
           totalEvents: 0,
         }));
         return;
+      }
+
+      for (const evt of encryptedEvents) {
+        if (!evt.publicDataTreeRoot) {
+          throw new Error(`Audit event ${evt.txHash} is missing publicDataTreeRoot`);
+        }
       }
 
       const totalSwaps = encryptedEvents.length;
@@ -223,19 +230,18 @@ export function useProveFlow() {
       );
 
       const archivalNodeUrl = process.env.NEXT_PUBLIC_AZTEC_ARCHIVAL_NODE_URL;
-      let archivalNode;
-      if (archivalNodeUrl) {
-        const { createAztecNodeClient } = await import("@aztec/aztec.js/node");
-        archivalNode = createAztecNodeClient(archivalNodeUrl);
+      if (!archivalNodeUrl) {
+        throw new Error("NEXT_PUBLIC_AZTEC_ARCHIVAL_NODE_URL is required for proof generation");
       }
+      const { createAztecNodeClient } = await import("@aztec/aztec.js/node");
+      const historyNode = createAztecNodeClient(archivalNodeUrl);
 
       const prover = new SwapProver({
         bb,
         circuit: individualSwapJson,
         recipientCompleteAddress: completeAddress,
         ivskM,
-        node: wallet.getNode(),
-        archivalNode,
+        historyNode,
       });
 
       // Initialize lot state tree with USDC lot from initial mint
@@ -262,6 +268,7 @@ export function useProveFlow() {
       const swapEvents = encryptedEvents.map((e) => ({
         encryptedLog: Buffer.from(e.ciphertext, "hex"),
         blockNumber: BigInt(e.blockNumber),
+        publicDataTreeRoot: e.publicDataTreeRoot,
       }));
 
       // --- Step 7: Full SwapProofTree + Tax ---

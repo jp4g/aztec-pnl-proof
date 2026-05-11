@@ -9,7 +9,7 @@ A user decrypts their private swap events, proves each swap's encrypted log matc
 | Public Output | Description |
 |---|---|
 | `pnl` (i64) | Net realized PnL across all swaps (signed, can be gain or loss) |
-| `root` | Merkle root of swap event leaf hashes (binds proof to on-chain logs) |
+| `root` | Merkle root of swap event leaf hashes (binds proof to on-chain logs and block state roots) |
 | `price_feed_address` | Oracle contract used for all price lookups |
 | `block_number` | Latest block in the batch |
 | `initial_lot_state_root` | Portfolio state before the batch |
@@ -42,7 +42,7 @@ A user decrypts their private swap events, proves each swap's encrypted log matc
     |         Individual Swap Circuit             |
     |                                             |
     |  1. Verify AES encryption                   |
-    |  2. Hash ciphertext -> leaf                 |
+    |  2. Hash ciphertext + block state -> leaf   |
     |  3. Read oracle prices (sell + buy token)   |
     |  4. FIFO consume sell lots -> PnL           |
     |  5. Add buy lot at oracle price             |
@@ -162,7 +162,7 @@ previous_block_number: Field        // for chronological ordering
 
 ```
 (
-  leaf:                    Field   // poseidon2_hash(ciphertext, separator=0)
+  leaf:                    Field   // poseidon2_hash(ciphertext, block_number, public_data_tree_root)
   pnl:                    i64     // signed realized PnL from sell-side FIFO
   remaining_lot_state_root: Field // lot tree root after this swap
   initial_lot_state_root:  Field  // lot tree root before this swap
@@ -181,8 +181,8 @@ previous_block_number: Field        // for chronological ordering
    -> Proves plaintext matches the on-chain encrypted log
 
 2. COMPUTE LEAF
-   leaf = poseidon2_hash_with_separator(ciphertext, 0)
-   -> Auditor can independently hash on-chain logs to verify
+   leaf = poseidon2_hash_with_separator(ciphertext || block_number || public_data_tree_root, 0)
+   -> Auditor can independently hash on-chain logs and block state roots to verify
 
 3. EXTRACT SWAP DATA
    token_in  = plaintext[2]    // sold token address
@@ -274,10 +274,10 @@ Circuit flow:
   7. Assert encrypted bytes match ciphertext bytes
 
 Leaf hash:
-  leaf = poseidon2_hash_with_separator(all 17 ciphertext fields, 0)
+  leaf = poseidon2_hash_with_separator(ciphertext fields || block_number || public_data_tree_root, 0)
 ```
 
-The leaf hash uses the **ciphertext fields** (not plaintext), so an auditor who can see the on-chain encrypted logs can independently verify which events were included in the proof by hashing the logs and checking against the merkle root.
+The leaf hash uses the **ciphertext fields** (not plaintext), the event block number, and the public data tree root for that block. An auditor who can see the on-chain encrypted logs and historical block headers can independently verify which events and block-state snapshots were included in the proof by hashing them and checking against the merkle root.
 
 ---
 
@@ -335,7 +335,7 @@ The first proof's `initial_lot_state_root` represents the starting portfolio (em
 |---|---|---|
 | Net PnL (signed) | Yes | The whole point |
 | Oracle contract address | Yes | Verifier can assess trust |
-| Swap merkle root | Yes | Commits to the swap set |
+| Swap merkle root | Yes | Commits to the swap set, block numbers, and public data tree roots |
 | Block range | Yes | First and last block numbers |
 | Lot state roots | Yes | Opaque hashes, reveal nothing about contents |
 | Number of swaps | No | Uniform proof structure |

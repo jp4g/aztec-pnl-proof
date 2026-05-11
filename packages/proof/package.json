@@ -8,6 +8,7 @@
     ".": "./src/index.ts",
     "./swap-prover": "./src/swap-prover.ts",
     "./swap-proof-tree": "./src/swap-proof-tree.ts",
+    "./swap-leaf": "./src/swap-leaf.ts",
     "./tax-prover": "./src/tax-prover.ts",
     "./lot-state-tree": "./src/lot-state-tree.ts",
     "./auditor": "./src/auditor/index.ts",

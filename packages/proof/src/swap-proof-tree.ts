@@ -3,7 +3,7 @@ import { Noir } from '@aztec/noir-noir_js';
 import { Barretenberg, UltraHonkBackend } from '@aztec/bb.js';
 import type { CompiledCircuit } from '@aztec/noir-types';
 import { getZeroHashes } from './imt';
-import type { SwapProver, SwapProofResult, SwapData } from './swap-prover';
+import type { SwapProver, SwapProofResult, SwapData, SwapProofEvent } from './swap-prover';
 import { LotStateTree } from './lot-state-tree';
 import { parseSignedHex, proofBytesToFields } from './utils';
 import { log } from './logger';
@@ -156,14 +156,14 @@ export class SwapProofTree {
      * Events must be sorted chronologically. The lot state tree is mutated
      * in-place through each sequential proof.
      *
-     * @param events - Encrypted swap events sorted by block number
+     * @param events - Encrypted swap events with audited block numbers and public data tree roots
      * @param lotStateTree - Multi-token lot state tree (mutated in-place)
      * @param priceFeedAddress - PriceFeed contract address
      * @param priceFeedAssetsSlot - Storage slot of the PriceFeed `assets` map
      * @returns Aggregated proof with merkle root and signed PnL
      */
     async prove(
-        events: { encryptedLog: Buffer; blockNumber: bigint }[],
+        events: SwapProofEvent[],
         lotStateTree: LotStateTree,
         priceFeedAddress: Fr,
         priceFeedAssetsSlot: Fr,
