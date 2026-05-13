@@ -19,6 +19,7 @@
  */
 
 import { AztecAddress } from '@aztec/aztec.js/addresses';
+import { NO_FROM } from '@aztec/aztec.js/account';
 import { PriceFeedContract } from '@privpnl/contracts/PriceFeed';
 import { TokenContract } from '@privpnl/contracts/Token';
 import { AMMContract } from '@privpnl/contracts/AMM';
@@ -26,6 +27,7 @@ import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { SponsoredFeePaymentMethod } from '@aztec/aztec.js/fee';
 import { Fr } from '@aztec/foundation/curves/bn254';
+import { GrumpkinScalar } from '@aztec/foundation/curves/grumpkin';
 import { BatchCall, getContractInstanceFromInstantiationParams } from '@aztec/aztec.js/contracts';
 import { SponsoredFPCContract } from '@aztec/noir-contracts.js/SponsoredFPC';
 import { SPONSORED_FPC_SALT } from '@aztec/constants';
@@ -146,12 +148,13 @@ async function setup() {
         // Deploy 3 fresh accounts: admin + 2 demo accounts
         for (let i = 0; i < 3; i++) {
             const secret = Fr.random();
-            const signingKey = Fr.random();
+            const signingKey = GrumpkinScalar.random();
             const manager = await wallet.createSchnorrAccount(secret, Fr.ZERO, signingKey);
             const deployMethod = await manager.getDeployMethod();
             console.log(`  Deploying account ${i} at ${manager.address}...`);
+            await deployMethod.simulate({ from: NO_FROM });
             await deployMethod.send({
-                from: AztecAddress.ZERO,
+                from: NO_FROM,
                 fee: { paymentMethod: fpcPaymentMethod },
                 skipClassPublication: i !== 0,
                 wait: { timeout: 600 },

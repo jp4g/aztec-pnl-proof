@@ -3,7 +3,7 @@ import { Noir } from '@aztec/noir-noir_js';
 import { Barretenberg, UltraHonkBackend } from '@aztec/bb.js';
 import type { CompiledCircuit } from '@aztec/noir-types';
 import { getZeroHashes } from './imt';
-import type { SwapProver, SwapProofResult, SwapData } from './swap-prover';
+import type { SwapEventInput, SwapProver, SwapProofResult, SwapData } from './swap-prover';
 import { LotStateTree } from './lot-state-tree';
 import { parseSignedHex, proofBytesToFields } from './utils';
 import { log } from './logger';
@@ -141,10 +141,10 @@ export class SwapProofTree {
         };
     }
 
-    private saveDebug(): void {
+    private async saveDebug(): Promise<void> {
         if (!this.debugData || !this.config.debugOutputPath) return;
-        if (typeof globalThis.process !== 'undefined') {
-            const { writeFileSync } = require('fs') as typeof import('fs');
+        if (typeof globalThis.process !== 'undefined' && typeof globalThis.window === 'undefined') {
+            const { writeFileSync } = await import(/* webpackIgnore: true */ 'node:fs');
             writeFileSync(this.config.debugOutputPath, JSON.stringify(this.debugData, null, 2));
             log(`[debug] Saved proof tree data to ${this.config.debugOutputPath}`);
         }
@@ -163,7 +163,7 @@ export class SwapProofTree {
      * @returns Aggregated proof with merkle root and signed PnL
      */
     async prove(
-        events: { encryptedLog: Buffer; blockNumber: bigint }[],
+        events: SwapEventInput[],
         lotStateTree: LotStateTree,
         priceFeedAddress: Fr,
         priceFeedAssetsSlot: Fr,
@@ -218,7 +218,7 @@ export class SwapProofTree {
                     proofAsFields,
                     publicInputs: pubInputs,
                 });
-                this.saveDebug();
+                await this.saveDebug();
             }
 
             // Chain block number to next proof
@@ -397,7 +397,7 @@ export class SwapProofTree {
                 proof: Buffer.from(proof.proof).toString('hex'),
                 publicInputs: combinedPublicInputs,
             });
-            this.saveDebug();
+            await this.saveDebug();
         }
 
         return {

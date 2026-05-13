@@ -13,6 +13,16 @@ import { parseSignedHex } from './utils';
 import { log, warn } from './logger';
 import type { Lot } from './types';
 
+export interface SwapEventInput {
+    encryptedLog: Buffer;
+    blockNumber: bigint;
+    contractAddress: string | Fr;
+}
+
+function contractAddressToField(contractAddress: string | Fr): Fr {
+    return typeof contractAddress === 'string' ? Fr.fromString(contractAddress) : contractAddress;
+}
+
 /**
  * Configuration for SwapProver
  */
@@ -100,7 +110,7 @@ export class SwapProver {
      * @returns Proof with signed PnL (lot state tree is updated in-place)
      */
     async prove(
-        event: { encryptedLog: Buffer; blockNumber: bigint },
+        event: SwapEventInput,
         lotStateTree: LotStateTree,
         priceFeedAddress: Fr,
         priceFeedAssetsSlot: Fr,
@@ -115,6 +125,7 @@ export class SwapProver {
             event.encryptedLog,
             this.config.recipientCompleteAddress,
             this.config.ivskM,
+            event.contractAddress,
         );
         if (!plaintext) throw new Error('Failed to decrypt swap event');
 
@@ -182,6 +193,7 @@ export class SwapProver {
             buyData.lots, buyData.numLots, buyIndex, buySiblingPath,
             priceFeedAddress, priceFeedAssetsSlot,
             publicDataTreeRoot, sellPriceWitness, buyPriceWitness,
+            contractAddressToField(event.contractAddress),
             previousBlockNumber,
         );
 
@@ -250,6 +262,7 @@ export class SwapProver {
         publicDataTreeRoot: Fr,
         sellPriceWitness: any,
         buyPriceWitness: any,
+        contractAddress: Fr,
         previousBlockNumber: bigint,
     ): Record<string, unknown> {
         // Format lot arrays (pad to MAX_LOTS)
@@ -272,6 +285,7 @@ export class SwapProver {
             plaintext: plaintext.map(f => f.toString()),
             ciphertext: ciphertextFields.map(f => f.toString()),
             ivsk_app: this.addressSecret!.toString(),
+            contract_address: contractAddress.toString(),
             block_number: new Fr(blockNumber).toString(),
             initial_lot_state_root: initialLotStateRoot,
             sell_lots: formatLots(sellLots),

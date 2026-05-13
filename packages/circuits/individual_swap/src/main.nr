@@ -27,6 +27,7 @@ fn main(
     plaintext: [Field; SWAP_PLAINTEXT_FIELDS],
     ciphertext: [Field; MESSAGE_CIPHERTEXT_LEN],
     ivsk_app: Field,
+    contract_address: Field,
     block_number: Field,
 
     // Lot state tree root (before this swap)
@@ -55,7 +56,7 @@ fn main(
     previous_block_number: Field,
 ) -> pub (Field, i64, Field, Field, Field, Field) {
     // 1. Verify encryption (proves plaintext encrypts to on-chain ciphertext)
-    verify_encryption(plaintext, ciphertext, ivsk_app);
+    verify_encryption(plaintext, ciphertext, ivsk_app, contract_address);
 
     // 2. Compute leaf hash from ciphertext (auditor can verify against on-chain logs)
     let leaf = poseidon2_hash_with_separator(ciphertext, 0);

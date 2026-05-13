@@ -1,7 +1,10 @@
 import type { AztecNode } from "@aztec/aztec.js/node";
-import { TagGenerator } from "./tag-generator";
 import type { ExportedTaggingSecret } from "./types";
-import { Tag, SiloedTag } from "@aztec/stdlib/logs";
+import { Fr } from "@aztec/foundation/curves/bn254";
+import { poseidon2Hash, poseidon2HashWithSeparator } from "@aztec/foundation/crypto/poseidon";
+import { SiloedTag } from "@aztec/stdlib/logs";
+import { MESSAGE_CIPHERTEXT_LEN, TAG_SIZE } from '../constants';
+import { getZeroHashes } from '../imt';
 import { log } from '../logger';
 
 /**
@@ -47,10 +50,14 @@ export async function retrieveEncryptedEvents(
         results.push(secretResult);
     }
 
+    const events = sortEvents(results.flatMap(r => r.events));
+
     return {
         retrievedAt: Date.now(),
         secrets: results,
-        totalEvents: results.reduce((sum, r) => sum + r.events.length, 0),
+        events,
+        totalEvents: events.length,
+        ciphertextRoot: (await computeCiphertextRoot(events)).toString(),
     };
 }
 
@@ -71,13 +78,14 @@ async function processSecret(
     for (let index = startIndex; index < startIndex + maxIndices; index += batchSize) {
         const count = Math.min(batchSize, startIndex + maxIndices - index);
 
-        // Step 1: Generate base tags (unsiloed)
-        const baseTags = await TagGenerator.generateTags(entry.secret, index, count);
-
-        // Step 2: Silo each tag with the contract address (v4 uses domain-separated hash)
-        const app = entry.secret.app;
+        // v4 computes the raw tag, log-domain-separated tag, and app silo in one step.
         const siloedTags = await Promise.all(
-            baseTags.map(baseTag => SiloedTag.compute(new Tag(baseTag), app))
+            Array.from({ length: count }, (_, offset) =>
+                SiloedTag.compute({
+                    extendedSecret: entry.secret,
+                    index: index + offset,
+                }),
+            ),
         );
 
         log(`[EventReader] Generated ${siloedTags.length} siloed tags for indices ${index}-${index + count - 1}`);
@@ -100,6 +108,7 @@ async function processSecret(
                 events.push({
                     txHash: logEntry.txHash.toString(),
                     blockNumber: logEntry.blockNumber.toString(),
+                    contractAddress: entry.secret.app.toString(),
                     ciphertext: encryptedLog.toString('hex'),
                     ciphertextBuffer: encryptedLog,
                     ciphertextBytes: encryptedLog.length,
@@ -125,13 +134,63 @@ async function processSecret(
     };
 }
 
+function sortEvents(events: RetrievedEvent[]): RetrievedEvent[] {
+    return [...events].sort((a, b) => {
+        const aBlock = BigInt(a.blockNumber);
+        const bBlock = BigInt(b.blockNumber);
+        if (aBlock !== bBlock) return aBlock < bBlock ? -1 : 1;
+        const txDiff = a.txHash.localeCompare(b.txHash);
+        if (txDiff !== 0) return txDiff;
+        if (a.logIndex !== b.logIndex) return a.logIndex - b.logIndex;
+        return a.tagIndex - b.tagIndex;
+    });
+}
+
+async function computeCiphertextLeaf(ciphertextBuffer: Buffer): Promise<Fr> {
+    const ciphertextWithoutTag = ciphertextBuffer.slice(TAG_SIZE);
+    const paddedBuffer = Buffer.alloc(MESSAGE_CIPHERTEXT_LEN * 32);
+    ciphertextWithoutTag.copy(paddedBuffer, 0, 0, Math.min(ciphertextWithoutTag.length, paddedBuffer.length));
+
+    const ciphertextFields: Fr[] = [];
+    for (let i = 0; i < MESSAGE_CIPHERTEXT_LEN; i++) {
+        ciphertextFields.push(Fr.fromBuffer(paddedBuffer.slice(i * 32, (i + 1) * 32)));
+    }
+
+    return poseidon2HashWithSeparator(ciphertextFields, 0);
+}
+
+async function computeCiphertextRoot(events: RetrievedEvent[]): Promise<Fr> {
+    if (events.length === 0) return Fr.ZERO;
+
+    let level = await Promise.all(events.map(event => computeCiphertextLeaf(event.ciphertextBuffer)));
+    const zeroHashes = await getZeroHashes(Math.max(1, Math.ceil(Math.log2(level.length)) + 1));
+
+    if (level.length === 1) {
+        return poseidon2Hash([level[0], zeroHashes[0]]);
+    }
+
+    for (let depth = 0; level.length > 1; depth++) {
+        const nextLevel: Fr[] = [];
+        for (let i = 0; i < level.length; i += 2) {
+            nextLevel.push(await poseidon2Hash([level[i], level[i + 1] ?? zeroHashes[depth]]));
+        }
+        level = nextLevel;
+    }
+
+    return level[0];
+}
+
 /**
  * Result of retrieving encrypted events.
  */
 export interface EventRetrievalResult {
     retrievedAt: number;
+    /** All retrieved events sorted in the order used for the ciphertext tree. */
+    events: RetrievedEvent[];
     secrets: EventSecretResult[];
     totalEvents: number;
+    /** Merkle root of all returned ciphertext leaves. */
+    ciphertextRoot: string;
 }
 
 /**
@@ -152,6 +211,8 @@ export interface EventSecretResult {
 export interface RetrievedEvent {
     txHash: string;
     blockNumber: string;
+    /** Contract that emitted the encrypted event */
+    contractAddress: string;
     /** Encrypted log ciphertext (hex encoded) */
     ciphertext: string;
     /** Raw ciphertext buffer for circuit input */

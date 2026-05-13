@@ -116,7 +116,7 @@ export function useProveFlow() {
         progress: 10,
       }));
 
-      const { serializeExportedTaggingSecrets } = await import("@privpnl/proof/auditor");
+      const { serializeExportedTaggingSecrets } = await import("@privpnl/proof/auditor/browser");
       const serializedSecrets = serializeExportedTaggingSecrets(secrets);
 
       const eventsRes = await fetch("/api/audit/events", {
@@ -130,9 +130,11 @@ export function useProveFlow() {
       }
 
       const eventsData = await eventsRes.json();
+      const auditorCiphertextRoot = eventsData.ciphertextRoot as string | undefined;
       const encryptedEvents = eventsData.events as Array<{
         txHash: string;
         blockNumber: string;
+        contractAddress: string;
         ciphertext: string;
         logIndex: number;
       }>;
@@ -146,6 +148,9 @@ export function useProveFlow() {
           totalEvents: 0,
         }));
         return;
+      }
+      if (!auditorCiphertextRoot) {
+        throw new Error("Auditor response missing ciphertext root");
       }
 
       const totalSwaps = encryptedEvents.length;
@@ -164,6 +169,7 @@ export function useProveFlow() {
           Buffer.from(evt.ciphertext, "hex"),
           completeAddress,
           ivskM,
+          evt.contractAddress,
         );
         if (plaintext && plaintext.length >= 6) {
           decodedSwaps.push({
@@ -262,6 +268,7 @@ export function useProveFlow() {
       const swapEvents = encryptedEvents.map((e) => ({
         encryptedLog: Buffer.from(e.ciphertext, "hex"),
         blockNumber: BigInt(e.blockNumber),
+        contractAddress: e.contractAddress,
       }));
 
       // --- Step 7: Full SwapProofTree + Tax ---
@@ -318,6 +325,9 @@ export function useProveFlow() {
       );
 
       if (abortRef.current) return;
+      if (BigInt(result.publicInputs.root) !== BigInt(auditorCiphertextRoot)) {
+        throw new Error("Summary proof root does not match auditor ciphertext root");
+      }
 
       // Build downloadable PnL proof
       const pnlProof: DownloadableProof = {
@@ -352,7 +362,14 @@ export function useProveFlow() {
         capitalGainsTaxJson,
         vkeysJson.summary
       );
-      const taxResult = await taxProver.prove(result);
+      const auditorVerifiedSummary = {
+        ...result,
+        publicInputs: {
+          ...result.publicInputs,
+          root: auditorCiphertextRoot,
+        },
+      };
+      const taxResult = await taxProver.prove(auditorVerifiedSummary);
 
       if (abortRef.current) return;
 
@@ -362,7 +379,6 @@ export function useProveFlow() {
         proof: "0x" + Buffer.from(taxResult.proof).toString("hex"),
         publicInputs: {
           root: taxResult.publicInputs.root,
-          pnl: taxResult.publicInputs.pnl.toString(),
           tax: taxResult.publicInputs.tax.toString(),
           remainingLotStateRoot: taxResult.publicInputs.remainingLotStateRoot,
           initialLotStateRoot: taxResult.publicInputs.initialLotStateRoot,
@@ -378,7 +394,7 @@ export function useProveFlow() {
         currentSwap: totalSwaps,
         statusText: "Proof complete!",
         progress: 100,
-        pnl: taxResult.publicInputs.pnl,
+        pnl: result.publicInputs.pnl,
         tax: taxResult.publicInputs.tax,
         merkleRoot: taxResult.publicInputs.root,
         blockNumber: taxResult.publicInputs.blockNumber,

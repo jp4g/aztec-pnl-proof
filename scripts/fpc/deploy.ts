@@ -1,42 +1,16 @@
-import { Fr } from '@aztec/aztec.js/fields';
-import { SponsoredFPCContract } from '@aztec/noir-contracts.js/SponsoredFPC';
-import { SPONSORED_FPC_SALT } from '@aztec/constants';
-import { createLogger } from '@aztec/foundation/log';
-import { join } from 'path';
-import { createWalletWithoutFPC, loadFPCDeployerAccount, upsertEnvVar } from './utils';
+import { deployAztecFPC } from '@jp4g/fpc-deployer';
+import { getDeployerCredentials, getL2Config, syncFrontendFPCAddress, upsertEnvVar } from './utils';
 
 async function deploy() {
-    const logger = createLogger('fpc:deploy');
-
-    const { wallet } = await createWalletWithoutFPC();
-    const account = await loadFPCDeployerAccount(wallet);
-    const [{ item: from }] = await wallet.getAccounts();
-
-    logger.info(`Deploying SponsoredFPC from ${account.address}...`);
-
-    const deployRequest = SponsoredFPCContract.deploy(wallet);
-    await deployRequest.simulate({ from });
-
-    const deployed = await deployRequest.send({
-        from,
-        contractAddressSalt: new Fr(SPONSORED_FPC_SALT),
-        universalDeploy: true,
+    const result = await deployAztecFPC({
+        ...getL2Config(),
+        ...getDeployerCredentials(),
     });
 
-    const fpcAddress = deployed.contract.address.toString();
-    logger.info(`SponsoredFPC deployed at: ${fpcAddress}`);
+    upsertEnvVar('SPONSORED_FPC_ADDRESS', result.fpcAddress);
+    syncFrontendFPCAddress(result.fpcAddress);
 
-    // Save to root .env
-    upsertEnvVar('SPONSORED_FPC_ADDRESS', fpcAddress);
-
-    // Save to frontend env files
-    const frontendEnvProd = join(process.cwd(), 'packages', 'frontend', '.env.production');
-    const frontendEnvDev = join(process.cwd(), 'packages', 'frontend', '.env.development');
-    upsertEnvVar('NEXT_PUBLIC_SPONSORED_FPC_ADDRESS', fpcAddress, frontendEnvProd);
-    upsertEnvVar('NEXT_PUBLIC_SPONSORED_FPC_ADDRESS', fpcAddress, frontendEnvDev);
-
-    logger.info(`Address saved to .env and frontend env files`);
-    console.log(`\nSponsoredFPC address: ${fpcAddress}`);
+    console.log(`\nSponsoredFPC address: ${result.fpcAddress}`);
 }
 
 deploy().catch((err) => {

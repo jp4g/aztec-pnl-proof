@@ -1,8 +1,12 @@
 import { poseidon2Hash } from "@zkpassport/poseidon2";
+import { MESSAGE_CIPHERTEXT_LEN, TAG_SIZE } from "../constants";
 
 export type {
   SerializedExportedTaggingSecret,
 } from "./types";
+export {
+  serializeExportedTaggingSecrets,
+} from "./serialization";
 
 import type {
   SerializedExportedTaggingSecret,
@@ -15,6 +19,8 @@ const PRIVATE_LOG_FIRST_FIELD_SEPARATOR = 2769976252n;
 export interface BrowserRetrievedEvent {
   txHash: string;
   blockNumber: string;
+  /** Contract that emitted the encrypted event */
+  contractAddress: string;
   /** Encrypted log ciphertext (hex encoded, no 0x prefix) */
   ciphertext: string;
   logIndex: number;
@@ -25,6 +31,8 @@ export interface BrowserRetrievedEvent {
 export interface BrowserEventRetrievalResult {
   events: BrowserRetrievedEvent[];
   totalEvents: number;
+  /** Merkle root of all returned ciphertext leaves. */
+  ciphertextRoot: string;
 }
 
 /** Generate a single tag: poseidon2Hash([secret, index]) */
@@ -39,6 +47,55 @@ function computeSiloedTag(app: string, tagValue: string): string {
   const tagBigInt = BigInt(tagValue);
   const hash = poseidon2Hash([PRIVATE_LOG_FIRST_FIELD_SEPARATOR, appBigInt, tagBigInt]);
   return "0x" + hash.toString(16).padStart(64, "0");
+}
+
+function toHexField(value: bigint): string {
+  return "0x" + value.toString(16).padStart(64, "0");
+}
+
+function computeZeroHashes(maxDepth: number): bigint[] {
+  const zeroHashes = [0n];
+  for (let i = 1; i <= maxDepth; i++) {
+    const previous = zeroHashes[i - 1];
+    zeroHashes.push(poseidon2Hash([previous, previous]));
+  }
+  return zeroHashes;
+}
+
+function computeCiphertextLeaf(ciphertext: string): bigint {
+  const ciphertextHex = ciphertext.startsWith("0x") ? ciphertext.slice(2) : ciphertext;
+  const ciphertextWithoutTag = ciphertextHex.slice(TAG_SIZE * 2);
+  const paddedCiphertext = ciphertextWithoutTag
+    .padEnd(MESSAGE_CIPHERTEXT_LEN * 64, "0")
+    .slice(0, MESSAGE_CIPHERTEXT_LEN * 64);
+  const fields: bigint[] = [];
+
+  for (let i = 0; i < MESSAGE_CIPHERTEXT_LEN; i++) {
+    fields.push(BigInt("0x" + paddedCiphertext.slice(i * 64, (i + 1) * 64)));
+  }
+
+  return poseidon2Hash([0n, ...fields]);
+}
+
+function computeCiphertextRoot(events: BrowserRetrievedEvent[]): string {
+  if (events.length === 0) return toHexField(0n);
+
+  let level = events.map((event) => computeCiphertextLeaf(event.ciphertext));
+  const zeroHashes = computeZeroHashes(Math.max(1, Math.ceil(Math.log2(level.length)) + 1));
+
+  if (level.length === 1) {
+    return toHexField(poseidon2Hash([level[0], zeroHashes[0]]));
+  }
+
+  for (let depth = 0; level.length > 1; depth++) {
+    const nextLevel: bigint[] = [];
+    for (let i = 0; i < level.length; i += 2) {
+      nextLevel.push(poseidon2Hash([level[i], level[i + 1] ?? zeroHashes[depth]]));
+    }
+    level = nextLevel;
+  }
+
+  return toHexField(level[0]);
 }
 
 /** Call Aztec node JSON-RPC directly */
@@ -137,6 +194,7 @@ export async function retrieveEncryptedEvents(
           events.push({
             txHash: log.txHash,
             blockNumber: String(log.blockNumber),
+            contractAddress: app,
             ciphertext: ciphertextHex,
             logIndex: 0,
             tagIndex: index + i,
@@ -162,5 +220,6 @@ export async function retrieveEncryptedEvents(
   return {
     events: unique,
     totalEvents: unique.length,
+    ciphertextRoot: computeCiphertextRoot(unique),
   };
 }

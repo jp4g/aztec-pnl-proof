@@ -5,8 +5,10 @@
  */
 import 'dotenv/config';
 import { AztecAddress } from '@aztec/aztec.js/addresses';
+import { NO_FROM } from '@aztec/aztec.js/account';
 import { SponsoredFeePaymentMethod } from '@aztec/aztec.js/fee';
 import { Fr } from '@aztec/foundation/curves/bn254';
+import { GrumpkinScalar } from '@aztec/foundation/curves/grumpkin';
 import { PriceFeedContract } from '@privpnl/contracts/PriceFeed';
 import { initializeWallet, makeSendOpts, registerSandboxAccounts } from './utils';
 
@@ -22,11 +24,12 @@ async function main() {
         console.log('Devnet — deploying a fresh account...');
         const fpcPaymentMethod = new SponsoredFeePaymentMethod(fpcAddress!);
         const secret = Fr.random();
-        const signingKey = Fr.random();
+        const signingKey = GrumpkinScalar.random();
         const manager = await wallet.createSchnorrAccount(secret, Fr.ZERO, signingKey);
         const deployMethod = await manager.getDeployMethod();
+        await deployMethod.simulate({ from: NO_FROM });
         await deployMethod.send({
-            from: AztecAddress.ZERO,
+            from: NO_FROM,
             fee: { paymentMethod: fpcPaymentMethod },
             wait: { timeout: 600 },
         });

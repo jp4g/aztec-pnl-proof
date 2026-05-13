@@ -1,41 +1,24 @@
-import { getCanonicalFeeJuice } from '@aztec/protocol-contracts/fee-juice';
-import { FeeJuiceContract } from '@aztec/noir-contracts.js/FeeJuice';
-import { createLogger } from '@aztec/foundation/log';
-import { createWalletWithoutFPC, loadFPCDeployerAccount, getFPCAddress } from './utils';
+import { statusAztecFPC } from '@jp4g/fpc-deployer';
+import { getDeployerCredentials, getFPCAddress, getL2Config } from './utils';
 
 async function status() {
-    const logger = createLogger('fpc:status');
+    const deployer = process.env.FPC_DEPLOYER_SECRET_KEY &&
+        process.env.FPC_DEPLOYER_SIGNING_KEY &&
+        process.env.FPC_DEPLOYER_SALT
+        ? getDeployerCredentials()
+        : undefined;
 
-    const fpcAddress = getFPCAddress();
-    console.log(`\nSponsoredFPC address: ${fpcAddress}`);
+    const result = await statusAztecFPC({
+        ...getL2Config(),
+        fpcAddress: getFPCAddress(),
+        deployer,
+    });
 
-    if (!process.env.FPC_DEPLOYER_SECRET_KEY || !process.env.FPC_DEPLOYER_SIGNING_KEY || !process.env.FPC_DEPLOYER_SALT) {
-        console.log(`Deployer: not bootstrapped (run \`yarn fpc:bootstrap\`)`);
-        return;
-    }
-
-    try {
-        const { wallet } = await createWalletWithoutFPC();
-        const account = await loadFPCDeployerAccount(wallet);
-        console.log(`Deployer address:    ${account.address}`);
-
-        // Register FeeJuice to query balances
-        const feeJuiceInstance = await getCanonicalFeeJuice();
-        await wallet.registerContract(feeJuiceInstance.instance, FeeJuiceContract.artifact);
-        const feeJuice = await FeeJuiceContract.at(feeJuiceInstance.address, wallet);
-
-        const deployerBalance = await feeJuice.methods
-            .balance_of_public(account.address)
-            .simulate({ from: account.address });
-        console.log(`Deployer fee juice:  ${deployerBalance.result ?? deployerBalance}`);
-
-        const fpcBalance = await feeJuice.methods
-            .balance_of_public(fpcAddress)
-            .simulate({ from: account.address });
-        console.log(`FPC fee juice:       ${fpcBalance.result ?? fpcBalance}`);
-    } catch (e: any) {
-        logger.warn(`Could not query balances: ${e.message}`);
-    }
+    console.log(`\nSponsoredFPC address: ${result.fpcAddress}`);
+    if (result.deployerAddress) console.log(`Deployer address:    ${result.deployerAddress}`);
+    if (result.deployerBalance !== undefined) console.log(`Deployer fee juice:  ${result.deployerBalance}`);
+    if (result.fpcBalance !== undefined) console.log(`FPC fee juice:       ${result.fpcBalance}`);
+    if (!deployer) console.log('Deployer: not bootstrapped (run `yarn fpc:bootstrap`)');
 }
 
 status().catch((err) => {

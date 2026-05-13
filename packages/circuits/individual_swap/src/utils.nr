@@ -1,17 +1,21 @@
 use aztec::{
     messages::{
         encoding::{MESSAGE_CIPHERTEXT_LEN, EPH_PK_X_SIZE_IN_FIELDS},
-        encryption::aes128::derive_aes_symmetric_key_and_iv_from_ecdh_shared_secret_using_poseidon2_unsafe,
+        encryption::aes128::derive_aes_symmetric_key_and_iv_from_shared_secret,
     },
     keys::ecdh_shared_secret::derive_ecdh_shared_secret,
     utils::point::point_from_x_coord_and_sign,
 };
 use std::{aes128::aes128_encrypt, embedded_curve_ops::EmbeddedCurveScalar};
 use protocol_types::{
-    constants::{DOM_SEP__PUBLIC_LEAF_SLOT, DOM_SEP__PUBLIC_STORAGE_MAP_SLOT},
+    constants::{
+        DOM_SEP__APP_SILOED_ECDH_SHARED_SECRET,
+        DOM_SEP__ECDH_FIELD_MASK,
+        DOM_SEP__PUBLIC_LEAF_SLOT,
+        DOM_SEP__PUBLIC_STORAGE_MAP_SLOT,
+    },
     hash::{poseidon2_hash, poseidon2_hash_with_separator},
     merkle_tree::root::root_from_sibling_path,
-    utils::field::full_field_less_than,
 };
 
 // ============================================================
@@ -64,8 +68,8 @@ pub fn verify_and_read_public_data(
     let computed_root = root_from_sibling_path(leaf_hash, witness.witness_index, witness.witness_path);
     assert_eq(computed_root, public_data_tree_root, "Merkle membership proof failed");
 
-    let is_less_than_slot = full_field_less_than(witness.leaf_preimage.slot, tree_index);
-    let is_next_greater_than = full_field_less_than(tree_index, witness.leaf_preimage.next_slot);
+    let is_less_than_slot = witness.leaf_preimage.slot.lt(tree_index);
+    let is_next_greater_than = tree_index.lt(witness.leaf_preimage.next_slot);
     let is_max = (witness.leaf_preimage.next_index == 0) & (witness.leaf_preimage.next_slot == 0);
     let is_in_range = is_less_than_slot & (is_next_greater_than | is_max);
 
@@ -83,14 +87,18 @@ pub fn verify_and_read_public_data(
 
 pub global SWAP_PLAINTEXT_FIELDS: u32 = 7;
 pub global PLAINTEXT_BYTES_LEN: u32 = 224; // 7 fields * 32 bytes
-global CIPHERTEXT_BYTES_LEN: u32 = (MESSAGE_CIPHERTEXT_LEN - EPH_PK_X_SIZE_IN_FIELDS) * 31;
 global HEADER_CIPHERTEXT_SIZE_IN_BYTES: u32 = 16;
+global AES128_PKCS7_EXPANSION_IN_BYTES: u32 = 16;
+global MESSAGE_BYTES_LEN: u32 = HEADER_CIPHERTEXT_SIZE_IN_BYTES + PLAINTEXT_BYTES_LEN + AES128_PKCS7_EXPANSION_IN_BYTES;
+global MESSAGE_FIELDS_LEN: u32 = (MESSAGE_BYTES_LEN + 30) / 31;
+global MESSAGE_PADDED_BYTES_LEN: u32 = MESSAGE_FIELDS_LEN * 31;
+global TWO_POW_248: Field = 2.pow_32(248);
 
 /// Convert ciphertext fields (excluding eph_pk_x) to bytes.
 /// Each field stores 31 bytes (high byte is always 0).
-fn bytes_from_fields(fields: [Field; MESSAGE_CIPHERTEXT_LEN - 1]) -> [u8; CIPHERTEXT_BYTES_LEN] {
-    let mut bytes = [0 as u8; CIPHERTEXT_BYTES_LEN];
-    for i in 0..MESSAGE_CIPHERTEXT_LEN - 1 {
+fn bytes_from_fields(fields: [Field; MESSAGE_FIELDS_LEN]) -> [u8; MESSAGE_PADDED_BYTES_LEN] {
+    let mut bytes = [0 as u8; MESSAGE_PADDED_BYTES_LEN];
+    for i in 0..MESSAGE_FIELDS_LEN {
         let field_bytes: [u8; 32] = fields[i].to_be_bytes();
         for j in 0..31 {
             bytes[i * 31 + j] = field_bytes[j + 1];
@@ -106,6 +114,27 @@ fn extract_ciphertext_fields(
     let mut result = [0 as Field; MESSAGE_CIPHERTEXT_LEN - 1];
     for i in 0..MESSAGE_CIPHERTEXT_LEN - 1 {
         result[i] = ciphertext[EPH_PK_X_SIZE_IN_FIELDS + i];
+    }
+    result
+}
+
+fn compute_app_siloed_shared_secret(shared_secret_x: Field, shared_secret_y: Field, contract_address: Field) -> Field {
+    poseidon2_hash_with_separator(
+        [shared_secret_x, shared_secret_y, contract_address],
+        DOM_SEP__APP_SILOED_ECDH_SHARED_SECRET,
+    )
+}
+
+fn unmask_ciphertext_fields(
+    masked_fields: [Field; MESSAGE_CIPHERTEXT_LEN - 1],
+    s_app: Field,
+) -> [Field; MESSAGE_FIELDS_LEN] {
+    let mut result = [0 as Field; MESSAGE_FIELDS_LEN];
+    for i in 0..MESSAGE_FIELDS_LEN {
+        let mask = poseidon2_hash_with_separator([s_app], DOM_SEP__ECDH_FIELD_MASK + i);
+        let unmasked = masked_fields[i] - mask;
+        assert(unmasked.lt(TWO_POW_248), "Ciphertext field is not valid packed bytes");
+        result[i] = unmasked;
     }
     result
 }
@@ -130,18 +159,21 @@ pub fn verify_encryption(
     plaintext: [Field; SWAP_PLAINTEXT_FIELDS],
     ciphertext: [Field; MESSAGE_CIPHERTEXT_LEN],
     ivsk_app: Field,
+    contract_address: Field,
 ) {
     let eph_pk_x = ciphertext[0];
-    let ciphertext_fields = extract_ciphertext_fields(ciphertext);
-    let ciphertext_bytes = bytes_from_fields(ciphertext_fields);
+    let masked_fields = extract_ciphertext_fields(ciphertext);
 
-    // SDK 4.1.0-rc.2: ephemeral keys always have positive y (no sign byte)
+    // Aztec encrypted logs use positive-y ephemeral keys here (no sign byte).
     let eph_pk = point_from_x_coord_and_sign(eph_pk_x, true)
         .expect(f"Invalid ephemeral public key x-coordinate");
     let recipient_sk_scalar = EmbeddedCurveScalar::from_field(ivsk_app);
     let shared_secret = derive_ecdh_shared_secret(recipient_sk_scalar, eph_pk);
+    let s_app = compute_app_siloed_shared_secret(shared_secret.x, shared_secret.y, contract_address);
+    let ciphertext_fields = unmask_ciphertext_fields(masked_fields, s_app);
+    let ciphertext_bytes = bytes_from_fields(ciphertext_fields);
 
-    let pairs = derive_aes_symmetric_key_and_iv_from_ecdh_shared_secret_using_poseidon2_unsafe::<2>(shared_secret);
+    let pairs = derive_aes_symmetric_key_and_iv_from_shared_secret::<2>(s_app);
     let (body_sym_key, body_iv) = pairs[0];
 
     let plaintext_bytes = plaintext_fields_to_bytes(plaintext);

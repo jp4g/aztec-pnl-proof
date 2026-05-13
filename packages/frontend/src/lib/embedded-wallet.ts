@@ -1,4 +1,4 @@
-import { Account } from "@aztec/aztec.js/account";
+import { Account, NO_FROM } from "@aztec/aztec.js/account";
 import { AztecAddress } from "@aztec/aztec.js/addresses";
 import { SponsoredFeePaymentMethod } from "@aztec/aztec.js/fee";
 import { Fr } from "@aztec/aztec.js/fields";
@@ -7,14 +7,13 @@ import { createAztecNodeClient } from "@aztec/aztec.js/node";
 import {
   AccountManager,
   type DeployAccountOptions,
+  ContractInitializationStatus,
 } from "@aztec/aztec.js/wallet";
 import { GrumpkinScalar } from "@aztec/foundation/curves/grumpkin";
-import type { FieldsOf } from "@aztec/foundation/types";
 import { SchnorrAccountContract } from "@aztec/accounts/schnorr/lazy";
 import { createPXE, type ExportedTaggingSecret } from "@aztec/pxe/client/lazy";
 import { getPXEConfig } from "@aztec/pxe/config";
-import { BaseWallet, type FeeOptions } from "@aztec/wallet-sdk/base-wallet";
-import { GasSettings } from "@aztec/stdlib/gas";
+import { BaseWallet, type CompleteFeeOptionsConfig, type FeeOptions } from "@aztec/wallet-sdk/base-wallet";
 
 import {
   TOKEN_ADDRESSES,
@@ -105,10 +104,6 @@ export class EmbeddedAuditableWallet extends BaseWallet {
   protected async getAccountFromAddress(
     address: AztecAddress
   ): Promise<Account> {
-    if (address.equals(AztecAddress.ZERO)) {
-      const { SignerlessAccount } = await import("@aztec/aztec.js/account");
-      return new SignerlessAccount();
-    }
     const account = this.accounts.get(address?.toString() ?? "");
     if (!account) {
       throw new Error(`Account not found for address: ${address}`);
@@ -171,7 +166,7 @@ export class EmbeddedAuditableWallet extends BaseWallet {
 
     const nodeInfo = await aztecNode.getNodeInfo();
     logger.info("PXE connected to node", nodeInfo);
-    return new EmbeddedAuditableWallet(pxe, aztecNode);
+    return new EmbeddedAuditableWallet(pxe as any, aztecNode);
   }
 
   private async getSponsoredPaymentMethod(): Promise<SponsoredFeePaymentMethod> {
@@ -182,16 +177,13 @@ export class EmbeddedAuditableWallet extends BaseWallet {
     return new SponsoredFeePaymentMethod(AztecAddress.fromString(fpcAddr));
   }
 
-  protected override async completeFeeOptions(
-    from: AztecAddress,
-    feePayer?: AztecAddress,
-    gasSettings?: Partial<FieldsOf<GasSettings>>,
-  ): Promise<FeeOptions> {
-    const base = await super.completeFeeOptions(from, feePayer, gasSettings);
+  protected override async completeFeeOptions(config: CompleteFeeOptionsConfig): Promise<FeeOptions> {
+    const base = await super.completeFeeOptions(config);
+    const { from, feePayer } = config;
     // Only inject sponsored FPC when the transaction doesn't already have a fee
     // payer (feePayer is set when the execution payload already embeds fee calls)
     // and the sender is not an internal account (e.g. admin pays its own gas)
-    if (!base.walletFeePaymentMethod && !feePayer && !this.internalAccounts.has(from.toString())) {
+    if (from !== NO_FROM && !base.walletFeePaymentMethod && !feePayer && !this.internalAccounts.has(from.toString())) {
       base.walletFeePaymentMethod = await this.getSponsoredPaymentMethod();
       // Tell the account entrypoint that fees are handled externally (by the FPC),
       // so it doesn't also try to set up fee juice payment itself.
@@ -250,7 +242,7 @@ export class EmbeddedAuditableWallet extends BaseWallet {
     const deployMethod = await accountManager.getDeployMethod();
     const paymentMethod = await this.getSponsoredPaymentMethod();
     const deployOpts: DeployAccountOptions = {
-      from: AztecAddress.ZERO,
+      from: NO_FROM,
       fee: { paymentMethod },
       skipClassPublication: true,
       skipInstancePublication: true,
@@ -316,7 +308,7 @@ export class EmbeddedAuditableWallet extends BaseWallet {
 
         // Check if the account actually exists on-chain (sandbox may have restarted)
         const metadata = await this.getContractMetadata(accountManager.address);
-        if (!metadata.isContractInitialized) {
+        if (metadata.initializationStatus !== ContractInitializationStatus.INITIALIZED) {
           logger.warn("Account not found on-chain, removing stale entry", entry.address);
           this.accounts.delete(accountManager.address.toString());
           continue;
@@ -432,7 +424,7 @@ export class EmbeddedAuditableWallet extends BaseWallet {
     apps: AztecAddress[],
     counterparties?: AztecAddress[],
   ): Promise<ExportedTaggingSecret[]> {
-    return this.pxe.exportTaggingSecrets(account, apps, counterparties);
+    return (this.pxe as any).exportTaggingSecrets(account, apps, counterparties);
   }
 
   async getAuditProofInputs(account: AztecAddress, poolAddresses: AztecAddress[]) {
