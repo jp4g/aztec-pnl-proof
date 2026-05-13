@@ -356,14 +356,17 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
             [poolAB.address, poolAC.address, poolBC.address],
             [swapper],
         );
-        const events = await retrieveEncryptedEvents(node, taggingSecrets);
+        const events = await retrieveEncryptedEvents(node, archivalNode ?? node, taggingSecrets);
         console.log(`  Found ${events.totalEvents} events`);
-        console.log(`  Auditor ciphertext root: ${events.ciphertextRoot}`);
+        console.log(`  Auditor root: ${events.auditorRoot}`);
         expect(events.totalEvents).toBe(6);
 
-        // Auditor returns events in the same order used to build the ciphertext root.
+        // Auditor returns events in the same order used to build the auditor root.
         const swapEvents = events.events;
         const blockNumbers = swapEvents.map(e => BigInt(e.blockNumber));
+        for (const event of swapEvents) {
+            expect(event.publicDataTreeRoot).toBeTruthy();
+        }
         console.log(`  Block numbers: ${blockNumbers.join(', ')}`);
 
         // ========================================
@@ -450,6 +453,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
             swapEvents.map((e, i) => ({
                 encryptedLog: e.ciphertextBuffer,
                 blockNumber: blockNumbers[i],
+                publicDataTreeRoot: e.publicDataTreeRoot,
                 contractAddress: e.contractAddress,
             })),
             lotStateTree,
@@ -464,7 +468,6 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         console.log(`  remainingLotStateRoot: ${result.publicInputs.remainingLotStateRoot}`);
         console.log(`  initialLotStateRoot: ${result.publicInputs.initialLotStateRoot}`);
         console.log(`  price_feed_address: ${result.publicInputs.priceFeedAddress}`);
-        console.log(`  block_number: ${result.publicInputs.blockNumber}`);
 
         // ========================================
         // Verify results
@@ -494,11 +497,8 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         // Verify price feed address
         expect(BigInt(result.publicInputs.priceFeedAddress)).toBe(priceFeed.address.toField().toBigInt());
 
-        // Verify block number is the last swap's block
-        expect(result.publicInputs.blockNumber).toBe(blockNumbers[5]);
-
-        expect(BigInt(result.publicInputs.root)).toBe(BigInt(events.ciphertextRoot));
-        console.log(`  Proof root matches auditor ciphertext root!`);
+        expect(BigInt(result.publicInputs.root)).toBe(BigInt(events.auditorRoot));
+        console.log(`  Proof root matches auditor root!`);
 
         // ========================================
         // Generate capital gains tax wrapper proof
@@ -510,7 +510,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
             ...result,
             publicInputs: {
                 ...result.publicInputs,
-                root: events.ciphertextRoot,
+                root: events.auditorRoot,
             },
         };
         const taxResult = await taxProver.prove(auditorVerifiedSummary);
@@ -521,7 +521,6 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         console.log(`  remainingLotStateRoot: ${taxResult.publicInputs.remainingLotStateRoot}`);
         console.log(`  initialLotStateRoot: ${taxResult.publicInputs.initialLotStateRoot}`);
         console.log(`  price_feed_address: ${taxResult.publicInputs.priceFeedAddress}`);
-        console.log(`  block_number: ${taxResult.publicInputs.blockNumber}`);
 
         // Verify tax computation
         const expectedTax = expectedPnl > 0n ? expectedPnl / 5n : 0n;
@@ -532,7 +531,6 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         // Verify forwarded fields match summary result
         expect(BigInt(taxResult.publicInputs.root)).toBe(BigInt(auditorVerifiedSummary.publicInputs.root));
         expect(BigInt(taxResult.publicInputs.priceFeedAddress)).toBe(BigInt(auditorVerifiedSummary.publicInputs.priceFeedAddress));
-        expect(taxResult.publicInputs.blockNumber).toBe(auditorVerifiedSummary.publicInputs.blockNumber);
         expect(taxResult.publicInputs.remainingLotStateRoot).toBe(auditorVerifiedSummary.publicInputs.remainingLotStateRoot);
         expect(taxResult.publicInputs.initialLotStateRoot).toBe(auditorVerifiedSummary.publicInputs.initialLotStateRoot);
 

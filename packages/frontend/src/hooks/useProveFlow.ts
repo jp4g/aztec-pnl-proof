@@ -130,10 +130,11 @@ export function useProveFlow() {
       }
 
       const eventsData = await eventsRes.json();
-      const auditorCiphertextRoot = eventsData.ciphertextRoot as string | undefined;
+      const auditorRoot = eventsData.auditorRoot as string | undefined;
       const encryptedEvents = eventsData.events as Array<{
         txHash: string;
         blockNumber: string;
+        publicDataTreeRoot: string;
         contractAddress: string;
         ciphertext: string;
         logIndex: number;
@@ -149,8 +150,8 @@ export function useProveFlow() {
         }));
         return;
       }
-      if (!auditorCiphertextRoot) {
-        throw new Error("Auditor response missing ciphertext root");
+      if (!auditorRoot) {
+        throw new Error("Auditor response missing auditor root");
       }
 
       const totalSwaps = encryptedEvents.length;
@@ -257,9 +258,10 @@ export function useProveFlow() {
       }
 
       const priceFeedAddr = process.env.NEXT_PUBLIC_PRICE_FEED;
-      const priceFeedAddress = priceFeedAddr
-        ? Fr.fromString(priceFeedAddr)
-        : Fr.ZERO;
+      if (!priceFeedAddr) {
+        throw new Error("NEXT_PUBLIC_PRICE_FEED is required for proof verification");
+      }
+      const priceFeedAddress = Fr.fromString(priceFeedAddr);
       const priceFeedAssetsSlot = PriceFeedContract.storage.assets.slot;
 
       if (abortRef.current) return;
@@ -268,8 +270,10 @@ export function useProveFlow() {
       const swapEvents = encryptedEvents.map((e) => ({
         encryptedLog: Buffer.from(e.ciphertext, "hex"),
         blockNumber: BigInt(e.blockNumber),
+        publicDataTreeRoot: e.publicDataTreeRoot,
         contractAddress: e.contractAddress,
       }));
+      const latestEventBlock = BigInt(encryptedEvents[encryptedEvents.length - 1].blockNumber);
 
       // --- Step 7: Full SwapProofTree + Tax ---
       setState((prev) => ({
@@ -325,8 +329,11 @@ export function useProveFlow() {
       );
 
       if (abortRef.current) return;
-      if (BigInt(result.publicInputs.root) !== BigInt(auditorCiphertextRoot)) {
-        throw new Error("Summary proof root does not match auditor ciphertext root");
+      if (BigInt(result.publicInputs.root) !== BigInt(auditorRoot)) {
+        throw new Error("Summary proof root does not match auditor root");
+      }
+      if (BigInt(result.publicInputs.priceFeedAddress) !== priceFeedAddress.toBigInt()) {
+        throw new Error("Summary proof price feed does not match configured price feed");
       }
 
       // Build downloadable PnL proof
@@ -339,7 +346,6 @@ export function useProveFlow() {
           remainingLotStateRoot: result.publicInputs.remainingLotStateRoot,
           initialLotStateRoot: result.publicInputs.initialLotStateRoot,
           priceFeedAddress: result.publicInputs.priceFeedAddress,
-          blockNumber: result.publicInputs.blockNumber.toString(),
         },
       };
 
@@ -366,7 +372,7 @@ export function useProveFlow() {
         ...result,
         publicInputs: {
           ...result.publicInputs,
-          root: auditorCiphertextRoot,
+          root: auditorRoot,
         },
       };
       const taxResult = await taxProver.prove(auditorVerifiedSummary);
@@ -383,7 +389,6 @@ export function useProveFlow() {
           remainingLotStateRoot: taxResult.publicInputs.remainingLotStateRoot,
           initialLotStateRoot: taxResult.publicInputs.initialLotStateRoot,
           priceFeedAddress: taxResult.publicInputs.priceFeedAddress,
-          blockNumber: taxResult.publicInputs.blockNumber.toString(),
         },
       };
 
@@ -397,7 +402,7 @@ export function useProveFlow() {
         pnl: result.publicInputs.pnl,
         tax: taxResult.publicInputs.tax,
         merkleRoot: taxResult.publicInputs.root,
-        blockNumber: taxResult.publicInputs.blockNumber,
+        blockNumber: latestEventBlock,
         pnlProof,
         taxProof,
         ...finalTreeViz,

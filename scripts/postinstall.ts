@@ -57,7 +57,7 @@ async function computeVkeys(circuitsDir: string) {
   const leafBackend = new UltraHonkBackend(leafCircuit.bytecode, bb);
   const leafArtifacts = await leafBackend.generateRecursiveProofArtifacts(
     new Uint8Array(0),
-    6,
+    5,
   );
   console.log(`  Leaf vkey hash: ${leafArtifacts.vkHash}`);
 
@@ -65,7 +65,7 @@ async function computeVkeys(circuitsDir: string) {
   const summaryBackend = new UltraHonkBackend(summaryCircuit.bytecode, bb);
   const summaryArtifacts = await summaryBackend.generateRecursiveProofArtifacts(
     new Uint8Array(0),
-    6,
+    5,
     { verifierTarget: 'noir-recursive' },
   );
   console.log(`  Summary vkey hash: ${summaryArtifacts.vkHash}`);

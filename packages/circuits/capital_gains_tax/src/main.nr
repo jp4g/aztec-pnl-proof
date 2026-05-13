@@ -2,22 +2,21 @@ use bb_proof_verification::{UltraHonkZKProof, UltraHonkVerificationKey, verify_h
 
 /// Wraps a summary tree proof and computes capital gains tax at a flat 20% rate.
 ///
-/// Public inputs from the summary proof (6 Fields):
+/// Public inputs from the summary proof (5 Fields):
 ///   [0] root                     - merkle root of swap ciphertext leaves
 ///   [1] pnl                      - signed PnL (i64 encoded as Field)
 ///   [2] remaining_lot_state_root - lot state after all swaps
 ///   [3] initial_lot_state_root   - lot state before all swaps
 ///   [4] price_feed_address
-///   [5] block_number
 ///
-/// Returns 6 public outputs: root, tax liability, and non-PnL summary metadata.
+/// Returns 5 public outputs: root, tax liability, and non-PnL summary metadata.
 fn main(
     verification_key: UltraHonkVerificationKey,
     vkey_hash: Field,
     proof: UltraHonkZKProof,
-    public_inputs: [Field; 6],
+    public_inputs: [Field; 5],
     summary_vkey_hash: Field,
-) -> pub (Field, i64, Field, Field, Field, Field) {
+) -> pub (Field, i64, Field, Field, Field) {
     // 1. Verify the summary tree proof
     verify_honk_proof(verification_key, proof, public_inputs, vkey_hash);
     assert(vkey_hash == summary_vkey_hash, "vkey hash must match summary circuit");
@@ -35,6 +34,5 @@ fn main(
         public_inputs[2],  // remaining_lot_state_root
         public_inputs[3],  // initial_lot_state_root
         public_inputs[4],  // price_feed_address
-        public_inputs[5],  // block_number
     )
 }

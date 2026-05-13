@@ -1,9 +1,9 @@
 import type { AztecNode } from "@aztec/aztec.js/node";
 import type { ExportedTaggingSecret } from "./types";
 import { Fr } from "@aztec/foundation/curves/bn254";
-import { poseidon2Hash, poseidon2HashWithSeparator } from "@aztec/foundation/crypto/poseidon";
+import { poseidon2Hash } from "@aztec/foundation/crypto/poseidon";
 import { SiloedTag } from "@aztec/stdlib/logs";
-import { MESSAGE_CIPHERTEXT_LEN, TAG_SIZE } from '../constants';
+import { computeSwapLeaf, parseSwapCiphertextFields } from '../swap-leaf';
 import { getZeroHashes } from '../imt';
 import { log } from '../logger';
 
@@ -15,13 +15,15 @@ import { log } from '../logger';
  * - Returns raw encrypted log buffers (ciphertexts) for circuit proving
  * - Only processes INBOUND secrets (events encrypted for the account holder)
  *
- * @param node - Aztec node client
+ * @param node - Aztec node client for private log retrieval
+ * @param historyNode - Aztec node client for historical block headers
  * @param secrets - Exported tagging secrets from a user
  * @param options - Scan options
  * @returns Retrieved encrypted event logs
  */
 export async function retrieveEncryptedEvents(
     node: AztecNode,
+    historyNode: AztecNode,
     secrets: ExportedTaggingSecret[],
     options?: {
         startIndex?: number;
@@ -34,6 +36,7 @@ export async function retrieveEncryptedEvents(
     const batchSize = options?.batchSize ?? 100;
 
     const results: EventSecretResult[] = [];
+    const publicDataRootByBlock = new Map<string, string>();
 
     // Filter to only inbound secrets - we can only decrypt events encrypted for us
     const inboundSecrets = secrets.filter(s => s.direction === 'inbound');
@@ -41,23 +44,27 @@ export async function retrieveEncryptedEvents(
     for (const entry of inboundSecrets) {
         const secretResult = await processSecret(
             node,
+            historyNode,
             entry,
             startIndex,
             maxIndices,
             batchSize,
+            publicDataRootByBlock,
         );
 
         results.push(secretResult);
     }
 
     const events = sortEvents(results.flatMap(r => r.events));
+    const auditorRoot = (await computeAuditorRoot(events)).toString();
 
     return {
         retrievedAt: Date.now(),
         secrets: results,
         events,
         totalEvents: events.length,
-        ciphertextRoot: (await computeCiphertextRoot(events)).toString(),
+        auditorRoot,
+        ciphertextRoot: auditorRoot,
     };
 }
 
@@ -66,10 +73,12 @@ export async function retrieveEncryptedEvents(
  */
 async function processSecret(
     node: AztecNode,
+    historyNode: AztecNode,
     entry: ExportedTaggingSecret,
     startIndex: number,
     maxIndices: number,
     batchSize: number,
+    publicDataRootByBlock: Map<string, string>,
 ): Promise<EventSecretResult> {
     const events: RetrievedEvent[] = [];
 
@@ -104,10 +113,13 @@ async function processSecret(
             for (const logEntry of logs) {
                 // v4: logData is Fr[], concatenate to buffer
                 const encryptedLog = Buffer.concat(logEntry.logData.map(f => f.toBuffer()));
+                const blockNumber = logEntry.blockNumber.toString();
+                const publicDataTreeRoot = await getPublicDataTreeRoot(historyNode, blockNumber, publicDataRootByBlock);
 
                 events.push({
                     txHash: logEntry.txHash.toString(),
-                    blockNumber: logEntry.blockNumber.toString(),
+                    blockNumber,
+                    publicDataTreeRoot,
                     contractAddress: entry.secret.app.toString(),
                     ciphertext: encryptedLog.toString('hex'),
                     ciphertextBuffer: encryptedLog,
@@ -146,23 +158,32 @@ function sortEvents(events: RetrievedEvent[]): RetrievedEvent[] {
     });
 }
 
-async function computeCiphertextLeaf(ciphertextBuffer: Buffer): Promise<Fr> {
-    const ciphertextWithoutTag = ciphertextBuffer.slice(TAG_SIZE);
-    const paddedBuffer = Buffer.alloc(MESSAGE_CIPHERTEXT_LEN * 32);
-    ciphertextWithoutTag.copy(paddedBuffer, 0, 0, Math.min(ciphertextWithoutTag.length, paddedBuffer.length));
+async function getPublicDataTreeRoot(
+    historyNode: AztecNode,
+    blockNumber: string,
+    cache: Map<string, string>,
+): Promise<string> {
+    const cached = cache.get(blockNumber);
+    if (cached) return cached;
 
-    const ciphertextFields: Fr[] = [];
-    for (let i = 0; i < MESSAGE_CIPHERTEXT_LEN; i++) {
-        ciphertextFields.push(Fr.fromBuffer(paddedBuffer.slice(i * 32, (i + 1) * 32)));
+    const header = await historyNode.getBlockHeader(Number(blockNumber) as any);
+    if (!header) {
+        throw new Error(`Block header not found for block ${blockNumber}`);
     }
 
-    return poseidon2HashWithSeparator(ciphertextFields, 0);
+    const root = header.state.partial.publicDataTree.root.toString();
+    cache.set(blockNumber, root);
+    return root;
 }
 
-async function computeCiphertextRoot(events: RetrievedEvent[]): Promise<Fr> {
+async function computeAuditorLeaf(event: RetrievedEvent): Promise<Fr> {
+    return computeSwapLeaf(parseSwapCiphertextFields(event.ciphertextBuffer), event.publicDataTreeRoot);
+}
+
+async function computeAuditorRoot(events: RetrievedEvent[]): Promise<Fr> {
     if (events.length === 0) return Fr.ZERO;
 
-    let level = await Promise.all(events.map(event => computeCiphertextLeaf(event.ciphertextBuffer)));
+    let level = await Promise.all(events.map(event => computeAuditorLeaf(event)));
     const zeroHashes = await getZeroHashes(Math.max(1, Math.ceil(Math.log2(level.length)) + 1));
 
     if (level.length === 1) {
@@ -189,7 +210,9 @@ export interface EventRetrievalResult {
     events: RetrievedEvent[];
     secrets: EventSecretResult[];
     totalEvents: number;
-    /** Merkle root of all returned ciphertext leaves. */
+    /** Merkle root of ciphertext leaves bound to their public data tree roots. */
+    auditorRoot: string;
+    /** Back-compat alias for auditorRoot. */
     ciphertextRoot: string;
 }
 
@@ -211,6 +234,8 @@ export interface EventSecretResult {
 export interface RetrievedEvent {
     txHash: string;
     blockNumber: string;
+    /** Public data tree root from this event's block header */
+    publicDataTreeRoot: string;
     /** Contract that emitted the encrypted event */
     contractAddress: string;
     /** Encrypted log ciphertext (hex encoded) */

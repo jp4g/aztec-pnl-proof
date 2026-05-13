@@ -19,6 +19,8 @@ const PRIVATE_LOG_FIRST_FIELD_SEPARATOR = 2769976252n;
 export interface BrowserRetrievedEvent {
   txHash: string;
   blockNumber: string;
+  /** Public data tree root from this event's block header */
+  publicDataTreeRoot: string;
   /** Contract that emitted the encrypted event */
   contractAddress: string;
   /** Encrypted log ciphertext (hex encoded, no 0x prefix) */
@@ -31,7 +33,9 @@ export interface BrowserRetrievedEvent {
 export interface BrowserEventRetrievalResult {
   events: BrowserRetrievedEvent[];
   totalEvents: number;
-  /** Merkle root of all returned ciphertext leaves. */
+  /** Merkle root of ciphertext leaves bound to their public data tree roots. */
+  auditorRoot: string;
+  /** Back-compat alias for auditorRoot. */
   ciphertextRoot: string;
 }
 
@@ -62,7 +66,8 @@ function computeZeroHashes(maxDepth: number): bigint[] {
   return zeroHashes;
 }
 
-function computeCiphertextLeaf(ciphertext: string): bigint {
+function computeAuditorLeaf(event: BrowserRetrievedEvent): bigint {
+  const { ciphertext, publicDataTreeRoot } = event;
   const ciphertextHex = ciphertext.startsWith("0x") ? ciphertext.slice(2) : ciphertext;
   const ciphertextWithoutTag = ciphertextHex.slice(TAG_SIZE * 2);
   const paddedCiphertext = ciphertextWithoutTag
@@ -74,13 +79,13 @@ function computeCiphertextLeaf(ciphertext: string): bigint {
     fields.push(BigInt("0x" + paddedCiphertext.slice(i * 64, (i + 1) * 64)));
   }
 
-  return poseidon2Hash([0n, ...fields]);
+  return poseidon2Hash([...fields, BigInt(publicDataTreeRoot)]);
 }
 
-function computeCiphertextRoot(events: BrowserRetrievedEvent[]): string {
+function computeAuditorRoot(events: BrowserRetrievedEvent[]): string {
   if (events.length === 0) return toHexField(0n);
 
-  let level = events.map((event) => computeCiphertextLeaf(event.ciphertext));
+  let level = events.map((event) => computeAuditorLeaf(event));
   const zeroHashes = computeZeroHashes(Math.max(1, Math.ceil(Math.log2(level.length)) + 1));
 
   if (level.length === 1) {
@@ -96,6 +101,47 @@ function computeCiphertextRoot(events: BrowserRetrievedEvent[]): string {
   }
 
   return toHexField(level[0]);
+}
+
+/** Fetch a historical block header root from an Aztec node JSON-RPC endpoint. */
+async function getPublicDataTreeRoot(
+  historyNodeUrl: string,
+  blockNumber: string,
+  cache: Map<string, string>,
+): Promise<string> {
+  const cached = cache.get(blockNumber);
+  if (cached) return cached;
+
+  const res = await fetch(historyNodeUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "node_getBlockHeader",
+      params: [Number(blockNumber)],
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Aztec history node returned ${res.status}: ${await res.text()}`);
+  }
+
+  const json = await res.json();
+  if (json.error) {
+    throw new Error(`Aztec history node RPC error: ${json.error.message ?? JSON.stringify(json.error)}`);
+  }
+  if (!json.result) {
+    throw new Error(`Block header not found for block ${blockNumber}`);
+  }
+
+  const root = json.result?.state?.partial?.publicDataTree?.root;
+  if (typeof root !== "string") {
+    throw new Error(`Block header for block ${blockNumber} is missing state.partial.publicDataTree.root`);
+  }
+
+  cache.set(blockNumber, root);
+  return root;
 }
 
 /** Call Aztec node JSON-RPC directly */
@@ -143,11 +189,13 @@ function parseAppFromSecret(secretStr: string): string {
  * Suitable for browser/server environments (Next.js routes, etc.).
  *
  * @param nodeUrl - Aztec node JSON-RPC endpoint URL
+ * @param historyNodeUrl - Aztec node JSON-RPC endpoint URL with historical block headers
  * @param secrets - Serialized exported tagging secrets
  * @param options - Optional scan parameters
  */
 export async function retrieveEncryptedEvents(
   nodeUrl: string,
+  historyNodeUrl: string,
   secrets: SerializedExportedTaggingSecret[],
   options?: {
     startIndex?: number;
@@ -161,6 +209,7 @@ export async function retrieveEncryptedEvents(
 
   const inboundSecrets = secrets.filter((s) => s.direction === "inbound");
   const events: BrowserRetrievedEvent[] = [];
+  const publicDataRootByBlock = new Map<string, string>();
 
   for (const entry of inboundSecrets) {
     // secret is "0xSECRET:0xAPP" (ExtendedDirectionalAppTaggingSecret)
@@ -190,10 +239,13 @@ export async function retrieveEncryptedEvents(
               return hex.padStart(64, "0");
             })
             .join("");
+          const blockNumber = String(log.blockNumber);
+          const publicDataTreeRoot = await getPublicDataTreeRoot(historyNodeUrl, blockNumber, publicDataRootByBlock);
 
           events.push({
             txHash: log.txHash,
-            blockNumber: String(log.blockNumber),
+            blockNumber,
+            publicDataTreeRoot,
             contractAddress: app,
             ciphertext: ciphertextHex,
             logIndex: 0,
@@ -217,9 +269,12 @@ export async function retrieveEncryptedEvents(
     return true;
   });
 
+  const auditorRoot = computeAuditorRoot(unique);
+
   return {
     events: unique,
     totalEvents: unique.length,
-    ciphertextRoot: computeCiphertextRoot(unique),
+    auditorRoot,
+    ciphertextRoot: auditorRoot,
   };
 }

@@ -14,7 +14,6 @@ export interface TaxProofResult {
         remainingLotStateRoot: string;
         initialLotStateRoot: string;
         priceFeedAddress: string;
-        blockNumber: bigint;
     };
 }
 
@@ -57,7 +56,6 @@ export class TaxProver {
             summaryResult.publicInputs.remainingLotStateRoot,
             summaryResult.publicInputs.initialLotStateRoot,
             summaryResult.publicInputs.priceFeedAddress,
-            summaryResult.publicInputs.blockNumber.toString(),
         ];
 
         const circuitInputs = {
@@ -70,8 +68,8 @@ export class TaxProver {
 
         log('  Executing tax circuit...');
         const { witness, returnValue } = await this.noir!.execute(circuitInputs);
-        const [root, taxStr, remainingRoot, initialRoot, priceFeedAddr, blockNum] =
-            returnValue as [string, string, string, string, string, string];
+        const [root, taxStr, remainingRoot, initialRoot, priceFeedAddr] =
+            returnValue as [string, string, string, string, string];
 
         log('  Generating proof...');
         const proof = await this.backend!.generateProof(witness);
@@ -93,7 +91,6 @@ export class TaxProver {
                 remainingLotStateRoot: remainingRoot,
                 initialLotStateRoot: initialRoot,
                 priceFeedAddress: priceFeedAddr,
-                blockNumber: BigInt(blockNum),
             },
         };
     }
