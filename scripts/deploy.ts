@@ -12,8 +12,9 @@
  * Writes deployed addresses to frontend/.env.production (devnet) or frontend/.env.development (sandbox) and deployment.json.
  *
  * Env vars:
- *   AZTEC_NODE_URL       (default: http://localhost:8080)
- *   COINGECKO_API_KEY    (required for price fetch)
+ *   AZTEC_NODE_URL          (default: http://localhost:8080)
+ *   AZTEC_ARCHIVAL_NODE_URL (default: AZTEC_NODE_URL)
+ *   COINGECKO_API_KEY       (required for price fetch)
  *
  * Usage: yarn deploy
  */
@@ -40,6 +41,7 @@ import { upsertEnvVar } from './fpc/utils';
 
 const {
     AZTEC_NODE_URL = 'http://localhost:8080',
+    AZTEC_ARCHIVAL_NODE_URL = AZTEC_NODE_URL,
     COINGECKO_API_KEY,
 } = process.env;
 
@@ -340,6 +342,8 @@ async function setup() {
     const envFile = isDevnet ? '.env.production' : '.env.development';
     const envPath = join(process.cwd(), 'packages', 'frontend', envFile);
     const deployedVars: Record<string, string> = {
+        NEXT_PUBLIC_AZTEC_NODE_URL: AZTEC_NODE_URL,
+        NEXT_PUBLIC_AZTEC_ARCHIVAL_NODE_URL: AZTEC_ARCHIVAL_NODE_URL,
         NEXT_PUBLIC_PRICE_FEED: priceFeed.address.toString(),
         NEXT_PUBLIC_TOKEN_USDC: usdc.address.toString(),
         NEXT_PUBLIC_TOKEN_WETH: weth.address.toString(),

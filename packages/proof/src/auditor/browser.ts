@@ -12,7 +12,8 @@ import type {
   SerializedExportedTaggingSecret,
 } from "./types";
 
-// Domain separator for PRIVATE_LOG_FIRST_FIELD from @aztec/constants
+// Domain separators from @aztec/constants.
+const UNCONSTRAINED_MSG_LOG_TAG_SEPARATOR = 1485357192n;
 const PRIVATE_LOG_FIRST_FIELD_SEPARATOR = 2769976252n;
 
 /** A single retrieved event (browser-friendly, no Buffer). */
@@ -39,22 +40,23 @@ export interface BrowserEventRetrievalResult {
   ciphertextRoot: string;
 }
 
-/** Generate a single tag: poseidon2Hash([secret, index]) */
-function generateTag(secretValue: bigint, index: number): string {
-  const hash = poseidon2Hash([secretValue, BigInt(index)]);
-  return "0x" + hash.toString(16).padStart(64, "0");
-}
-
-/** Compute siloed tag: poseidon2HashWithSeparator([app, tag], PRIVATE_LOG_FIRST_FIELD) */
-function computeSiloedTag(app: string, tagValue: string): string {
-  const appBigInt = BigInt(app);
-  const tagBigInt = BigInt(tagValue);
-  const hash = poseidon2Hash([PRIVATE_LOG_FIRST_FIELD_SEPARATOR, appBigInt, tagBigInt]);
-  return "0x" + hash.toString(16).padStart(64, "0");
-}
-
 function toHexField(value: bigint): string {
   return "0x" + value.toString(16).padStart(64, "0");
+}
+
+function parseSerializedSecret(secret: string): { secretValue: bigint; app: string } {
+  const [secretValue, app] = secret.split(':');
+  if (!secretValue || !app) {
+    throw new Error(`Invalid secret format — expected "0xSECRET:0xAPP", got "${secret}"`);
+  }
+  return { secretValue: BigInt(secretValue), app };
+}
+
+function computeSiloedTag(secretValue: bigint, app: string, index: number): string {
+  const tag = poseidon2Hash([secretValue, BigInt(index)]);
+  const logTag = poseidon2Hash([UNCONSTRAINED_MSG_LOG_TAG_SEPARATOR, tag]);
+  const siloedTag = poseidon2Hash([PRIVATE_LOG_FIRST_FIELD_SEPARATOR, BigInt(app), logTag]);
+  return toHexField(siloedTag);
 }
 
 function computeZeroHashes(maxDepth: number): bigint[] {
@@ -169,16 +171,16 @@ async function getPrivateLogsByTags(nodeUrl: string, siloedTags: string[]): Prom
   return json.result;
 }
 
-/**
- * Parse the app address from a serialized ExtendedDirectionalAppTaggingSecret string.
- * Format is "0xSECRET:0xAPP", where APP is the contract address.
- */
-function parseAppFromSecret(secretStr: string): string {
-  const colonIdx = secretStr.indexOf(':');
-  if (colonIdx === -1) {
-    throw new Error(`Invalid secret format — expected "0xSECRET:0xAPP", got "${secretStr}"`);
-  }
-  return secretStr.slice(colonIdx + 1);
+function sortEvents(events: BrowserRetrievedEvent[]): BrowserRetrievedEvent[] {
+  return [...events].sort((a, b) => {
+    const aBlock = BigInt(a.blockNumber);
+    const bBlock = BigInt(b.blockNumber);
+    if (aBlock !== bBlock) return aBlock < bBlock ? -1 : 1;
+    const txDiff = a.txHash.localeCompare(b.txHash);
+    if (txDiff !== 0) return txDiff;
+    if (a.logIndex !== b.logIndex) return a.logIndex - b.logIndex;
+    return a.tagIndex - b.tagIndex;
+  });
 }
 
 /**
@@ -212,20 +214,14 @@ export async function retrieveEncryptedEvents(
   const publicDataRootByBlock = new Map<string, string>();
 
   for (const entry of inboundSecrets) {
-    // secret is "0xSECRET:0xAPP" (ExtendedDirectionalAppTaggingSecret)
-    const secretStr = entry.secret.includes(':') ? entry.secret.split(':')[0] : entry.secret;
-    const secretValue = BigInt(secretStr);
-    const app = parseAppFromSecret(entry.secret);
+    const { secretValue, app } = parseSerializedSecret(entry.secret);
 
     for (let index = startIndex; index < startIndex + maxIndices; index += batchSize) {
       const count = Math.min(batchSize, startIndex + maxIndices - index);
 
-      // Generate and silo tags
       const siloedTags: string[] = [];
       for (let i = 0; i < count; i++) {
-        const baseTag = generateTag(secretValue, index + i);
-        const siloedTag = computeSiloedTag(app, baseTag);
-        siloedTags.push(siloedTag);
+        siloedTags.push(computeSiloedTag(secretValue, app, index + i));
       }
 
       const logsPerTag = await getPrivateLogsByTags(nodeUrl, siloedTags);
@@ -260,20 +256,12 @@ export async function retrieveEncryptedEvents(
     }
   }
 
-  // Sort by block number and deduplicate by txHash
-  events.sort((a, b) => Number(a.blockNumber) - Number(b.blockNumber));
-  const seen = new Set<string>();
-  const unique = events.filter((e) => {
-    if (seen.has(e.txHash)) return false;
-    seen.add(e.txHash);
-    return true;
-  });
-
-  const auditorRoot = computeAuditorRoot(unique);
+  const sortedEvents = sortEvents(events);
+  const auditorRoot = computeAuditorRoot(sortedEvents);
 
   return {
-    events: unique,
-    totalEvents: unique.length,
+    events: sortedEvents,
+    totalEvents: sortedEvents.length,
     auditorRoot,
     ciphertextRoot: auditorRoot,
   };
