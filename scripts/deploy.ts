@@ -41,9 +41,9 @@ import { upsertEnvVar } from './fpc/utils';
 
 const {
     AZTEC_NODE_URL = 'http://localhost:8080',
-    AZTEC_ARCHIVAL_NODE_URL = AZTEC_NODE_URL,
     COINGECKO_API_KEY,
 } = process.env;
+const AZTEC_ARCHIVAL_NODE_URL = process.env.AZTEC_ARCHIVAL_NODE_URL || AZTEC_NODE_URL;
 
 if (!COINGECKO_API_KEY) {
     console.error('Error: COINGECKO_API_KEY env var is required');

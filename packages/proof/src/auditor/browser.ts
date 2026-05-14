@@ -183,6 +183,24 @@ function sortEvents(events: BrowserRetrievedEvent[]): BrowserRetrievedEvent[] {
   });
 }
 
+function assertUnambiguousBlockOrder(events: BrowserRetrievedEvent[]): BrowserRetrievedEvent[] {
+  const eventsByBlock = new Map<string, number>();
+  for (const event of events) {
+    eventsByBlock.set(event.blockNumber, (eventsByBlock.get(event.blockNumber) ?? 0) + 1);
+  }
+
+  for (const [blockNumber, count] of eventsByBlock) {
+    if (count > 1) {
+      throw new Error(
+        `Cannot prove ${count} swap events from block ${blockNumber}: ` +
+        "Aztec private log retrieval does not expose sequencer tx/log order within a block.",
+      );
+    }
+  }
+
+  return events;
+}
+
 /**
  * Retrieve encrypted events from the Aztec network using tagging secrets.
  *
@@ -256,7 +274,7 @@ export async function retrieveEncryptedEvents(
     }
   }
 
-  const sortedEvents = sortEvents(events);
+  const sortedEvents = sortEvents(assertUnambiguousBlockOrder(events));
   const auditorRoot = computeAuditorRoot(sortedEvents);
 
   return {

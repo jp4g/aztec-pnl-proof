@@ -317,7 +317,7 @@ pub contract AMM {
         self.call(token1.finalize_transfer_to_private(amount1, token1_partial_note));
     }
 
-    /// Privately swaps `amount_in` `token_in` tokens for at least `amount_out_mint` `token_out` tokens with the pool.
+    /// Privately swaps `amount_in` `token_in` tokens for exactly the quoted `amount_out` `token_out` tokens with the pool.
     ///
     /// `authwit_nonce` can be any non-zero value, as it's only used to isolate token transfer authwits to this
     /// specific call.
@@ -328,7 +328,7 @@ pub contract AMM {
         token_in: AztecAddress,
         token_out: AztecAddress,
         amount_in: u128,
-        amount_out_min: u128,
+        amount_out: u128,
         authwit_nonce: Field,
     ) {
         let config = self.storage.config.read();
@@ -339,8 +339,8 @@ pub contract AMM {
 
         let sender = self.msg_sender();
 
-        // We transfer the full amount in, since it is an exact amount, and prepare a partial note for the amount out,
-        // which will only be known during public execution as it depends on the live balances.
+        // We transfer the exact amount in and prepare a partial note for the quoted output. Public execution must
+        // recompute the same output, otherwise the transaction reverts and no inaccurate proof event is accepted.
         self.call(Token::at(token_in).transfer_to_public(
             sender,
             self.address,
@@ -354,7 +354,7 @@ pub contract AMM {
             token_in,
             token_out,
             amount_in,
-            amount_out: amount_out_min,
+            amount_out,
             is_exact_input: true,
         }).deliver_to(sender, MessageDelivery.ONCHAIN_CONSTRAINED);
 
@@ -362,7 +362,7 @@ pub contract AMM {
             token_in,
             token_out,
             amount_in,
-            amount_out_min,
+            amount_out,
             token_out_partial_note,
         );
     }
@@ -373,7 +373,7 @@ pub contract AMM {
         token_in: AztecAddress,
         token_out: AztecAddress,
         amount_in: u128,
-        amount_out_min: u128,
+        amount_out_expected: u128,
         token_out_partial_note: PartialUintNote,
     ) {
         // In order to compute the amount to swap we need the live token balances. Note that at this state the token in
@@ -387,14 +387,14 @@ pub contract AMM {
 
         // We can now compute the number of tokens to transfer and complete the partial note.
         let amount_out = get_amount_out(amount_in, balance_in, balance_out);
-        assert(amount_out >= amount_out_min, "INSUFFICIENT_OUTPUT_AMOUNT");
+        assert(amount_out == amount_out_expected, "OUTPUT_AMOUNT_CHANGED");
 
         Token::at(token_out).finalize_transfer_to_private(amount_out, token_out_partial_note).call(
             self.context,
         );
     }
 
-    /// Privately swaps at most `amount_in_max` `token_in` tokens for `amount_out` `token_out` tokens with the pool.
+    /// Privately swaps exactly the quoted `amount_in` `token_in` tokens for `amount_out` `token_out` tokens with the pool.
     ///
     /// `authwit_nonce` can be any non-zero value, as it's only used to isolate token transfer authwits to this
     /// specific call.
@@ -405,7 +405,7 @@ pub contract AMM {
         token_in: AztecAddress,
         token_out: AztecAddress,
         amount_out: u128,
-        amount_in_max: u128,
+        amount_in: u128,
         authwit_nonce: Field,
     ) {
         let config = self.storage.config.read();
@@ -416,19 +416,14 @@ pub contract AMM {
 
         let sender = self.msg_sender();
 
-        // We don't know how many tokens we'll receive from the user, since the swap amount will only be known during
-        // public execution as it depends on the live balances. We therefore transfer the full maximum amount and
-        // prepare partial notes both for the token out and the refund.
-        // Technically the token out note does not need to be partial, since we do know the amount out, but we do want
-        // to wait until the swap has been completed before committing the note to the tree to avoid it being spent too
-        // early.
-        let change_token_in_partial_note = self.call(Token::at(token_in)
-            .transfer_to_public_and_prepare_private_balance_increase(
-                sender,
-                self.address,
-                amount_in_max,
-                authwit_nonce,
-            ));
+        // The event must contain settled amounts for PnL proving, so we transfer the exact quoted input. Public
+        // execution must recompute the same input from live balances, otherwise the transaction reverts.
+        self.call(Token::at(token_in).transfer_to_public(
+            sender,
+            self.address,
+            amount_in,
+            authwit_nonce,
+        ));
 
         let token_out_partial_note =
             self.call(Token::at(token_out).prepare_private_balance_increase(sender));
@@ -436,7 +431,7 @@ pub contract AMM {
         self.emit(Swap {
             token_in,
             token_out,
-            amount_in: amount_in_max,
+            amount_in,
             amount_out,
             is_exact_input: false,
         }).deliver_to(sender, MessageDelivery.ONCHAIN_CONSTRAINED);
@@ -444,9 +439,8 @@ pub contract AMM {
         self.enqueue_self._swap_tokens_for_exact_tokens(
             token_in,
             token_out,
-            amount_in_max,
+            amount_in,
             amount_out,
-            change_token_in_partial_note,
             token_out_partial_note,
         );
     }
@@ -456,31 +450,22 @@ pub contract AMM {
     fn _swap_tokens_for_exact_tokens(
         token_in: AztecAddress,
         token_out: AztecAddress,
-        amount_in_max: u128,
+        amount_in_expected: u128,
         amount_out: u128,
-        change_token_in_partial_note: PartialUintNote,
         token_out_partial_note: PartialUintNote,
     ) {
         // In order to compute the amount to swap we need the live token balances. Note that at this state the token in
         // transfer has already been completed as that function call was enqueued before this one. We therefore need to
         // subtract the amount in to get the pre-swap balances.
-        let balance_in_plus_amount_in_max =
+        let balance_in_plus_amount_in =
             self.view(Token::at(token_in).balance_of_public(self.address));
-        let balance_in = balance_in_plus_amount_in_max - amount_in_max;
+        let balance_in = balance_in_plus_amount_in - amount_in_expected;
 
         let balance_out = self.view(Token::at(token_out).balance_of_public(self.address));
 
-        // We can now compute the number of tokens we need to receive and complete the partial note with the change.
+        // We can now compute the number of tokens we need to receive.
         let amount_in = get_amount_in(amount_out, balance_in, balance_out);
-        assert(amount_in <= amount_in_max, "INSUFFICIENT_OUTPUT_AMOUNT");
-
-        let change = amount_in_max - amount_in;
-        if (change > 0 as u128) {
-            self.call(Token::at(token_in).finalize_transfer_to_private(
-                change,
-                change_token_in_partial_note,
-            ));
-        }
+        assert(amount_in == amount_in_expected, "INPUT_AMOUNT_CHANGED");
 
         // Note again that we already knew the amount out, but for consistency we want to only commit this note once
         // all other steps have been performed.

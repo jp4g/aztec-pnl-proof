@@ -1,4 +1,4 @@
-use crate::{AMM, test::utils::{add_liquidity, remove_liquidity, setup}};
+use crate::{AMM, lib::{get_amount_in, get_amount_out}, test::utils::{add_liquidity, remove_liquidity, setup}};
 use aztec::{
     protocol::{address::AztecAddress, traits::FromField},
     test::helpers::authwit::add_private_authwit_from_call,
@@ -158,7 +158,7 @@ unconstrained fn swap_exact_tokens_for_tokens() {
 
     // Now perform a swap
     let amount_in = 1000 as u128;
-    let amount_out_min = 1800 as u128; // Expect ~1814 with 0.3% fee
+    let amount_out = get_amount_out(amount_in, liquidity_amount0, liquidity_amount1);
 
     env.call_private(minter, token0.mint_to_private(swapper, amount_in));
 
@@ -176,15 +176,14 @@ unconstrained fn swap_exact_tokens_for_tokens() {
             token0_address,
             token1_address,
             amount_in,
-            amount_out_min,
+            amount_out,
             AUTHWIT_NONCE,
         ),
     );
 
     // Verify swap occurred - all of input tokens should be spent and hence the swapper should have 0 token0 balance.
     assert_eq(env.execute_utility(token0.balance_of_private(swapper)), 0);
-    // The exact amount out depends on the AMM formula, but should be > amount_out_min
-    assert(env.execute_utility(token1.balance_of_private(swapper)) >= amount_out_min);
+    assert_eq(env.execute_utility(token1.balance_of_private(swapper)), amount_out);
 }
 
 #[test]
@@ -218,15 +217,15 @@ unconstrained fn swap_tokens_for_exact_tokens() {
 
     // Now perform a swap for exact tokens out
     let amount_out = 1000 as u128;
-    let amount_in_max = 600 as u128; // Should need ~503 tokens in with 0.3% fee
+    let amount_in = get_amount_in(amount_out, liquidity_amount0, liquidity_amount1);
 
-    env.call_private(minter, token0.mint_to_private(swapper, amount_in_max));
+    env.call_private(minter, token0.mint_to_private(swapper, amount_in));
 
     // Create authwit for transferring tokens to AMM
-    let transfer_call = token0.transfer_to_public_and_prepare_private_balance_increase(
+    let transfer_call = token0.transfer_to_public(
         swapper,
         amm_address,
-        amount_in_max,
+        amount_in,
         AUTHWIT_NONCE,
     );
     add_private_authwit_from_call(env, swapper, amm_address, transfer_call);
@@ -237,17 +236,14 @@ unconstrained fn swap_tokens_for_exact_tokens() {
             token0_address,
             token1_address,
             amount_out,
-            amount_in_max,
+            amount_in,
             AUTHWIT_NONCE,
         ),
     );
 
     // Verify swap occurred - should get exact amount out
     assert_eq(env.execute_utility(token1.balance_of_private(swapper)), amount_out);
-    // Should have some token0 change returned
-    let swapper_token0_balance = env.execute_utility(token0.balance_of_private(swapper));
-    assert(swapper_token0_balance > 0);
-    assert(swapper_token0_balance < amount_in_max);
+    assert_eq(env.execute_utility(token0.balance_of_private(swapper)), 0);
 }
 
 #[test(should_fail_with = "INCORRECT_TOKEN0_LIMITS")]

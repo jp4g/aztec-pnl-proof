@@ -55,7 +55,7 @@ export async function retrieveEncryptedEvents(
         results.push(secretResult);
     }
 
-    const events = sortEvents(results.flatMap(r => r.events));
+    const events = sortEvents(assertUnambiguousBlockOrder(results.flatMap(r => r.events)));
     const auditorRoot = (await computeAuditorRoot(events)).toString();
 
     return {
@@ -156,6 +156,24 @@ function sortEvents(events: RetrievedEvent[]): RetrievedEvent[] {
         if (a.logIndex !== b.logIndex) return a.logIndex - b.logIndex;
         return a.tagIndex - b.tagIndex;
     });
+}
+
+function assertUnambiguousBlockOrder(events: RetrievedEvent[]): RetrievedEvent[] {
+    const eventsByBlock = new Map<string, number>();
+    for (const event of events) {
+        eventsByBlock.set(event.blockNumber, (eventsByBlock.get(event.blockNumber) ?? 0) + 1);
+    }
+
+    for (const [blockNumber, count] of eventsByBlock) {
+        if (count > 1) {
+            throw new Error(
+                `Cannot prove ${count} swap events from block ${blockNumber}: ` +
+                'Aztec private log retrieval does not expose sequencer tx/log order within a block.',
+            );
+        }
+    }
+
+    return events;
 }
 
 async function getPublicDataTreeRoot(
