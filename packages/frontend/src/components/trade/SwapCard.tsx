@@ -27,6 +27,7 @@ export default function SwapCard() {
   const [sellAmount, setSellAmount] = useState("");
   const [buyAmount, setBuyAmount] = useState("");
   const [activeInput, setActiveInput] = useState<"sell" | "buy">("sell");
+  const [slippage, setSlippage] = useState(1);
   const [swapping, setSwapping] = useState(false);
 
   const connected = walletStatus === "connected";
@@ -125,6 +126,15 @@ export default function SwapCard() {
     setActiveInput("sell");
   }, [sellToken, buyToken]);
 
+  const handleSlippageChange = useCallback((value: string) => {
+    const num = parseFloat(value);
+    if (value === "") {
+      setSlippage(0);
+    } else if (!isNaN(num) && num >= 0 && num <= 10) {
+      setSlippage(num);
+    }
+  }, []);
+
   const amt = parseFloat(sellAmount);
   const hasAmount = sellAmount.length > 0 && amt > 0;
   const insufficientBalance = hasAmount && amt > parseBalance(sellBalance);
@@ -196,7 +206,9 @@ export default function SwapCard() {
         .get_amount_out_for_exact_in(reserveIn, reserveOut, amountIn)
         .simulate({ from: owner });
 
+      // Apply slippage
       const amountOutBig = typeof amountOut === "bigint" ? amountOut : BigInt(amountOut.toString());
+      const amountOutMin = amountOutBig * BigInt(Math.floor((100 - slippage) * 100)) / BigInt(10000);
 
       // Create authwit for the pool to transfer tokens on our behalf
       const nonce = Fr.random();
@@ -207,7 +219,7 @@ export default function SwapCard() {
 
       // Execute swap
       await pool.methods
-        .swap_exact_tokens_for_tokens(sellAddr, buyAddr, amountIn, amountOutBig, nonce)
+        .swap_exact_tokens_for_tokens(sellAddr, buyAddr, amountIn, amountOutMin, nonce)
         .with({ authWitnesses: [authwit] })
         .send({ from: owner });
 
@@ -230,7 +242,7 @@ export default function SwapCard() {
     } finally {
       setSwapping(false);
     }
-  }, [wallet, address, swapping, sellToken, buyToken, sellAmount, getRawBalance, showToast, setBalance]);
+  }, [wallet, address, swapping, sellToken, buyToken, sellAmount, slippage, getRawBalance, showToast, setBalance]);
 
   return (
     <div className="w-full max-w-md bg-white rounded-2xl border border-neutral-200 shadow-sm p-6">
@@ -285,8 +297,19 @@ export default function SwapCard() {
         dimmed={activeInput === "sell" && quoting}
       />
 
-      <div className="mt-3 px-1 text-xs text-neutral-500">
-        Swaps execute only at the quoted output so proof events match settled amounts.
+      {/* Slippage */}
+      <div className="flex items-center justify-between mt-3 px-1">
+        <span className="text-xs text-neutral-500">Slippage tolerance</span>
+        <div className="flex items-center gap-1">
+          <input
+            type="text"
+            inputMode="decimal"
+            value={slippage}
+            onChange={(e) => handleSlippageChange(e.target.value)}
+            className="w-12 text-right text-xs font-mono bg-neutral-50 border border-neutral-200 rounded px-1.5 py-0.5 outline-none focus:border-orange-400"
+          />
+          <span className="text-xs text-neutral-400">%</span>
+        </div>
       </div>
 
       {/* Swap button */}

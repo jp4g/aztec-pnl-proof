@@ -1,7 +1,7 @@
 {
   "amm_contract-AMM.json": {
     "contractName": "AMM",
-    "hash": "b8b7e369d4e07eb6330582d3de36547a840260fcade9d30d98141a05a16eba92"
+    "hash": "633c4c8f9b5e52dc6cebbf3053bca273f61b369c32382bb376ade49824ba4399"
   },
   "price_feed_contract-PriceFeed.json": {
     "contractName": "PriceFeed",
