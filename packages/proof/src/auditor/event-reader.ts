@@ -1,7 +1,10 @@
 import type { AztecNode } from "@aztec/aztec.js/node";
-import { TagGenerator } from "./tag-generator";
 import type { ExportedTaggingSecret } from "./types";
-import { Tag, SiloedTag } from "@aztec/stdlib/logs";
+import { Fr } from "@aztec/foundation/curves/bn254";
+import { poseidon2Hash } from "@aztec/foundation/crypto/poseidon";
+import { SiloedTag } from "@aztec/stdlib/logs";
+import { computeSwapLeaf, parseSwapCiphertextFields } from '../swap-leaf';
+import { getZeroHashes } from '../imt';
 import { log } from '../logger';
 
 /**
@@ -12,13 +15,15 @@ import { log } from '../logger';
  * - Returns raw encrypted log buffers (ciphertexts) for circuit proving
  * - Only processes INBOUND secrets (events encrypted for the account holder)
  *
- * @param node - Aztec node client
+ * @param node - Aztec node client for private log retrieval
+ * @param historyNode - Aztec node client for historical block headers
  * @param secrets - Exported tagging secrets from a user
  * @param options - Scan options
  * @returns Retrieved encrypted event logs
  */
 export async function retrieveEncryptedEvents(
     node: AztecNode,
+    historyNode: AztecNode,
     secrets: ExportedTaggingSecret[],
     options?: {
         startIndex?: number;
@@ -31,6 +36,7 @@ export async function retrieveEncryptedEvents(
     const batchSize = options?.batchSize ?? 100;
 
     const results: EventSecretResult[] = [];
+    const publicDataRootByBlock = new Map<string, string>();
 
     // Filter to only inbound secrets - we can only decrypt events encrypted for us
     const inboundSecrets = secrets.filter(s => s.direction === 'inbound');
@@ -38,19 +44,27 @@ export async function retrieveEncryptedEvents(
     for (const entry of inboundSecrets) {
         const secretResult = await processSecret(
             node,
+            historyNode,
             entry,
             startIndex,
             maxIndices,
             batchSize,
+            publicDataRootByBlock,
         );
 
         results.push(secretResult);
     }
 
+    const events = sortEvents(assertUnambiguousBlockOrder(results.flatMap(r => r.events)));
+    const auditorRoot = (await computeAuditorRoot(events)).toString();
+
     return {
         retrievedAt: Date.now(),
         secrets: results,
-        totalEvents: results.reduce((sum, r) => sum + r.events.length, 0),
+        events,
+        totalEvents: events.length,
+        auditorRoot,
+        ciphertextRoot: auditorRoot,
     };
 }
 
@@ -59,10 +73,12 @@ export async function retrieveEncryptedEvents(
  */
 async function processSecret(
     node: AztecNode,
+    historyNode: AztecNode,
     entry: ExportedTaggingSecret,
     startIndex: number,
     maxIndices: number,
     batchSize: number,
+    publicDataRootByBlock: Map<string, string>,
 ): Promise<EventSecretResult> {
     const events: RetrievedEvent[] = [];
 
@@ -71,13 +87,14 @@ async function processSecret(
     for (let index = startIndex; index < startIndex + maxIndices; index += batchSize) {
         const count = Math.min(batchSize, startIndex + maxIndices - index);
 
-        // Step 1: Generate base tags (unsiloed)
-        const baseTags = await TagGenerator.generateTags(entry.secret, index, count);
-
-        // Step 2: Silo each tag with the contract address (v4 uses domain-separated hash)
-        const app = entry.secret.app;
+        // v4 computes the raw tag, log-domain-separated tag, and app silo in one step.
         const siloedTags = await Promise.all(
-            baseTags.map(baseTag => SiloedTag.compute(new Tag(baseTag), app))
+            Array.from({ length: count }, (_, offset) =>
+                SiloedTag.compute({
+                    extendedSecret: entry.secret,
+                    index: index + offset,
+                }),
+            ),
         );
 
         log(`[EventReader] Generated ${siloedTags.length} siloed tags for indices ${index}-${index + count - 1}`);
@@ -96,10 +113,14 @@ async function processSecret(
             for (const logEntry of logs) {
                 // v4: logData is Fr[], concatenate to buffer
                 const encryptedLog = Buffer.concat(logEntry.logData.map(f => f.toBuffer()));
+                const blockNumber = logEntry.blockNumber.toString();
+                const publicDataTreeRoot = await getPublicDataTreeRoot(historyNode, blockNumber, publicDataRootByBlock);
 
                 events.push({
                     txHash: logEntry.txHash.toString(),
-                    blockNumber: logEntry.blockNumber.toString(),
+                    blockNumber,
+                    publicDataTreeRoot,
+                    contractAddress: entry.secret.app.toString(),
                     ciphertext: encryptedLog.toString('hex'),
                     ciphertextBuffer: encryptedLog,
                     ciphertextBytes: encryptedLog.length,
@@ -125,13 +146,92 @@ async function processSecret(
     };
 }
 
+function sortEvents(events: RetrievedEvent[]): RetrievedEvent[] {
+    return [...events].sort((a, b) => {
+        const aBlock = BigInt(a.blockNumber);
+        const bBlock = BigInt(b.blockNumber);
+        if (aBlock !== bBlock) return aBlock < bBlock ? -1 : 1;
+        const txDiff = a.txHash.localeCompare(b.txHash);
+        if (txDiff !== 0) return txDiff;
+        if (a.logIndex !== b.logIndex) return a.logIndex - b.logIndex;
+        return a.tagIndex - b.tagIndex;
+    });
+}
+
+function assertUnambiguousBlockOrder(events: RetrievedEvent[]): RetrievedEvent[] {
+    const eventsByBlock = new Map<string, number>();
+    for (const event of events) {
+        eventsByBlock.set(event.blockNumber, (eventsByBlock.get(event.blockNumber) ?? 0) + 1);
+    }
+
+    for (const [blockNumber, count] of eventsByBlock) {
+        if (count > 1) {
+            throw new Error(
+                `Cannot prove ${count} swap events from block ${blockNumber}: ` +
+                'Aztec private log retrieval does not expose sequencer tx/log order within a block.',
+            );
+        }
+    }
+
+    return events;
+}
+
+async function getPublicDataTreeRoot(
+    historyNode: AztecNode,
+    blockNumber: string,
+    cache: Map<string, string>,
+): Promise<string> {
+    const cached = cache.get(blockNumber);
+    if (cached) return cached;
+
+    const header = await historyNode.getBlockHeader(Number(blockNumber) as any);
+    if (!header) {
+        throw new Error(`Block header not found for block ${blockNumber}`);
+    }
+
+    const root = header.state.partial.publicDataTree.root.toString();
+    cache.set(blockNumber, root);
+    return root;
+}
+
+async function computeAuditorLeaf(event: RetrievedEvent): Promise<Fr> {
+    return computeSwapLeaf(parseSwapCiphertextFields(event.ciphertextBuffer), event.publicDataTreeRoot);
+}
+
+async function computeAuditorRoot(events: RetrievedEvent[]): Promise<Fr> {
+    if (events.length === 0) return Fr.ZERO;
+
+    let level = await Promise.all(events.map(event => computeAuditorLeaf(event)));
+    const zeroHashes = await getZeroHashes(Math.max(1, Math.ceil(Math.log2(level.length)) + 1));
+
+    if (level.length === 1) {
+        return poseidon2Hash([level[0], zeroHashes[0]]);
+    }
+
+    for (let depth = 0; level.length > 1; depth++) {
+        const nextLevel: Fr[] = [];
+        for (let i = 0; i < level.length; i += 2) {
+            nextLevel.push(await poseidon2Hash([level[i], level[i + 1] ?? zeroHashes[depth]]));
+        }
+        level = nextLevel;
+    }
+
+    return level[0];
+}
+
 /**
  * Result of retrieving encrypted events.
  */
 export interface EventRetrievalResult {
     retrievedAt: number;
+    /** All retrieved events sorted in the order used for the ciphertext tree. */
+    events: RetrievedEvent[];
     secrets: EventSecretResult[];
     totalEvents: number;
+    /** Merkle root of ciphertext leaves bound to their public data tree roots. */
+    auditorRoot: string;
+    /** Back-compat alias for auditorRoot. */
+    ciphertextRoot: string;
 }
 
 /**
@@ -152,6 +252,10 @@ export interface EventSecretResult {
 export interface RetrievedEvent {
     txHash: string;
     blockNumber: string;
+    /** Public data tree root from this event's block header */
+    publicDataTreeRoot: string;
+    /** Contract that emitted the encrypted event */
+    contractAddress: string;
     /** Encrypted log ciphertext (hex encoded) */
     ciphertext: string;
     /** Raw ciphertext buffer for circuit input */

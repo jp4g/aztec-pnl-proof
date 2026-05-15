@@ -26,6 +26,10 @@ interface PriceFeedLike extends HasAddress {
     };
 }
 
+type SendableInteraction = {
+    send(opts: any): Promise<unknown>;
+};
+
 /**
  * Mutable pool state tracked by the caller.
  */
@@ -66,12 +70,14 @@ export async function rebalancePools(params: {
     tokenPrices: TokenPrice[];
     setOracle?: boolean;
     sendOpts?: (from: AztecAddress) => SendInteractionOptions;
+    sendInteraction?: (interaction: SendableInteraction, from: AztecAddress) => Promise<unknown>;
     onProgress?: (step: number, total: number, label: string) => void;
     /** Address string → display name, used in progress labels */
     tokenLabels?: Map<string, string>;
 }): Promise<void> {
     const { wallet, priceFeed, minter, pools, tokenPrices, setOracle = true, onProgress, tokenLabels } = params;
     const opts = params.sendOpts ?? ((from: AztecAddress): SendInteractionOptions => ({ from }));
+    const send = params.sendInteraction ?? ((interaction: SendableInteraction, from: AztecAddress) => interaction.send(opts(from)));
 
     // Build lookup: address string -> price
     const priceMap = new Map<string, bigint>();
@@ -165,7 +171,7 @@ export async function rebalancePools(params: {
         onProgress?.(batchIndex + 1, totalSteps, label);
 
         const chunk = interactions.slice(i, batchEnd);
-        await new BatchCall(wallet as Wallet, chunk).send(opts(minter));
+        await send(new BatchCall(wallet as Wallet, chunk), minter);
     }
 
     // Apply reserve mutations after successful send

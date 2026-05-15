@@ -3,7 +3,7 @@ import { Noir } from '@aztec/noir-noir_js';
 import { Barretenberg, UltraHonkBackend } from '@aztec/bb.js';
 import type { CompiledCircuit } from '@aztec/noir-types';
 import { getZeroHashes } from './imt';
-import type { SwapProver, SwapProofResult, SwapData } from './swap-prover';
+import type { SwapEventInput, SwapProver, SwapProofResult, SwapData } from './swap-prover';
 import { LotStateTree } from './lot-state-tree';
 import { parseSignedHex, proofBytesToFields } from './utils';
 import { log } from './logger';
@@ -90,8 +90,6 @@ export interface SwapProofTreeResult {
         initialLotStateRoot: string;
         /** PriceFeed contract address */
         priceFeedAddress: string;
-        /** Block number of last swap */
-        blockNumber: bigint;
     };
     /** Signed PnL (negative means loss) */
     signedPnl: bigint;
@@ -107,7 +105,7 @@ export interface SwapProofTreeResult {
 interface ProofArtifact {
     proof: Uint8Array;
     proofAsFields: string[];
-    publicInputs: string[]; // 6 fields
+    publicInputs: string[]; // 5 fields
 }
 
 /**
@@ -116,7 +114,7 @@ interface ProofArtifact {
  *
  * Each swap proof updates two leaves in the lot state tree (sell-side and buy-side).
  * The summary tree builds a merkle root of swap leaf hashes,
- * sums signed PnL, and enforces chronological block ordering.
+ * sums signed PnL, and enforces price feed consistency.
  */
 export class SwapProofTree {
     private config: SwapProofTreeConfig;
@@ -141,10 +139,10 @@ export class SwapProofTree {
         };
     }
 
-    private saveDebug(): void {
+    private async saveDebug(): Promise<void> {
         if (!this.debugData || !this.config.debugOutputPath) return;
-        if (typeof globalThis.process !== 'undefined') {
-            const { writeFileSync } = require('fs') as typeof import('fs');
+        if (typeof globalThis.process !== 'undefined' && typeof globalThis.window === 'undefined') {
+            const { writeFileSync } = await import(/* webpackIgnore: true */ 'node:fs');
             writeFileSync(this.config.debugOutputPath, JSON.stringify(this.debugData, null, 2));
             log(`[debug] Saved proof tree data to ${this.config.debugOutputPath}`);
         }
@@ -156,14 +154,14 @@ export class SwapProofTree {
      * Events must be sorted chronologically. The lot state tree is mutated
      * in-place through each sequential proof.
      *
-     * @param events - Encrypted swap events sorted by block number
+     * @param events - Encrypted swap events sorted by the auditor
      * @param lotStateTree - Multi-token lot state tree (mutated in-place)
      * @param priceFeedAddress - PriceFeed contract address
      * @param priceFeedAssetsSlot - Storage slot of the PriceFeed `assets` map
      * @returns Aggregated proof with merkle root and signed PnL
      */
     async prove(
-        events: { encryptedLog: Buffer; blockNumber: bigint }[],
+        events: SwapEventInput[],
         lotStateTree: LotStateTree,
         priceFeedAddress: Fr,
         priceFeedAssetsSlot: Fr,
@@ -178,8 +176,6 @@ export class SwapProofTree {
         const swapResults: SwapProofResult[] = [];
         const swapArtifacts: ProofArtifact[] = [];
 
-        let previousBlockNumber = 0n;
-
         for (let i = 0; i < events.length; i++) {
             log(`\n--- Proving swap ${i + 1}/${events.length} ---`);
             onProgress?.('swap', i + 1, events.length);
@@ -189,7 +185,6 @@ export class SwapProofTree {
                 lotStateTree,
                 priceFeedAddress,
                 priceFeedAssetsSlot,
-                previousBlockNumber,
             );
 
             const proofAsFields = proofBytesToFields(result.proof);
@@ -200,7 +195,6 @@ export class SwapProofTree {
                 result.publicInputs.remainingLotStateRoot,
                 result.publicInputs.initialLotStateRoot,
                 result.publicInputs.priceFeedAddress,
-                result.publicInputs.blockNumber.toString(),
             ];
 
             swapResults.push(result);
@@ -218,11 +212,8 @@ export class SwapProofTree {
                     proofAsFields,
                     publicInputs: pubInputs,
                 });
-                this.saveDebug();
+                await this.saveDebug();
             }
-
-            // Chain block number to next proof
-            previousBlockNumber = events[i].blockNumber;
         }
 
         log(`\nIndividual proofs generated: ${swapArtifacts.length}`);
@@ -231,7 +222,7 @@ export class SwapProofTree {
         const finalProof = await this.buildTree(swapArtifacts, onProgress);
         log(`\nFinal proof generated!`);
 
-        const [root, pnlStr, remainingLotStateRoot, initialLotStateRoot, priceFeedAddr, blockNum] =
+        const [root, pnlStr, remainingLotStateRoot, initialLotStateRoot, priceFeedAddr] =
             finalProof.publicInputs;
         const pnl = fieldToI64(BigInt(pnlStr));
 
@@ -243,7 +234,6 @@ export class SwapProofTree {
                 remainingLotStateRoot,
                 initialLotStateRoot,
                 priceFeedAddress: priceFeedAddr,
-                blockNumber: BigInt(blockNum),
             },
             signedPnl: pnl,
             swapData: swapResults.map(r => r.swapData),
@@ -339,7 +329,7 @@ export class SwapProofTree {
 
         const hasRight = right !== null;
         const emptyProof = new Array(left.proofAsFields.length).fill('0x0');
-        const emptyPublicInputs = ['0x0', '0x0', '0x0', '0x0', '0x0', '0x0'];
+        const emptyPublicInputs = ['0x0', '0x0', '0x0', '0x0', '0x0'];
         const zeroLeafForLevel = this.zeroHashes![level];
 
         const summaryInputs = {
@@ -364,8 +354,8 @@ export class SwapProofTree {
         };
 
         const { witness, returnValue } = await this.summaryNoir!.execute(summaryInputs);
-        const [root, pnlStr, remainingLotStateRoot, initialLotStateRoot, priceFeedAddr, blockNum] =
-            returnValue as [string, string, string, string, string, string];
+        const [root, pnlStr, remainingLotStateRoot, initialLotStateRoot, priceFeedAddr] =
+            returnValue as [string, string, string, string, string];
 
         const proof = await this.summaryBackend!.generateProof(witness, {
             verifierTarget: 'noir-recursive',
@@ -384,7 +374,7 @@ export class SwapProofTree {
         log(`  PnL so far: ${pnl}`);
         log(`  Proof: valid`);
 
-        const combinedPublicInputs = [root, i64ToField(pnl), remainingLotStateRoot, initialLotStateRoot, priceFeedAddr, blockNum];
+        const combinedPublicInputs = [root, i64ToField(pnl), remainingLotStateRoot, initialLotStateRoot, priceFeedAddr];
 
         // Save debug data for this combine call
         if (this.debugData) {
@@ -397,7 +387,7 @@ export class SwapProofTree {
                 proof: Buffer.from(proof.proof).toString('hex'),
                 publicInputs: combinedPublicInputs,
             });
-            this.saveDebug();
+            await this.saveDebug();
         }
 
         return {

@@ -16,7 +16,7 @@
 
 import { getInitialTestAccountsData } from '@aztec/accounts/testing';
 import { AztecAddress } from '@aztec/aztec.js/addresses';
-import { Fr } from '@aztec/aztec.js/fields';
+import { Fq, Fr } from '@aztec/aztec.js/fields';
 import { PriceFeedContract, PriceFeedContractArtifact } from '@privpnl/contracts/PriceFeed';
 import { TokenContract, TokenContractArtifact } from '@privpnl/contracts/Token';
 import { AMMContract, AMMContractArtifact } from '@privpnl/contracts/AMM';
@@ -120,7 +120,7 @@ async function demoData() {
         const adminManager = await wallet.createSchnorrAccount(
             Fr.fromString(infra.adminAccount.secretKey),
             Fr.fromString(infra.adminAccount.salt),
-            Fr.fromString(infra.adminAccount.signingKey),
+            Fq.fromString(infra.adminAccount.signingKey),
         );
         addresses.push(adminManager.address);
 
@@ -129,7 +129,7 @@ async function demoData() {
             const manager = await wallet.createSchnorrAccount(
                 Fr.fromString(demo.secretKey),
                 Fr.fromString(demo.salt),
-                Fr.fromString(demo.signingKey),
+                Fq.fromString(demo.signingKey),
             );
             addresses.push(manager.address);
         }

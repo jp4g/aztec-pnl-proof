@@ -1,6 +1,5 @@
 mod lib;
 mod config;
-mod test;
 
 use aztec::macros::aztec;
 

@@ -12,13 +12,15 @@
  * Writes deployed addresses to frontend/.env.production (devnet) or frontend/.env.development (sandbox) and deployment.json.
  *
  * Env vars:
- *   AZTEC_NODE_URL       (default: http://localhost:8080)
- *   COINGECKO_API_KEY    (required for price fetch)
+ *   AZTEC_NODE_URL          (default: http://localhost:8080)
+ *   AZTEC_ARCHIVAL_NODE_URL (default: AZTEC_NODE_URL)
+ *   COINGECKO_API_KEY       (required for price fetch)
  *
  * Usage: yarn deploy
  */
 
 import { AztecAddress } from '@aztec/aztec.js/addresses';
+import { NO_FROM } from '@aztec/aztec.js/account';
 import { PriceFeedContract } from '@privpnl/contracts/PriceFeed';
 import { TokenContract } from '@privpnl/contracts/Token';
 import { AMMContract } from '@privpnl/contracts/AMM';
@@ -26,6 +28,7 @@ import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { SponsoredFeePaymentMethod } from '@aztec/aztec.js/fee';
 import { Fr } from '@aztec/foundation/curves/bn254';
+import { GrumpkinScalar } from '@aztec/foundation/curves/grumpkin';
 import { BatchCall, getContractInstanceFromInstantiationParams } from '@aztec/aztec.js/contracts';
 import { SponsoredFPCContract } from '@aztec/noir-contracts.js/SponsoredFPC';
 import { SPONSORED_FPC_SALT } from '@aztec/constants';
@@ -40,6 +43,7 @@ const {
     AZTEC_NODE_URL = 'http://localhost:8080',
     COINGECKO_API_KEY,
 } = process.env;
+const AZTEC_ARCHIVAL_NODE_URL = process.env.AZTEC_ARCHIVAL_NODE_URL || AZTEC_NODE_URL;
 
 if (!COINGECKO_API_KEY) {
     console.error('Error: COINGECKO_API_KEY env var is required');
@@ -146,12 +150,13 @@ async function setup() {
         // Deploy 3 fresh accounts: admin + 2 demo accounts
         for (let i = 0; i < 3; i++) {
             const secret = Fr.random();
-            const signingKey = Fr.random();
+            const signingKey = GrumpkinScalar.random();
             const manager = await wallet.createSchnorrAccount(secret, Fr.ZERO, signingKey);
             const deployMethod = await manager.getDeployMethod();
             console.log(`  Deploying account ${i} at ${manager.address}...`);
+            await deployMethod.simulate({ from: NO_FROM });
             await deployMethod.send({
-                from: AztecAddress.ZERO,
+                from: NO_FROM,
                 fee: { paymentMethod: fpcPaymentMethod },
                 skipClassPublication: i !== 0,
                 wait: { timeout: 600 },
@@ -337,6 +342,8 @@ async function setup() {
     const envFile = isDevnet ? '.env.production' : '.env.development';
     const envPath = join(process.cwd(), 'packages', 'frontend', envFile);
     const deployedVars: Record<string, string> = {
+        NEXT_PUBLIC_AZTEC_NODE_URL: AZTEC_NODE_URL,
+        NEXT_PUBLIC_AZTEC_ARCHIVAL_NODE_URL: AZTEC_ARCHIVAL_NODE_URL,
         NEXT_PUBLIC_PRICE_FEED: priceFeed.address.toString(),
         NEXT_PUBLIC_TOKEN_USDC: usdc.address.toString(),
         NEXT_PUBLIC_TOKEN_WETH: weth.address.toString(),

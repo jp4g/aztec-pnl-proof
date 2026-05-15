@@ -4,5 +4,5 @@ type = "bin"
 authors = [""]
 
 [dependencies]
-bb_proof_verification = { git = "https://github.com/AztecProtocol/aztec-packages", tag = "v4.1.0-rc.2", directory = "barretenberg/noir/bb_proof_verification" }
-protocol_types = { git = "https://github.com/AztecProtocol/aztec-packages", tag = "v4.1.0-rc.2", directory = "noir-projects/noir-protocol-circuits/crates/types" }
+bb_proof_verification = { git = "https://github.com/AztecProtocol/aztec-packages", tag = "v4.2.0", directory = "barretenberg/noir/bb_proof_verification" }
+protocol_types = { git = "https://github.com/AztecProtocol/aztec-packages", tag = "v4.2.0", directory = "noir-projects/noir-protocol-circuits/crates/types" }

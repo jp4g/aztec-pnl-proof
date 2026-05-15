@@ -116,7 +116,7 @@ export function useProveFlow() {
         progress: 10,
       }));
 
-      const { serializeExportedTaggingSecrets } = await import("@privpnl/proof/auditor");
+      const { serializeExportedTaggingSecrets } = await import("@privpnl/proof/auditor/browser");
       const serializedSecrets = serializeExportedTaggingSecrets(secrets);
 
       const eventsRes = await fetch("/api/audit/events", {
@@ -130,9 +130,12 @@ export function useProveFlow() {
       }
 
       const eventsData = await eventsRes.json();
+      const auditorRoot = eventsData.auditorRoot as string | undefined;
       const encryptedEvents = eventsData.events as Array<{
         txHash: string;
         blockNumber: string;
+        publicDataTreeRoot: string;
+        contractAddress: string;
         ciphertext: string;
         logIndex: number;
       }>;
@@ -146,6 +149,9 @@ export function useProveFlow() {
           totalEvents: 0,
         }));
         return;
+      }
+      if (!auditorRoot) {
+        throw new Error("Auditor response missing auditor root");
       }
 
       const totalSwaps = encryptedEvents.length;
@@ -164,6 +170,7 @@ export function useProveFlow() {
           Buffer.from(evt.ciphertext, "hex"),
           completeAddress,
           ivskM,
+          evt.contractAddress,
         );
         if (plaintext && plaintext.length >= 6) {
           decodedSwaps.push({
@@ -251,9 +258,10 @@ export function useProveFlow() {
       }
 
       const priceFeedAddr = process.env.NEXT_PUBLIC_PRICE_FEED;
-      const priceFeedAddress = priceFeedAddr
-        ? Fr.fromString(priceFeedAddr)
-        : Fr.ZERO;
+      if (!priceFeedAddr) {
+        throw new Error("NEXT_PUBLIC_PRICE_FEED is required for proof verification");
+      }
+      const priceFeedAddress = Fr.fromString(priceFeedAddr);
       const priceFeedAssetsSlot = PriceFeedContract.storage.assets.slot;
 
       if (abortRef.current) return;
@@ -262,7 +270,10 @@ export function useProveFlow() {
       const swapEvents = encryptedEvents.map((e) => ({
         encryptedLog: Buffer.from(e.ciphertext, "hex"),
         blockNumber: BigInt(e.blockNumber),
+        publicDataTreeRoot: e.publicDataTreeRoot,
+        contractAddress: e.contractAddress,
       }));
+      const latestEventBlock = BigInt(encryptedEvents[encryptedEvents.length - 1].blockNumber);
 
       // --- Step 7: Full SwapProofTree + Tax ---
       setState((prev) => ({
@@ -318,6 +329,12 @@ export function useProveFlow() {
       );
 
       if (abortRef.current) return;
+      if (BigInt(result.publicInputs.root) !== BigInt(auditorRoot)) {
+        throw new Error("Summary proof root does not match auditor root");
+      }
+      if (BigInt(result.publicInputs.priceFeedAddress) !== priceFeedAddress.toBigInt()) {
+        throw new Error("Summary proof price feed does not match configured price feed");
+      }
 
       // Build downloadable PnL proof
       const pnlProof: DownloadableProof = {
@@ -329,7 +346,6 @@ export function useProveFlow() {
           remainingLotStateRoot: result.publicInputs.remainingLotStateRoot,
           initialLotStateRoot: result.publicInputs.initialLotStateRoot,
           priceFeedAddress: result.publicInputs.priceFeedAddress,
-          blockNumber: result.publicInputs.blockNumber.toString(),
         },
       };
 
@@ -352,7 +368,14 @@ export function useProveFlow() {
         capitalGainsTaxJson,
         vkeysJson.summary
       );
-      const taxResult = await taxProver.prove(result);
+      const auditorVerifiedSummary = {
+        ...result,
+        publicInputs: {
+          ...result.publicInputs,
+          root: auditorRoot,
+        },
+      };
+      const taxResult = await taxProver.prove(auditorVerifiedSummary);
 
       if (abortRef.current) return;
 
@@ -362,12 +385,10 @@ export function useProveFlow() {
         proof: "0x" + Buffer.from(taxResult.proof).toString("hex"),
         publicInputs: {
           root: taxResult.publicInputs.root,
-          pnl: taxResult.publicInputs.pnl.toString(),
           tax: taxResult.publicInputs.tax.toString(),
           remainingLotStateRoot: taxResult.publicInputs.remainingLotStateRoot,
           initialLotStateRoot: taxResult.publicInputs.initialLotStateRoot,
           priceFeedAddress: taxResult.publicInputs.priceFeedAddress,
-          blockNumber: taxResult.publicInputs.blockNumber.toString(),
         },
       };
 
@@ -378,10 +399,10 @@ export function useProveFlow() {
         currentSwap: totalSwaps,
         statusText: "Proof complete!",
         progress: 100,
-        pnl: taxResult.publicInputs.pnl,
+        pnl: result.publicInputs.pnl,
         tax: taxResult.publicInputs.tax,
         merkleRoot: taxResult.publicInputs.root,
-        blockNumber: taxResult.publicInputs.blockNumber,
+        blockNumber: latestEventBlock,
         pnlProof,
         taxProof,
         ...finalTreeViz,

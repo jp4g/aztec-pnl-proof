@@ -2,7 +2,7 @@ mod utils;
 
 use aztec::messages::encoding::MESSAGE_CIPHERTEXT_LEN;
 use protocol_types::{
-    hash::poseidon2_hash_with_separator,
+    hash::poseidon2_hash,
     merkle_tree::root::root_from_sibling_path,
 };
 use utils::{
@@ -21,13 +21,13 @@ use utils::{
 /// Oracle prices must have at most 4 decimal precision (scaled by 10^4).
 /// Token amounts must fit in i64 (< 9.2 * 10^18).
 ///
-/// Returns: (leaf_hash, pnl, remaining_lot_state_root, initial_lot_state_root, price_feed_address, block_number)
+/// Returns: (leaf_hash, pnl, remaining_lot_state_root, initial_lot_state_root, price_feed_address)
 fn main(
     // Swap event: plaintext fields and ciphertext fields (as they appear on-chain)
     plaintext: [Field; SWAP_PLAINTEXT_FIELDS],
     ciphertext: [Field; MESSAGE_CIPHERTEXT_LEN],
     ivsk_app: Field,
-    block_number: Field,
+    contract_address: Field,
 
     // Lot state tree root (before this swap)
     initial_lot_state_root: Field,
@@ -50,15 +50,13 @@ fn main(
     public_data_tree_root: Field,
     sell_price_witness: PriceWitness,
     buy_price_witness: PriceWitness,
-
-    // Chronological ordering
-    previous_block_number: Field,
-) -> pub (Field, i64, Field, Field, Field, Field) {
+) -> pub (Field, i64, Field, Field, Field) {
     // 1. Verify encryption (proves plaintext encrypts to on-chain ciphertext)
-    verify_encryption(plaintext, ciphertext, ivsk_app);
+    verify_encryption(plaintext, ciphertext, ivsk_app, contract_address);
 
-    // 2. Compute leaf hash from ciphertext (auditor can verify against on-chain logs)
-    let leaf = poseidon2_hash_with_separator(ciphertext, 0);
+    // 2. Compute leaf hash from ciphertext plus audited public state root.
+    // Must match packages/proof/src/swap-leaf.ts.
+    let leaf = poseidon2_hash(ciphertext.concat([public_data_tree_root]));
 
     // 3. Extract swap values from plaintext
     // Layout: [metadata, randomness, token_in, token_out, amount_in, amount_out, is_exact_input]
@@ -66,11 +64,6 @@ fn main(
     let token_out = plaintext[3];
     let amount_in = plaintext[4];
     let amount_out = plaintext[5];
-
-    // 4. Assert chronological ordering
-    let bn: u64 = block_number as u64;
-    let prev_bn: u64 = previous_block_number as u64;
-    assert(bn >= prev_bn, "Block number must be >= previous block number");
 
     // 5. SELL SIDE: Verify sell lots in initial root, consume FIFO, compute PnL
     let old_sell_hash = hash_lots(token_in, sell_lots, sell_num_lots);
@@ -141,5 +134,5 @@ fn main(
     let new_buy_hash = hash_lots(token_out, buy_lots_mut, buy_num);
     let final_root = root_from_sibling_path(new_buy_hash, buy_leaf_index, buy_sibling_path);
 
-    (leaf, pnl, final_root, initial_lot_state_root, price_feed_address, block_number)
+    (leaf, pnl, final_root, initial_lot_state_root, price_feed_address)
 }

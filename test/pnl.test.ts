@@ -3,17 +3,16 @@ import { cpus } from "node:os";
 import { expect } from 'expect';
 import { getInitialTestAccountsData } from '@aztec/accounts/testing';
 import { AztecAddress } from '@aztec/aztec.js/addresses';
-import { createAztecNodeClient, type AztecNode } from "@aztec/aztec.js/node";
+import { createAztecNodeClient, waitForTx, type AztecNode } from "@aztec/aztec.js/node";
 import { TokenContract } from '@aztec/noir-contracts.js/Token';
 import { PriceFeedContract } from '@privpnl/contracts/PriceFeed';
 import { AMMContract } from '@privpnl/contracts';
 import { precision } from "@privpnl/proof/utils";
-import { MESSAGE_CIPHERTEXT_LEN, TAG_SIZE } from '@privpnl/proof/constants';
 import { EmbeddedWallet } from "@aztec/wallets/embedded";
 import { Barretenberg } from '@aztec/bb.js';
 import type { CompiledCircuit } from '@aztec/noir-types';
 import { Fr } from '@aztec/foundation/curves/bn254';
-import { poseidon2Hash, poseidon2HashWithSeparator } from '@aztec/foundation/crypto/poseidon';
+import { GrumpkinScalar } from '@aztec/foundation/curves/grumpkin';
 import { retrieveEncryptedEvents } from '@privpnl/proof/auditor';
 import { SwapProver } from '@privpnl/proof/swap-prover';
 import { SwapProofTree } from '@privpnl/proof/swap-proof-tree';
@@ -22,13 +21,18 @@ import { TaxProver } from '@privpnl/proof/tax-prover';
 import { rebalancePools, type PoolState } from '@privpnl/proof/rebalance';
 import { SponsoredFeePaymentMethod } from '@aztec/aztec.js/fee';
 import { SponsoredFPCContract } from '@aztec/noir-contracts.js/SponsoredFPC';
+import { NO_FROM } from '@aztec/aztec.js/account';
+import { NO_WAIT } from '@aztec/aztec.js/contracts';
+import { ensureLocalSponsoredFPC, isLocalNodeUrl } from './fpc.ts';
 
 import individualSwapCircuit from '@privpnl/circuits/individual_swap' with { type: 'json' };
 import swapSummaryTreeCircuit from '@privpnl/circuits/swap_summary_tree' with { type: 'json' };
 import capitalGainsTaxCircuit from '@privpnl/circuits/capital_gains_tax' with { type: 'json' };
 import vkeys from '@privpnl/circuits/vkeys' with { type: 'json' };
 
-const { AZTEC_NODE_URL = "http://localhost:8080", AZTEC_ARCHIVAL_NODE_URL } = process.env;
+const AZTEC_NODE_URL = process.env.PNL_TEST_NODE_URL ?? process.env.AZTEC_NODE_URL ?? process.env.L2_NODE_URL ?? "http://localhost:8080";
+const AZTEC_ARCHIVAL_NODE_URL = process.env.PNL_TEST_ARCHIVAL_NODE_URL
+    ?? (isLocalNodeUrl(AZTEC_NODE_URL) ? undefined : process.env.AZTEC_ARCHIVAL_NODE_URL);
 
 describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 86_400_000 }, () => {
 
@@ -116,40 +120,51 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         if (archivalNode) console.log(`Using archival node at "${AZTEC_ARCHIVAL_NODE_URL}"`);
 
         const nodeInfo = await node.getNodeInfo();
-        const isDevnet = nodeInfo.l1ChainId === 11155111;
-        console.log(`  Chain ID: ${nodeInfo.l1ChainId}, isDevnet: ${isDevnet}`);
+        const isLocalNode = isLocalNodeUrl(AZTEC_NODE_URL);
+        const usesSponsoredFPC = isLocalNode || nodeInfo.l1ChainId === 11155111 || process.env.PNL_TEST_USE_FPC === '1';
+        const pxeProverEnabled = !isLocalNode;
+        console.log(`  Chain ID: ${nodeInfo.l1ChainId}, local: ${isLocalNode}, sponsored fees: ${usesSponsoredFPC}, PXE proving: ${pxeProverEnabled}`);
 
         addresses = [];
-        wallet = await EmbeddedWallet.create(node, { ephemeral: true, pxeConfig: { proverEnabled: isDevnet } });
+        wallet = await EmbeddedWallet.create(node, { ephemeral: true, pxeConfig: { proverEnabled: pxeProverEnabled } });
         let fpcAddress: AztecAddress | undefined;
 
-        if (isDevnet) {
-            console.log("Devnet detected — registering SponsoredFPC and deploying fresh accounts...");
-            const fpcAddr = process.env.SPONSORED_FPC_ADDRESS;
-            if (!fpcAddr) {
-                throw new Error('SPONSORED_FPC_ADDRESS is required in .env for devnet tests');
+        if (usesSponsoredFPC) {
+            console.log("Sponsored fees enabled — preparing SponsoredFPC and deploying fresh accounts...");
+            if (isLocalNode) {
+                fpcAddress = await ensureLocalSponsoredFPC({
+                    node,
+                    wallet,
+                });
+            } else {
+                const fpcAddr = process.env.SPONSORED_FPC_ADDRESS;
+                if (!fpcAddr) {
+                    throw new Error('SPONSORED_FPC_ADDRESS is required in .env for non-local sponsored tests');
+                }
+                fpcAddress = AztecAddress.fromString(fpcAddr);
+                const fpcInstance = await node.getContract(fpcAddress);
+                if (!fpcInstance) {
+                    throw new Error(`SponsoredFPC not found on-chain at ${fpcAddress}`);
+                }
+                await wallet.registerContract(fpcInstance, SponsoredFPCContract.artifact);
+                console.log(`  SponsoredFPC registered at: ${fpcAddress}`);
             }
-            fpcAddress = AztecAddress.fromString(fpcAddr);
-            const fpcInstance = await node.getContract(fpcAddress);
-            if (!fpcInstance) {
-                throw new Error(`SponsoredFPC not found on-chain at ${fpcAddress}`);
-            }
-            await wallet.registerContract(fpcInstance, SponsoredFPCContract.artifact);
-            console.log(`  SponsoredFPC registered at: ${fpcAddress}`);
             const fpcPaymentMethod = new SponsoredFeePaymentMethod(fpcAddress);
 
             for (let i = 0; i < 2; i++) {
-                const manager = await wallet.createSchnorrAccount(Fr.random(), Fr.random());
+                const manager = await wallet.createSchnorrAccount(Fr.random(), Fr.random(), GrumpkinScalar.random());
                 const deployMethod = await manager.getDeployMethod();
                 console.log(`  Deploying account ${i} at ${manager.address}...`);
-                const deployReceipt = await deployMethod.send({
-                    from: AztecAddress.ZERO,
+                await deployMethod.simulate({ from: NO_FROM });
+                const deployResult: any = await deployMethod.send({
+                    from: NO_FROM,
                     fee: { paymentMethod: fpcPaymentMethod },
                     skipClassPublication: i !== 0,
                     wait: { returnReceipt: true, timeout: 600 },
                 });
-                console.log(`  Account ${i} status: ${deployReceipt.status}, result: ${deployReceipt.executionResult}, tx: ${deployReceipt.txHash}`);
-                if (deployReceipt.executionResult !== 'success') {
+                const deployReceipt = deployResult.receipt ?? deployResult;
+                console.log(`  Account ${i} deployed, tx: ${deployReceipt.txHash ?? deployResult.txHash ?? 'unknown'}`);
+                if (deployReceipt.executionResult && deployReceipt.executionResult !== 'success') {
                     throw new Error(`Account ${i} deploy failed: ${deployReceipt.executionResult} (revert: ${deployReceipt.revertReason})`);
                 }
                 addresses.push(manager.address);
@@ -168,6 +183,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
                 }
             }
         } else {
+            console.log("Sandbox mode detected — using pre-funded test accounts.");
             const accounts = await getInitialTestAccountsData();
             for (const account of accounts) {
                 const manager = await wallet.createSchnorrAccount(account.secret, account.salt, account.signingKey);
@@ -176,9 +192,20 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         }
 
         const sendOpts = (from: AztecAddress) =>
-            isDevnet
+            usesSponsoredFPC
                 ? { from, fee: { paymentMethod: new SponsoredFeePaymentMethod(fpcAddress!) } }
                 : { from };
+        const sendInteraction = async (
+            interaction: { send(opts: any): Promise<any> },
+            from: AztecAddress,
+        ) => {
+            const opts = sendOpts(from);
+            if (!usesSponsoredFPC) {
+                return interaction.send(opts);
+            }
+            const { txHash } = await interaction.send({ ...opts, wait: NO_WAIT });
+            return { receipt: await waitForTx(node, txHash, { timeout: 600 }) };
+        };
 
         // Deploy PriceFeed
         console.log("Deploying PriceFeed...");
@@ -196,9 +223,9 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
 
         // Set initial oracle prices
         console.log("Setting initial prices...");
-        await priceFeed.methods.set_price(tokenA.address.toField(), PRICE_SCHEDULE[0][0]).send(sendOpts(addresses[0]));
-        await priceFeed.methods.set_price(tokenB.address.toField(), PRICE_SCHEDULE[0][1]).send(sendOpts(addresses[0]));
-        await priceFeed.methods.set_price(tokenC.address.toField(), PRICE_SCHEDULE[0][2]).send(sendOpts(addresses[0]));
+        await sendInteraction(priceFeed.methods.set_price(tokenA.address.toField(), PRICE_SCHEDULE[0][0]), addresses[0]);
+        await sendInteraction(priceFeed.methods.set_price(tokenB.address.toField(), PRICE_SCHEDULE[0][1]), addresses[0]);
+        await sendInteraction(priceFeed.methods.set_price(tokenC.address.toField(), PRICE_SCHEDULE[0][2]), addresses[0]);
         console.log(`  A=${PRICE_SCHEDULE[0][0]}, B=${PRICE_SCHEDULE[0][1]}, C=${PRICE_SCHEDULE[0][2]}`);
 
         // Deploy 3 LP tokens
@@ -218,16 +245,16 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
 
         // Seed pools with liquidity
         console.log("Seeding pools with liquidity...");
-        await tokenA.methods.mint_to_public(poolAB.address, POOL_AB_LIQ_A).send(sendOpts(addresses[0]));
-        await tokenB.methods.mint_to_public(poolAB.address, POOL_AB_LIQ_B).send(sendOpts(addresses[0]));
-        await tokenA.methods.mint_to_public(poolAC.address, POOL_AC_LIQ_A).send(sendOpts(addresses[0]));
-        await tokenC.methods.mint_to_public(poolAC.address, POOL_AC_LIQ_C).send(sendOpts(addresses[0]));
-        await tokenB.methods.mint_to_public(poolBC.address, POOL_BC_LIQ_B).send(sendOpts(addresses[0]));
-        await tokenC.methods.mint_to_public(poolBC.address, POOL_BC_LIQ_C).send(sendOpts(addresses[0]));
+        await sendInteraction(tokenA.methods.mint_to_public(poolAB.address, POOL_AB_LIQ_A), addresses[0]);
+        await sendInteraction(tokenB.methods.mint_to_public(poolAB.address, POOL_AB_LIQ_B), addresses[0]);
+        await sendInteraction(tokenA.methods.mint_to_public(poolAC.address, POOL_AC_LIQ_A), addresses[0]);
+        await sendInteraction(tokenC.methods.mint_to_public(poolAC.address, POOL_AC_LIQ_C), addresses[0]);
+        await sendInteraction(tokenB.methods.mint_to_public(poolBC.address, POOL_BC_LIQ_B), addresses[0]);
+        await sendInteraction(tokenC.methods.mint_to_public(poolBC.address, POOL_BC_LIQ_C), addresses[0]);
 
         // Mint tokenA to swapper (private)
         console.log(`Minting ${INITIAL_TOKEN_A} tokenA to swapper...`);
-        await tokenA.methods.mint_to_private(addresses[1], INITIAL_TOKEN_A).send(sendOpts(addresses[0]));
+        await sendInteraction(tokenA.methods.mint_to_private(addresses[1], INITIAL_TOKEN_A), addresses[0]);
 
         console.log("Setup complete!");
         // --- End setup ---
@@ -268,6 +295,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
                 if (pA !== prevA || pB !== prevB || pC !== prevC) {
                     console.log(`  Rebalancing to prices: A=${pA}, B=${pB}, C=${pC}`);
                     await rebalancePools({
+                        wallet,
                         priceFeed,
                         minter,
                         pools: allPools,
@@ -277,6 +305,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
                             { token: tokenC, price: pC },
                         ],
                         sendOpts,
+                        sendInteraction,
                     });
                 }
             }
@@ -297,11 +326,12 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
                 .simulate({ from: swapper });
             console.log(`  ${dir.inKey} -> ${dir.outKey} on pool${dir.pool}: in=${amountIn}, out=${amountOut}`);
 
-            await pool.methods
+            await sendInteraction(
+                pool.methods
                 .swap_exact_tokens_for_tokens(tokenIn.address, tokenOut.address, amountIn, amountOut, nonce)
-                .with({ authWitnesses: [authwit] })
-                .send(sendOpts(swapper))
-                ;
+                .with({ authWitnesses: [authwit] }),
+                swapper,
+            );
             console.log(`  Swap ${i + 1} executed!`);
 
             amountsOut.push(BigInt(amountOut));
@@ -326,16 +356,17 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
             [poolAB.address, poolAC.address, poolBC.address],
             [swapper],
         );
-        const events = await retrieveEncryptedEvents(node, taggingSecrets);
+        const events = await retrieveEncryptedEvents(node, archivalNode ?? node, taggingSecrets);
         console.log(`  Found ${events.totalEvents} events`);
-        expect(events.totalEvents).toBeGreaterThanOrEqual(6);
+        console.log(`  Auditor root: ${events.auditorRoot}`);
+        expect(events.totalEvents).toBe(6);
 
-        // Collect all events and sort chronologically
-        const allEvents = events.secrets
-            .flatMap(s => s.events)
-            .sort((a, b) => Number(a.blockNumber) - Number(b.blockNumber));
-        const swapEvents = allEvents.slice(0, 6);
+        // Auditor returns events in the same order used to build the auditor root.
+        const swapEvents = events.events;
         const blockNumbers = swapEvents.map(e => BigInt(e.blockNumber));
+        for (const event of swapEvents) {
+            expect(event.publicDataTreeRoot).toBeTruthy();
+        }
         console.log(`  Block numbers: ${blockNumbers.join(', ')}`);
 
         // ========================================
@@ -422,6 +453,8 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
             swapEvents.map((e, i) => ({
                 encryptedLog: e.ciphertextBuffer,
                 blockNumber: blockNumbers[i],
+                publicDataTreeRoot: e.publicDataTreeRoot,
+                contractAddress: e.contractAddress,
             })),
             lotStateTree,
             priceFeed.address.toField(),
@@ -435,7 +468,6 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         console.log(`  remainingLotStateRoot: ${result.publicInputs.remainingLotStateRoot}`);
         console.log(`  initialLotStateRoot: ${result.publicInputs.initialLotStateRoot}`);
         console.log(`  price_feed_address: ${result.publicInputs.priceFeedAddress}`);
-        console.log(`  block_number: ${result.publicInputs.blockNumber}`);
 
         // ========================================
         // Verify results
@@ -463,40 +495,10 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         }
 
         // Verify price feed address
-        expect(result.publicInputs.priceFeedAddress).toBe(priceFeed.address.toField().toString());
+        expect(BigInt(result.publicInputs.priceFeedAddress)).toBe(priceFeed.address.toField().toBigInt());
 
-        // Verify block number is the last swap's block
-        expect(result.publicInputs.blockNumber).toBe(blockNumbers[5]);
-
-        // Verify merkle root (leaves are hashes of ciphertext fields)
-        const expectedLeaves: Fr[] = [];
-        for (let i = 0; i < 6; i++) {
-            // Parse ciphertext into fields (skip tag, then MESSAGE_CIPHERTEXT_LEN x 32-byte chunks)
-            const buf = swapEvents[i].ciphertextBuffer.slice(TAG_SIZE);
-            const padded = Buffer.alloc(MESSAGE_CIPHERTEXT_LEN * 32);
-            buf.copy(padded, 0, 0, Math.min(buf.length, padded.length));
-            const ctFields: Fr[] = [];
-            for (let f = 0; f < MESSAGE_CIPHERTEXT_LEN; f++) {
-                ctFields.push(Fr.fromBuffer(padded.slice(f * 32, (f + 1) * 32)));
-            }
-            expectedLeaves.push(await poseidon2HashWithSeparator(ctFields, 0));
-        }
-
-        // 6 leaves -> binary tree:
-        // Level 0: [l0,l1], [l2,l3], [l4,l5]
-        // Level 1: [h01,h23], [h45,zero_1]
-        // Level 2: root
-        const zero0 = Fr.ZERO;
-        const zero1 = await poseidon2Hash([zero0, zero0]);
-        const h01 = await poseidon2Hash([expectedLeaves[0], expectedLeaves[1]]);
-        const h23 = await poseidon2Hash([expectedLeaves[2], expectedLeaves[3]]);
-        const h45 = await poseidon2Hash([expectedLeaves[4], expectedLeaves[5]]);
-        const hA = await poseidon2Hash([h01, h23]);
-        const hB = await poseidon2Hash([h45, zero1]);
-        const expectedRoot = await poseidon2Hash([hA, hB]);
-
-        expect(BigInt(result.publicInputs.root)).toBe(expectedRoot.toBigInt());
-        console.log(`  Merkle root matches!`);
+        expect(BigInt(result.publicInputs.root)).toBe(BigInt(events.auditorRoot));
+        console.log(`  Proof root matches auditor root!`);
 
         // ========================================
         // Generate capital gains tax wrapper proof
@@ -504,16 +506,21 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         console.log("\n=== Generate capital gains tax proof ===");
 
         const taxProver = new TaxProver(bb, capitalGainsTaxCircuit as CompiledCircuit, vkeys.summary);
-        const taxResult = await taxProver.prove(result);
+        const auditorVerifiedSummary = {
+            ...result,
+            publicInputs: {
+                ...result.publicInputs,
+                root: events.auditorRoot,
+            },
+        };
+        const taxResult = await taxProver.prove(auditorVerifiedSummary);
 
         console.log(`\n=== TAX PROOF RESULT ===`);
         console.log(`  root: ${taxResult.publicInputs.root}`);
-        console.log(`  pnl: ${taxResult.publicInputs.pnl}`);
         console.log(`  tax: ${taxResult.publicInputs.tax}`);
         console.log(`  remainingLotStateRoot: ${taxResult.publicInputs.remainingLotStateRoot}`);
         console.log(`  initialLotStateRoot: ${taxResult.publicInputs.initialLotStateRoot}`);
         console.log(`  price_feed_address: ${taxResult.publicInputs.priceFeedAddress}`);
-        console.log(`  block_number: ${taxResult.publicInputs.blockNumber}`);
 
         // Verify tax computation
         const expectedTax = expectedPnl > 0n ? expectedPnl / 5n : 0n;
@@ -522,12 +529,10 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         expect(taxResult.publicInputs.tax).toBe(expectedTax);
 
         // Verify forwarded fields match summary result
-        expect(taxResult.publicInputs.pnl).toBe(result.publicInputs.pnl);
-        expect(taxResult.publicInputs.root).toBe(result.publicInputs.root);
-        expect(taxResult.publicInputs.priceFeedAddress).toBe(result.publicInputs.priceFeedAddress);
-        expect(taxResult.publicInputs.blockNumber).toBe(result.publicInputs.blockNumber);
-        expect(taxResult.publicInputs.remainingLotStateRoot).toBe(result.publicInputs.remainingLotStateRoot);
-        expect(taxResult.publicInputs.initialLotStateRoot).toBe(result.publicInputs.initialLotStateRoot);
+        expect(BigInt(taxResult.publicInputs.root)).toBe(BigInt(auditorVerifiedSummary.publicInputs.root));
+        expect(BigInt(taxResult.publicInputs.priceFeedAddress)).toBe(BigInt(auditorVerifiedSummary.publicInputs.priceFeedAddress));
+        expect(taxResult.publicInputs.remainingLotStateRoot).toBe(auditorVerifiedSummary.publicInputs.remainingLotStateRoot);
+        expect(taxResult.publicInputs.initialLotStateRoot).toBe(auditorVerifiedSummary.publicInputs.initialLotStateRoot);
 
         console.log("\n  All assertions passed (including tax)!");
     });

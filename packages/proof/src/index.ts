@@ -14,6 +14,8 @@ export { LotStateTree } from './lot-state-tree.js';
 export { getZeroHashes } from './imt.js';
 
 export { precision, parseSignedHex, proofBytesToFields } from './utils.js';
+export { parseSwapCiphertextFields, computeSwapLeaf } from './swap-leaf.js';
+export type { FieldLike } from './swap-leaf.js';
 
 export { decryptLog } from './decrypt.js';
 

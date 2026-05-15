@@ -3,10 +3,26 @@ import { copyFile, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const FRONTEND_CIRCUITS_DIR = join(process.cwd(), 'packages', 'frontend', 'public', 'circuits');
+const AZTEC_CLI_VERSION = '4.2.0';
 
 function run(cmd: string, cwd?: string) {
   console.log(`$ ${cmd}`);
   execSync(cmd, { cwd, stdio: 'inherit' });
+}
+
+function readCommand(cmd: string, cwd?: string) {
+  return execSync(cmd, { cwd, encoding: 'utf-8' }).trim();
+}
+
+function ensureAztecCliVersion() {
+  const version = readCommand('aztec --version');
+  if (version !== AZTEC_CLI_VERSION) {
+    throw new Error(
+      `Aztec CLI ${AZTEC_CLI_VERSION} is required, but aztec --version returned ${version}. ` +
+      `Run \`aztec-up install ${AZTEC_CLI_VERSION} && aztec-up use ${AZTEC_CLI_VERSION}\`.`,
+    );
+  }
+  console.log(`Using Aztec CLI ${version}`);
 }
 
 async function copyFileWithLog(src: string, dest: string) {
@@ -41,7 +57,7 @@ async function computeVkeys(circuitsDir: string) {
   const leafBackend = new UltraHonkBackend(leafCircuit.bytecode, bb);
   const leafArtifacts = await leafBackend.generateRecursiveProofArtifacts(
     new Uint8Array(0),
-    6,
+    5,
   );
   console.log(`  Leaf vkey hash: ${leafArtifacts.vkHash}`);
 
@@ -49,7 +65,7 @@ async function computeVkeys(circuitsDir: string) {
   const summaryBackend = new UltraHonkBackend(summaryCircuit.bytecode, bb);
   const summaryArtifacts = await summaryBackend.generateRecursiveProofArtifacts(
     new Uint8Array(0),
-    6,
+    5,
     { verifierTarget: 'noir-recursive' },
   );
   console.log(`  Summary vkey hash: ${summaryArtifacts.vkHash}`);
@@ -80,6 +96,8 @@ async function computeVkeys(circuitsDir: string) {
 async function postinstall() {
   const contractsDir = join(process.cwd(), 'packages', 'contracts');
   const circuitsDir = join(process.cwd(), 'packages', 'circuits');
+
+  ensureAztecCliVersion();
 
   // --- Compile AMM contract + codegen ---
   console.log('Compiling AMM contract...');

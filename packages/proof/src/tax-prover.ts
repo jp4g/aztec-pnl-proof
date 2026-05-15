@@ -1,7 +1,7 @@
 import { Noir } from '@aztec/noir-noir_js';
 import { Barretenberg, UltraHonkBackend } from '@aztec/bb.js';
 import type { CompiledCircuit } from '@aztec/noir-types';
-import { fieldToI64, i64ToField } from './swap-proof-tree';
+import { i64ToField } from './swap-proof-tree';
 import type { SwapProofTreeResult, VkeyArtifacts } from './swap-proof-tree';
 import { parseSignedHex, proofBytesToFields } from './utils';
 import { log } from './logger';
@@ -10,12 +10,10 @@ export interface TaxProofResult {
     proof: Uint8Array;
     publicInputs: {
         root: string;
-        pnl: bigint;
         tax: bigint;
         remainingLotStateRoot: string;
         initialLotStateRoot: string;
         priceFeedAddress: string;
-        blockNumber: bigint;
     };
 }
 
@@ -58,7 +56,6 @@ export class TaxProver {
             summaryResult.publicInputs.remainingLotStateRoot,
             summaryResult.publicInputs.initialLotStateRoot,
             summaryResult.publicInputs.priceFeedAddress,
-            summaryResult.publicInputs.blockNumber.toString(),
         ];
 
         const circuitInputs = {
@@ -71,8 +68,8 @@ export class TaxProver {
 
         log('  Executing tax circuit...');
         const { witness, returnValue } = await this.noir!.execute(circuitInputs);
-        const [root, pnlStr, taxStr, remainingRoot, initialRoot, priceFeedAddr, blockNum] =
-            returnValue as [string, string, string, string, string, string, string];
+        const [root, taxStr, remainingRoot, initialRoot, priceFeedAddr] =
+            returnValue as [string, string, string, string, string];
 
         log('  Generating proof...');
         const proof = await this.backend!.generateProof(witness);
@@ -81,10 +78,8 @@ export class TaxProver {
             throw new Error('Invalid tax proof');
         }
 
-        const pnl = parseSignedHex(pnlStr);
         const tax = parseSignedHex(taxStr);
 
-        log(`  PnL: ${pnl}`);
         log(`  Tax (20%): ${tax}`);
         log(`  Proof: valid`);
 
@@ -92,12 +87,10 @@ export class TaxProver {
             proof: proof.proof,
             publicInputs: {
                 root,
-                pnl,
                 tax,
                 remainingLotStateRoot: remainingRoot,
                 initialLotStateRoot: initialRoot,
                 priceFeedAddress: priceFeedAddr,
-                blockNumber: BigInt(blockNum),
             },
         };
     }
