@@ -15,7 +15,7 @@ import { Fr } from '@aztec/foundation/curves/bn254';
 import { GrumpkinScalar } from '@aztec/foundation/curves/grumpkin';
 import { retrieveEncryptedEvents } from '@privpnl/proof/auditor';
 import { SwapProver } from '@privpnl/proof/swap-prover';
-import { SwapProofTree } from '@privpnl/proof/swap-proof-tree';
+import { SwapProofTree, i64ToField } from '@privpnl/proof/swap-proof-tree';
 import { LotStateTree } from '@privpnl/proof/lot-state-tree';
 import { TaxProver } from '@privpnl/proof/tax-prover';
 import { rebalancePools, type PoolState } from '@privpnl/proof/rebalance';
@@ -494,11 +494,33 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
             }
         }
 
+        const expectedPriceFeed = priceFeed.address.toField();
+        const expectedPriceFeedField = expectedPriceFeed.toString();
+        const wrongAuditorRoot = new Fr(Fr.fromString(events.auditorRoot).toBigInt() + 1n).toString();
+
         // Verify price feed address
-        expect(BigInt(result.publicInputs.priceFeedAddress)).toBe(priceFeed.address.toField().toBigInt());
+        expect(BigInt(result.publicInputs.priceFeedAddress)).toBe(expectedPriceFeed.toBigInt());
 
         expect(BigInt(result.publicInputs.root)).toBe(BigInt(events.auditorRoot));
         console.log(`  Proof root matches auditor root!`);
+
+        const summaryVerificationInputs = {
+            root: events.auditorRoot, // supplied by auditor
+            pnl: i64ToField(result.publicInputs.pnl), // calculated by prover
+            remainingLotStateRoot: result.publicInputs.remainingLotStateRoot, // calculated by prover
+            // note: requires a new circuit for handling of depositing assets, currently mocked and prover supplied
+            initialLotStateRoot: result.publicInputs.initialLotStateRoot, // supplied by prover
+            priceFeedAddress: expectedPriceFeedField, // supplied by auditor
+        };
+        const summaryProofVerified = await proofTree.verifyProof(result.proof, summaryVerificationInputs);
+        expect(summaryProofVerified).toBe(true);
+
+        const summaryWrongRootVerified = await proofTree.verifyProof(result.proof, {
+            ...summaryVerificationInputs,
+            root: wrongAuditorRoot,
+        });
+        expect(summaryWrongRootVerified).toBe(false);
+        console.log(`  Summary proof verifies with auditor root and expected price feed!`);
 
         // ========================================
         // Generate capital gains tax wrapper proof
@@ -506,14 +528,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         console.log("\n=== Generate capital gains tax proof ===");
 
         const taxProver = new TaxProver(bb, capitalGainsTaxCircuit as CompiledCircuit, vkeys.summary);
-        const auditorVerifiedSummary = {
-            ...result,
-            publicInputs: {
-                ...result.publicInputs,
-                root: events.auditorRoot,
-            },
-        };
-        const taxResult = await taxProver.prove(auditorVerifiedSummary);
+        const taxResult = await taxProver.prove(result);
 
         console.log(`\n=== TAX PROOF RESULT ===`);
         console.log(`  root: ${taxResult.publicInputs.root}`);
@@ -529,10 +544,28 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         expect(taxResult.publicInputs.tax).toBe(expectedTax);
 
         // Verify forwarded fields match summary result
-        expect(BigInt(taxResult.publicInputs.root)).toBe(BigInt(auditorVerifiedSummary.publicInputs.root));
-        expect(BigInt(taxResult.publicInputs.priceFeedAddress)).toBe(BigInt(auditorVerifiedSummary.publicInputs.priceFeedAddress));
-        expect(taxResult.publicInputs.remainingLotStateRoot).toBe(auditorVerifiedSummary.publicInputs.remainingLotStateRoot);
-        expect(taxResult.publicInputs.initialLotStateRoot).toBe(auditorVerifiedSummary.publicInputs.initialLotStateRoot);
+        expect(BigInt(taxResult.publicInputs.root)).toBe(BigInt(events.auditorRoot));
+        expect(BigInt(taxResult.publicInputs.priceFeedAddress)).toBe(expectedPriceFeed.toBigInt());
+        expect(taxResult.publicInputs.remainingLotStateRoot).toBe(result.publicInputs.remainingLotStateRoot);
+        expect(taxResult.publicInputs.initialLotStateRoot).toBe(result.publicInputs.initialLotStateRoot);
+
+        const taxVerificationInputs = {
+            root: events.auditorRoot, // supplied by auditor
+            tax: i64ToField(taxResult.publicInputs.tax), // calculated by prover
+            remainingLotStateRoot: taxResult.publicInputs.remainingLotStateRoot, // calculated by prover
+            // note: requires a new circuit for handling of depositing assets, currently mocked and prover supplied
+            initialLotStateRoot: taxResult.publicInputs.initialLotStateRoot, // supplied by prover
+            priceFeedAddress: expectedPriceFeedField, // supplied by auditor
+        };
+        const taxProofVerified = await taxProver.verifyProof(taxResult.proof, taxVerificationInputs);
+        expect(taxProofVerified).toBe(true);
+
+        const taxWrongRootVerified = await taxProver.verifyProof(taxResult.proof, {
+            ...taxVerificationInputs,
+            root: wrongAuditorRoot,
+        });
+        expect(taxWrongRootVerified).toBe(false);
+        console.log(`  Tax proof verifies with auditor root and expected price feed!`);
 
         console.log("\n  All assertions passed (including tax)!");
     });

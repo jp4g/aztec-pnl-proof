@@ -95,4 +95,28 @@ export class TaxProver {
         };
     }
 
+    async verifyProof(
+        proof: Uint8Array,
+        publicInputs: {
+            root: string;
+            tax: string;
+            remainingLotStateRoot: string;
+            initialLotStateRoot: string;
+            priceFeedAddress: string;
+        },
+    ): Promise<boolean> {
+        await this.initialize();
+
+        return this.backend!.verifyProof({
+            proof,
+            publicInputs: [
+                publicInputs.root,
+                publicInputs.tax,
+                publicInputs.remainingLotStateRoot,
+                publicInputs.initialLotStateRoot,
+                publicInputs.priceFeedAddress,
+            ],
+        });
+    }
+
 }
