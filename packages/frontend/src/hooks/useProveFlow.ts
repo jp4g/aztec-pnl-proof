@@ -131,6 +131,7 @@ export function useProveFlow() {
 
       const eventsData = await eventsRes.json();
       const auditorRoot = eventsData.auditorRoot as string | undefined;
+      const auditorPriceFeedAddress = eventsData.priceFeedAddress as string | undefined;
       const encryptedEvents = eventsData.events as Array<{
         txHash: string;
         blockNumber: string;
@@ -152,6 +153,9 @@ export function useProveFlow() {
       }
       if (!auditorRoot) {
         throw new Error("Auditor response missing auditor root");
+      }
+      if (!auditorPriceFeedAddress) {
+        throw new Error("Auditor response missing price feed address");
       }
 
       const totalSwaps = encryptedEvents.length;
@@ -262,6 +266,7 @@ export function useProveFlow() {
         throw new Error("NEXT_PUBLIC_PRICE_FEED is required for proof verification");
       }
       const priceFeedAddress = Fr.fromString(priceFeedAddr);
+      const auditorPriceFeedField = Fr.fromString(auditorPriceFeedAddress).toString();
       const priceFeedAssetsSlot = PriceFeedContract.storage.assets.slot;
 
       if (abortRef.current) return;
@@ -283,7 +288,7 @@ export function useProveFlow() {
         progress: 25,
       }));
 
-      const { SwapProofTree } = await import("@privpnl/proof/swap-proof-tree");
+      const { SwapProofTree, i64ToField } = await import("@privpnl/proof/swap-proof-tree");
       const { TaxProver } = await import("@privpnl/proof/tax-prover");
 
       const proofTree = new SwapProofTree({
@@ -329,11 +334,15 @@ export function useProveFlow() {
       );
 
       if (abortRef.current) return;
-      if (BigInt(result.publicInputs.root) !== BigInt(auditorRoot)) {
-        throw new Error("Summary proof root does not match auditor root");
-      }
-      if (BigInt(result.publicInputs.priceFeedAddress) !== priceFeedAddress.toBigInt()) {
-        throw new Error("Summary proof price feed does not match configured price feed");
+      const summaryProofVerified = await proofTree.verifyProof(result.proof, {
+        root: auditorRoot,
+        pnl: i64ToField(result.publicInputs.pnl),
+        remainingLotStateRoot: result.publicInputs.remainingLotStateRoot,
+        initialLotStateRoot: result.publicInputs.initialLotStateRoot,
+        priceFeedAddress: auditorPriceFeedField,
+      });
+      if (!summaryProofVerified) {
+        throw new Error("Summary proof failed verification against auditor inputs");
       }
 
       // Build downloadable PnL proof
@@ -368,16 +377,19 @@ export function useProveFlow() {
         capitalGainsTaxJson,
         vkeysJson.summary
       );
-      const auditorVerifiedSummary = {
-        ...result,
-        publicInputs: {
-          ...result.publicInputs,
-          root: auditorRoot,
-        },
-      };
-      const taxResult = await taxProver.prove(auditorVerifiedSummary);
+      const taxResult = await taxProver.prove(result);
 
       if (abortRef.current) return;
+      const taxProofVerified = await taxProver.verifyProof(taxResult.proof, {
+        root: auditorRoot,
+        tax: i64ToField(taxResult.publicInputs.tax),
+        remainingLotStateRoot: taxResult.publicInputs.remainingLotStateRoot,
+        initialLotStateRoot: taxResult.publicInputs.initialLotStateRoot,
+        priceFeedAddress: auditorPriceFeedField,
+      });
+      if (!taxProofVerified) {
+        throw new Error("Tax proof failed verification against auditor inputs");
+      }
 
       // Build downloadable tax proof
       const taxProof: DownloadableProof = {

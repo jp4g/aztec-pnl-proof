@@ -208,11 +208,6 @@ export class SwapProver {
         const proof = await this.backend!.generateProof(circuitWitness, {
             verifierTarget: 'noir-recursive',
         });
-        const isValid = await this.backend!.verifyProof(proof, {
-            verifierTarget: 'noir-recursive',
-        });
-        if (!isValid) throw new Error('Swap proof verification failed');
-        log('  Proof verified!');
 
         const swapData: SwapData = {
             tokenIn: tokenIn.toString(),

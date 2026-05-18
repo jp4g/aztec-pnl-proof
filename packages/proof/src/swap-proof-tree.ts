@@ -387,19 +387,11 @@ export class SwapProofTree {
         const proof = await this.summaryBackend!.generateProof(witness, {
             verifierTarget: 'noir-recursive',
         });
-        const isValid = await this.summaryBackend!.verifyProof(proof, {
-            verifierTarget: 'noir-recursive',
-        });
-        if (!isValid) {
-            throw new Error('Invalid summary proof');
-        }
 
         const proofAsFields = proofBytesToFields(proof.proof);
         const pnl = parseSignedHex(pnlStr);
 
-        log(`  Root: ${root}`);
         log(`  PnL so far: ${pnl}`);
-        log(`  Proof: valid`);
 
         const combinedPublicInputs = [root, i64ToField(pnl), remainingLotStateRoot, initialLotStateRoot, priceFeedAddr];
 
