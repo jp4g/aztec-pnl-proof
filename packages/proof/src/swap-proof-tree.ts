@@ -241,6 +241,33 @@ export class SwapProofTree {
         };
     }
 
+    async verifyProof(
+        proof: Uint8Array,
+        publicInputs: {
+            root: string;
+            pnl: string;
+            remainingLotStateRoot: string;
+            initialLotStateRoot: string;
+            priceFeedAddress: string;
+        },
+    ): Promise<boolean> {
+        await this.initialize();
+
+        return this.summaryBackend!.verifyProof(
+            {
+                proof,
+                publicInputs: [
+                    publicInputs.root,
+                    publicInputs.pnl,
+                    publicInputs.remainingLotStateRoot,
+                    publicInputs.initialLotStateRoot,
+                    publicInputs.priceFeedAddress,
+                ],
+            },
+            { verifierTarget: 'noir-recursive' },
+        );
+    }
+
     private async initialize(): Promise<void> {
         if (this.summaryNoir) return;
 
