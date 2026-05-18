@@ -73,15 +73,10 @@ export class TaxProver {
 
         log('  Generating proof...');
         const proof = await this.backend!.generateProof(witness);
-        const isValid = await this.backend!.verifyProof(proof);
-        if (!isValid) {
-            throw new Error('Invalid tax proof');
-        }
 
         const tax = parseSignedHex(taxStr);
 
         log(`  Tax (20%): ${tax}`);
-        log(`  Proof: valid`);
 
         return {
             proof: proof.proof,

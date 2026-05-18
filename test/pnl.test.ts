@@ -358,7 +358,6 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         );
         const events = await retrieveEncryptedEvents(node, archivalNode ?? node, taggingSecrets);
         console.log(`  Found ${events.totalEvents} events`);
-        console.log(`  Auditor root: ${events.auditorRoot}`);
         expect(events.totalEvents).toBe(6);
 
         // Auditor returns events in the same order used to build the auditor root.
@@ -462,12 +461,10 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         );
 
         console.log(`\n=== FINAL PROOF RESULT ===`);
-        console.log(`  root: ${result.publicInputs.root}`);
         console.log(`  pnl: ${result.publicInputs.pnl}`);
         console.log(`  signedPnl: ${result.signedPnl}`);
         console.log(`  remainingLotStateRoot: ${result.publicInputs.remainingLotStateRoot}`);
         console.log(`  initialLotStateRoot: ${result.publicInputs.initialLotStateRoot}`);
-        console.log(`  price_feed_address: ${result.publicInputs.priceFeedAddress}`);
 
         // ========================================
         // Verify results
@@ -513,7 +510,6 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
             root: wrongAuditorRoot,
         });
         expect(summaryWrongRootVerified).toBe(false);
-        console.log(`  Summary proof verifies with auditor root and expected price feed!`);
 
         // ========================================
         // Generate capital gains tax wrapper proof
@@ -524,11 +520,9 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         const taxResult = await taxProver.prove(result);
 
         console.log(`\n=== TAX PROOF RESULT ===`);
-        console.log(`  root: ${taxResult.publicInputs.root}`);
         console.log(`  tax: ${taxResult.publicInputs.tax}`);
         console.log(`  remainingLotStateRoot: ${taxResult.publicInputs.remainingLotStateRoot}`);
         console.log(`  initialLotStateRoot: ${taxResult.publicInputs.initialLotStateRoot}`);
-        console.log(`  price_feed_address: ${taxResult.publicInputs.priceFeedAddress}`);
 
         // Verify tax computation
         const expectedTax = expectedPnl > 0n ? expectedPnl / 5n : 0n;
@@ -556,7 +550,6 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
             root: wrongAuditorRoot,
         });
         expect(taxWrongRootVerified).toBe(false);
-        console.log(`  Tax proof verifies with auditor root and expected price feed!`);
 
         console.log("\n  All assertions passed (including tax)!");
     });
