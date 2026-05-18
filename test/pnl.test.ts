@@ -356,12 +356,15 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
             [poolAB.address, poolAC.address, poolBC.address],
             [swapper],
         );
-        const events = await retrieveEncryptedEvents(node, archivalNode ?? node, taggingSecrets);
-        console.log(`  Found ${events.totalEvents} events`);
-        expect(events.totalEvents).toBe(6);
+        const {
+            events: swapEvents,
+            totalEvents,
+            auditorRoot,
+        } = await retrieveEncryptedEvents(node, archivalNode ?? node, taggingSecrets);
+        console.log(`  Found ${totalEvents} events`);
+        expect(totalEvents).toBe(6);
 
         // Auditor returns events in the same order used to build the auditor root.
-        const swapEvents = events.events;
         const blockNumbers = swapEvents.map(e => BigInt(e.blockNumber));
         for (const event of swapEvents) {
             expect(event.publicDataTreeRoot).toBeTruthy();
@@ -492,10 +495,10 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         }
 
         const expectedPriceFeedField = priceFeed.address.toField().toString();
-        const wrongAuditorRoot = new Fr(Fr.fromString(events.auditorRoot).toBigInt() + 1n).toString();
+        const wrongAuditorRoot = new Fr(Fr.fromString(auditorRoot).toBigInt() + 1n).toString();
 
         const summaryVerificationInputs = {
-            root: events.auditorRoot, // supplied by auditor
+            root: auditorRoot, // supplied by auditor
             pnl: i64ToField(result.publicInputs.pnl), // calculated by prover
             remainingLotStateRoot: result.publicInputs.remainingLotStateRoot, // calculated by prover
             // note: requires a new circuit for handling of depositing assets, currently mocked and prover supplied
@@ -535,7 +538,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         expect(taxResult.publicInputs.initialLotStateRoot).toBe(result.publicInputs.initialLotStateRoot);
 
         const taxVerificationInputs = {
-            root: events.auditorRoot, // supplied by auditor
+            root: auditorRoot, // supplied by auditor
             tax: i64ToField(taxResult.publicInputs.tax), // calculated by prover
             remainingLotStateRoot: taxResult.publicInputs.remainingLotStateRoot, // calculated by prover
             // note: requires a new circuit for handling of depositing assets, currently mocked and prover supplied
