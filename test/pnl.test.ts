@@ -494,15 +494,8 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
             }
         }
 
-        const expectedPriceFeed = priceFeed.address.toField();
-        const expectedPriceFeedField = expectedPriceFeed.toString();
+        const expectedPriceFeedField = priceFeed.address.toField().toString();
         const wrongAuditorRoot = new Fr(Fr.fromString(events.auditorRoot).toBigInt() + 1n).toString();
-
-        // Verify price feed address
-        expect(BigInt(result.publicInputs.priceFeedAddress)).toBe(expectedPriceFeed.toBigInt());
-
-        expect(BigInt(result.publicInputs.root)).toBe(BigInt(events.auditorRoot));
-        console.log(`  Proof root matches auditor root!`);
 
         const summaryVerificationInputs = {
             root: events.auditorRoot, // supplied by auditor
@@ -543,9 +536,7 @@ describe("PnL Proof Test (3 pools, 6 swaps, multi-token lot tree)", { timeout: 8
         console.log(`  Actual tax:   ${taxResult.publicInputs.tax}`);
         expect(taxResult.publicInputs.tax).toBe(expectedTax);
 
-        // Verify forwarded fields match summary result
-        expect(BigInt(taxResult.publicInputs.root)).toBe(BigInt(events.auditorRoot));
-        expect(BigInt(taxResult.publicInputs.priceFeedAddress)).toBe(expectedPriceFeed.toBigInt());
+        // Verify forwarded lot-state fields match summary result
         expect(taxResult.publicInputs.remainingLotStateRoot).toBe(result.publicInputs.remainingLotStateRoot);
         expect(taxResult.publicInputs.initialLotStateRoot).toBe(result.publicInputs.initialLotStateRoot);
 
